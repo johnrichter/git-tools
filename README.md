@@ -1,6 +1,6 @@
 # git-tools
 
-Small, focused command-line tools for working with git. (confirm/refine)
+Small, focused command-line tools for working with git.
 
 ## Claude Code setup
 

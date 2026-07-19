@@ -1,6 +1,6 @@
 # git-tools
 
-> **Purpose:** Small, focused command-line tools for working with git. (confirm/refine)
+> **Purpose:** Small, focused command-line tools for working with git.
 
 One of the sibling repos under `psa-platform`. Worked on directly — not through the PSA `workspace`. Outside `workspace`, Claude has no PSA identity; only the general conventions below apply.
 
