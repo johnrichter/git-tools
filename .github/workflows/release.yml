@@ -1,0 +1,114 @@
+# SC-DISTRIBUTION release: git-tools cross-compiles both of its binaries -- the git-tools
+# CLI itself and the worktree-gate PreToolUse hook -- into per-OS/arch archives + checksums
+# and publishes them as the tag's official GitHub release. No matrix of runners is needed --
+# Go's cross-compilation builds every GOOS/GOARCH cell from one Linux host.
+#
+# Triggers on a vX.Y.Z tag push (SC-VERSIONING: tag prefix == module path from repo root,
+# which is empty for this single, root-level module; guardrail's tag-prefix.sh enforces this
+# in ci.yml on the same push). A manual workflow_dispatch run defaults to dry_run: true, so a
+# change to this file can be exercised without cutting a tag or touching GitHub Releases.
+#
+# go.mod `replace`s onto ../ai-shared-lib/go/* and ../ai-shared-lib/plugin-foundation (see
+# ci.yml's header). actions/checkout refuses any path outside $GITHUB_WORKSPACE, so both repos
+# check out as workspace siblings (git-tools, ai-shared-lib) and every later step runs with
+# working-directory: git-tools, which resolves the replace target the same way a local dev
+# checkout does.
+#
+# This workflow re-runs tag-prefix.sh itself rather than trusting ci.yml's guardrail job: a
+# tag push fires both workflows independently, and neither GitHub Actions run gates the other,
+# so a malformed tag rejected by ci.yml would otherwise still reach `gh release create` here
+# undisturbed.
+
+name: SC-DISTRIBUTION release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build archives + checksums; skip the platform release."
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-publish:
+    name: build-and-publish
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: git-tools
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: git-tools
+
+      - name: Tag conforms to SC-VERSIONING
+        if: ${{ github.event_name == 'push' }}
+        run: bash release/guard/tag-prefix.sh "${GITHUB_REF_NAME}"
+
+      - name: Checkout ai-shared-lib sibling (go.mod replace target)
+        uses: actions/checkout@v5
+        with:
+          repository: johnrichter/claude-shared-tooling
+          token: ${{ secrets.SIBLING_REPO_TOKEN }}
+          path: ai-shared-lib
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: git-tools/go.mod
+
+      # A tag push names the release directly; a manual dispatch has no tag, so it
+      # synthesizes one for the archive filenames only -- dry_run always skips the
+      # publish step below, so that placeholder never reaches a real release.
+      - name: Resolve release tag + version
+        id: version
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            tag="${GITHUB_REF_NAME}"
+          else
+            tag="v0.0.0-dryrun.${GITHUB_RUN_ID}"
+          fi
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+
+      # Go's cross-compilation needs no native hardware per target -- every cell of this
+      # matrix builds from the one Linux runner. Both binaries ship under the one tag/version:
+      # worktree-gate is a second entry point in this same module, not a separately versioned
+      # component.
+      - name: Cross-compile per-OS/arch archives + checksums
+        run: |
+          set -euo pipefail
+          version="${{ steps.version.outputs.version }}"
+          mkdir -p dist
+          for entry in "git-tools:./cmd/git-tools" "worktree-gate:./worktree-gate/detect/cmd/worktree-gate"; do
+            bin="${entry%%:*}"
+            pkg="${entry#*:}"
+            for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
+              os="${target%/*}"
+              arch="${target#*/}"
+              workdir="$(mktemp -d)"
+              GOOS="$os" GOARCH="$arch" CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o "${workdir}/${bin}" "${pkg}"
+              archive="dist/${bin}_${version}_${os}_${arch}.tar.gz"
+              tar -czf "${archive}" -C "${workdir}" "${bin}"
+              rm -rf "${workdir}"
+            done
+          done
+          ( cd dist && sha256sum ./*.tar.gz | sed 's#\./##' | sort -k2 > checksums.txt )
+          ls -la dist
+
+      - name: Publish the official release (per-OS/arch archives + checksums)
+        if: ${{ github.event_name == 'push' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create "${{ steps.version.outputs.tag }}" --title "${{ steps.version.outputs.tag }}" --generate-notes dist/*.tar.gz dist/checksums.txt
+
+      - name: Dry-run summary
+        if: ${{ github.event_name != 'push' }}
+        run: |
+          echo "dry-run: built archives + checksums for ${{ steps.version.outputs.tag }} - publish skipped"
+          ls -la dist
