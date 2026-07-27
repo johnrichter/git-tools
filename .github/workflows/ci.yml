@@ -1,0 +1,114 @@
+# CI for git-tools: signing/rewrite, worktree/branch, merge/rebase, content-guardrail
+# scans, installable git hooks, and the worktree-gate PreToolUse gate binary.
+#
+# go.mod `replace`s git, githooks, clikit, fsx, sysops, adoption, transcript, gate and
+# plugin-foundation onto ../ai-shared-lib/go/* and ../ai-shared-lib/plugin-foundation (a
+# monorepo-development stand-in until those modules are independently tagged -- see the
+# `replace` block's comment in go.mod). actions/checkout refuses any path outside
+# $GITHUB_WORKSPACE, so every job that runs `go build`/`go vet`/`go test` checks out both
+# repos as workspace siblings (git-tools, ai-shared-lib) and runs with working-directory:
+# git-tools, which resolves the replace target at ../ai-shared-lib exactly as a local dev
+# checkout does. claude-shared-tooling is private, so the sibling checkout needs read access
+# via SIBLING_REPO_TOKEN (a PAT scoped to that repo) rather than the default, repo-scoped
+# GITHUB_TOKEN.
+#
+# guardrail gates every other job: SC-VERSIONING (tag-prefix.sh, tag pushes only) and
+# SC-DISTRIBUTION (no-committed-binaries.sh, every run) -- see release/guard/README.md.
+#
+# `go test ./...` includes internal/plugincheck's frozen-fixture adoption test (SC-FORCEDUSE):
+# the plugin's own routing-rules.json, loaded through plugin-foundation's BuildRegistry, must
+# clear the Phase-A adoption gate on the committed fixture transcript.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+    # A release tag (vX.Y.Z) fires the workflow so tag-prefix.sh runs at tag-push time.
+    tags: ['*']
+  pull_request:
+    types: [opened, synchronize]
+
+permissions:
+  contents: read
+
+jobs:
+  guardrail:
+    name: guardrail
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: No committed binaries (SC-DISTRIBUTION)
+        run: bash release/guard/no-committed-binaries.sh .
+
+      - name: Tag conforms to SC-VERSIONING
+        if: startsWith(github.ref, 'refs/tags/')
+        run: bash release/guard/tag-prefix.sh "${GITHUB_REF_NAME}"
+
+  build-test:
+    name: build-test
+    runs-on: ubuntu-latest
+    needs: guardrail
+    defaults:
+      run:
+        working-directory: git-tools
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: git-tools
+
+      - name: Checkout ai-shared-lib sibling (go.mod replace target)
+        uses: actions/checkout@v5
+        with:
+          repository: johnrichter/claude-shared-tooling
+          token: ${{ secrets.SIBLING_REPO_TOKEN }}
+          path: ai-shared-lib
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: git-tools/go.mod
+
+      - name: gofmt --check
+        run: |
+          fmt_diff="$(gofmt -l .)"
+          if [ -n "$fmt_diff" ]; then
+            echo "$fmt_diff"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go build
+        run: |
+          go build -trimpath -ldflags='-s -w' -o /dev/null ./cmd/git-tools
+          go build -trimpath -ldflags='-s -w' -o /dev/null ./worktree-gate/detect/cmd/worktree-gate
+
+      - name: go test
+        run: go test ./...
+
+  golangci-lint:
+    name: golangci-lint
+    runs-on: ubuntu-latest
+    needs: guardrail
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: git-tools
+
+      - name: Checkout ai-shared-lib sibling (go.mod replace target)
+        uses: actions/checkout@v5
+        with:
+          repository: johnrichter/claude-shared-tooling
+          token: ${{ secrets.SIBLING_REPO_TOKEN }}
+          path: ai-shared-lib
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: git-tools/go.mod
+
+      - uses: golangci/golangci-lint-action@v8.0.0
+        with:
+          version: v2.12.2
+          working-directory: git-tools

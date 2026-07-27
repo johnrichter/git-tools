@@ -1,0 +1,82 @@
+{
+  "operations": [
+    {
+      "name": "worktree-add",
+      "cli": {
+        "invocation_prefix": "git-tools worktree add",
+        "bin_name": "git-tools",
+        "bin_env": "GIT_TOOLS_BIN",
+        "usage_hint": "git-tools worktree add <path> <ref>"
+      },
+      "raw": {
+        "tool_name": "Bash",
+        "command_prefixes": ["git worktree add"]
+      }
+    },
+    {
+      "name": "worktree-remove",
+      "cli": {
+        "invocation_prefix": "git-tools worktree remove",
+        "bin_name": "git-tools",
+        "bin_env": "GIT_TOOLS_BIN",
+        "usage_hint": "git-tools worktree remove <path>"
+      },
+      "raw": {
+        "tool_name": "Bash",
+        "command_prefixes": ["git worktree remove"]
+      }
+    },
+    {
+      "name": "branch-delete",
+      "cli": {
+        "invocation_prefix": "git-tools branch delete",
+        "bin_name": "git-tools",
+        "bin_env": "GIT_TOOLS_BIN",
+        "usage_hint": "git-tools branch delete <name> <expected-head>"
+      },
+      "raw": {
+        "tool_name": "Bash",
+        "command_prefixes": ["git branch -d", "git branch -D"]
+      }
+    },
+    {
+      "name": "branch-create",
+      "cli": {
+        "invocation_prefix": "git-tools branch create",
+        "bin_name": "git-tools",
+        "bin_env": "GIT_TOOLS_BIN",
+        "usage_hint": "git-tools branch create <name> <start-point>"
+      },
+      "raw": {
+        "tool_name": "Bash",
+        "command_prefixes": ["git branch"]
+      }
+    },
+    {
+      "name": "merge",
+      "cli": {
+        "invocation_prefix": "git-tools merge",
+        "bin_name": "git-tools",
+        "bin_env": "GIT_TOOLS_BIN",
+        "usage_hint": "git-tools merge <branch>..."
+      },
+      "raw": {
+        "tool_name": "Bash",
+        "command_prefixes": ["git merge"]
+      }
+    },
+    {
+      "name": "rebase",
+      "cli": {
+        "invocation_prefix": "git-tools rebase",
+        "bin_name": "git-tools",
+        "bin_env": "GIT_TOOLS_BIN",
+        "usage_hint": "git-tools rebase <upstream>"
+      },
+      "raw": {
+        "tool_name": "Bash",
+        "command_prefixes": ["git rebase"]
+      }
+    }
+  ]
+}
