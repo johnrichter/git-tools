@@ -17,7 +17,7 @@ while IFS=$'\t' read -r meta path; do
   [ "$mode" = "100755" ] || continue
   file="$root/$path"
   [ -f "$file" ] || continue
-  if head -c 8000 "$file" | LC_ALL=C grep -q $'\x00'; then
+  if head -c 8000 "$file" | LC_ALL=C grep -qaP '\x00'; then
     violations+=("$path")
   fi
 done < <(git -C "$root" ls-files -s)
