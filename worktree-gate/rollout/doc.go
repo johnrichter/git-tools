@@ -1,13 +1,10 @@
-// Package rollout implements the self-application guard for the
-// worktree-isolation gate: a kill switch that keeps enforcement inert until
-// an operator opts in from outside the session being guarded.
+// Package rollout implements the rollout flag for the worktree-isolation
+// gate: enforcement is on by default, with a single explicit env var to
+// opt out.
 //
-// A fail-closed, deny-capable gate has no way to un-deny itself once wired
-// into the session that's building it -- a single false-positive can brick
-// that session's own writes with no recourse. Resolve reads two explicit
-// environment variables rather than one, so the risky half-configured state
-// (enforcement requested without the isolation attestation) is a distinct,
-// loud outcome -- SelfApplicationRisk -- rather than silently collapsing
-// into either "on" or "off". Run then wraps detect.Run so a caller has one
-// place to route every hook invocation through, regardless of Status.
+// Resolve reads EnvVar and returns Enabled unless it is set to exactly "0".
+// Run then wraps detect.Run so a caller has one place to route every hook
+// invocation through, regardless of Status: Enabled enforces detect.Run's
+// verdict directly; Disabled still runs it but only reports what it would
+// have denied, on errOut, without blocking the call.
 package rollout

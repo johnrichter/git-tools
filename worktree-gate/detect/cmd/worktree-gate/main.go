@@ -2,9 +2,9 @@
 // payload from stdin and denies a repo-modifying Write, Edit, or Bash call
 // made outside a git worktree.
 //
-// Enforcement is staged behind the rollout package's flag (see
-// GIT_TOOLS_WORKTREE_GATE_ENFORCE / GIT_TOOLS_WORKTREE_GATE_VALIDATED_ISOLATION):
-// unset, this binary only observes what it would have denied.
+// Enforcement is on by default; the rollout package's flag
+// (GIT_TOOLS_WORKTREE_GATE_ENFORCE=0) is the one opt-out. Opted out, this
+// binary only observes what it would have denied.
 package main
 
 import (

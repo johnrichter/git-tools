@@ -11,39 +11,32 @@ func fakeGetenv(values map[string]string) func(string) string {
 	return func(key string) string { return values[key] }
 }
 
-// -- Resolve: the two-variable state machine --
+// -- Resolve: enforcement defaults on, "0" is the only opt-out --
 
-func TestResolve_NoEnvSet_Disabled(t *testing.T) {
-	if got := Resolve(fakeGetenv(nil)); got != Disabled {
-		t.Fatalf("Resolve(no env) = %v, want Disabled", got)
+func TestResolve_NoEnvSet_Enabled(t *testing.T) {
+	if got := Resolve(fakeGetenv(nil)); got != Enabled {
+		t.Fatalf("Resolve(no env) = %v, want Enabled (enforcement is on by default)", got)
 	}
 }
 
-func TestResolve_EnforceWithoutAttestation_SelfApplicationRisk(t *testing.T) {
+func TestResolve_ExplicitZero_Disabled(t *testing.T) {
+	got := Resolve(fakeGetenv(map[string]string{EnvVar: "0"}))
+	if got != Disabled {
+		t.Fatalf("Resolve(%s=0) = %v, want Disabled", EnvVar, got)
+	}
+}
+
+func TestResolve_ExplicitOne_StillEnabled(t *testing.T) {
 	got := Resolve(fakeGetenv(map[string]string{EnvVar: "1"}))
-	if got != SelfApplicationRisk {
-		t.Fatalf("Resolve(enforce only) = %v, want SelfApplicationRisk", got)
-	}
-}
-
-func TestResolve_AttestationWithoutEnforce_StillDisabled(t *testing.T) {
-	got := Resolve(fakeGetenv(map[string]string{ValidatedEnvVar: "1"}))
-	if got != Disabled {
-		t.Fatalf("Resolve(attestation only) = %v, want Disabled", got)
-	}
-}
-
-func TestResolve_BothSet_Enabled(t *testing.T) {
-	got := Resolve(fakeGetenv(map[string]string{EnvVar: "1", ValidatedEnvVar: "1"}))
 	if got != Enabled {
-		t.Fatalf("Resolve(both) = %v, want Enabled", got)
+		t.Fatalf("Resolve(%s=1) = %v, want Enabled", EnvVar, got)
 	}
 }
 
-func TestResolve_LooseTruthyValuesDoNotOptIn(t *testing.T) {
-	got := Resolve(fakeGetenv(map[string]string{EnvVar: "true", ValidatedEnvVar: "yes"}))
-	if got != Disabled {
-		t.Fatalf("Resolve(loose truthy values) = %v, want Disabled (only exact \"1\" opts in)", got)
+func TestResolve_LooseFalsyValuesDoNotOptOut(t *testing.T) {
+	got := Resolve(fakeGetenv(map[string]string{EnvVar: "false"}))
+	if got != Enabled {
+		t.Fatalf("Resolve(%s=false) = %v, want Enabled (only exact \"0\" opts out)", EnvVar, got)
 	}
 }
 
@@ -99,24 +92,5 @@ func TestRun_Enabled_DelegatesToDetectAndEnforces(t *testing.T) {
 
 	if code != 0 || !strings.Contains(out.String(), `"deny"`) {
 		t.Fatalf("Run(Enabled) = code=%d stdout=%q, want the real deny response enforced on stdout", code, out.String())
-	}
-}
-
-// -- Run: SelfApplicationRisk never enforces and forces a pause --
-
-func TestRun_SelfApplicationRisk_NeverDeniesAndForcesADistinctExitCode(t *testing.T) {
-	in := strings.NewReader(`{"tool_name":"Write","tool_input":{"file_path":"/repo/a.go"}}`)
-	var out, errOut bytes.Buffer
-
-	code := Run(SelfApplicationRisk, in, &out, &errOut, primaryLstat, primaryReadFile, fakeGetenv(nil))
-
-	if out.Len() != 0 {
-		t.Fatalf("Run(SelfApplicationRisk) stdout = %q, want nothing emitted -- the call must still proceed", out.String())
-	}
-	if code != ForcedPauseExitCode {
-		t.Fatalf("Run(SelfApplicationRisk) exit code = %d, want %d", code, ForcedPauseExitCode)
-	}
-	if !strings.Contains(errOut.String(), ValidatedEnvVar) {
-		t.Errorf("Run(SelfApplicationRisk) stderr = %q, want it to name the missing attestation", errOut.String())
 	}
 }
