@@ -13,7 +13,7 @@ import (
 
 func TestDecide_Write_EmptyFilePath_NoOp(t *testing.T) {
 	fs := primaryFS()
-	d := Decide(fs.lstat, fs.readFile, Verbs{}, nil, Input{ToolName: "Write", FilePath: ""})
+	d := Decide(fs.lstat, fs.readFile, Verbs{}, nil, TrackingDocs{}, nil, Input{ToolName: "Write", FilePath: ""})
 	if d.Deny || d.Degraded != "" {
 		t.Errorf("expected no-op for an empty file path, got %+v", d)
 	}
@@ -24,7 +24,7 @@ func TestDecide_Write_IndeterminateGitEntry_DeniedFailClosed(t *testing.T) {
 	// redirect file (e.g. corrupted or an unrecognized type) -- must deny,
 	// never guess it's safely inside a worktree.
 	fs := newFakeFS().file("/repo/.git", "not a gitdir line\n")
-	d := Decide(fs.lstat, fs.readFile, Verbs{}, nil, Input{ToolName: "Write", FilePath: "/repo/a.go"})
+	d := Decide(fs.lstat, fs.readFile, Verbs{}, nil, TrackingDocs{}, nil, Input{ToolName: "Write", FilePath: "/repo/a.go"})
 	if !d.Deny {
 		t.Fatal("expected deny when the .git entry's kind can't be classified (fail closed on uncertainty)")
 	}
@@ -32,7 +32,7 @@ func TestDecide_Write_IndeterminateGitEntry_DeniedFailClosed(t *testing.T) {
 
 func TestDecide_Write_IndeterminateRepoMembership_DeniedFailClosed(t *testing.T) {
 	fs := newFakeFS().errAt("/repo/.git", errors.New("permission denied"))
-	d := Decide(fs.lstat, fs.readFile, Verbs{}, nil, Input{ToolName: "Write", FilePath: "/repo/a.go"})
+	d := Decide(fs.lstat, fs.readFile, Verbs{}, nil, TrackingDocs{}, nil, Input{ToolName: "Write", FilePath: "/repo/a.go"})
 	if !d.Deny {
 		t.Fatal("expected deny when repo membership can't be resolved for a Write (fail closed on uncertainty)")
 	}
@@ -40,7 +40,7 @@ func TestDecide_Write_IndeterminateRepoMembership_DeniedFailClosed(t *testing.T)
 
 func TestDecide_Edit_SameRulesAsWrite(t *testing.T) {
 	fs := primaryFS()
-	d := Decide(fs.lstat, fs.readFile, Verbs{}, nil, Input{ToolName: "Edit", FilePath: "/repo/a.go"})
+	d := Decide(fs.lstat, fs.readFile, Verbs{}, nil, TrackingDocs{}, nil, Input{ToolName: "Edit", FilePath: "/repo/a.go"})
 	if !d.Deny {
 		t.Fatal("expected Edit outside a worktree to deny, same as Write")
 	}
@@ -51,7 +51,7 @@ func TestDecide_Edit_SameRulesAsWrite(t *testing.T) {
 func TestDecide_Bash_WorktreeWithDegradedClassifier_AllowedAndDegraded(t *testing.T) {
 	fs := worktreeFS()
 	verbsErr := errors.New("worktree-gate: embedded verbs.json is corrupt")
-	d := Decide(fs.lstat, fs.readFile, Verbs{}, verbsErr, Input{ToolName: "Bash", CWD: "/repo/wt", Command: "git commit -m x"})
+	d := Decide(fs.lstat, fs.readFile, Verbs{}, verbsErr, TrackingDocs{}, nil, Input{ToolName: "Bash", CWD: "/repo/wt", Command: "git commit -m x"})
 	if d.Deny {
 		t.Fatalf("expected allow: already inside a worktree, regardless of classifier health, got deny: %s", d.Reason)
 	}
@@ -220,6 +220,119 @@ func TestDefaultVerbs_CriticalVerbsPresent(t *testing.T) {
 	mustContain(v.ReadPrefixes, "git log")
 }
 
+// -- trackingdocs.json packaging integrity, mirroring verbs.json's own
+// non-triviality check above.
+
+func TestDefaultTrackingDocs_ShippedArtifactIsPopulatedAndValid(t *testing.T) {
+	td := testTrackingDocs(t)
+	want := []string{"design.md", "plan.json", "plan.md", "execution.json", "execution.md", "feedback.json", "feedback.md"}
+	for _, basename := range want {
+		if !td.has(basename) {
+			t.Errorf("expected %q among the shipped tracking-doc basenames, not found", basename)
+		}
+	}
+}
+
+// -- underProjectDir: containment at any depth, not a plain string prefix.
+
+func TestUnderProjectDir(t *testing.T) {
+	cases := []struct {
+		name       string
+		projectDir string
+		filePath   string
+		want       bool
+	}{
+		{"direct child", "/proj", "/proj/plan.json", true},
+		{"nested at any depth", "/proj", "/proj/.dat/some-effort/plan.json", true},
+		{"project dir unset", "", "/proj/plan.json", false},
+		{"outside the project dir", "/proj", "/otherrepo/plan.json", false},
+		{"same-prefix sibling is not contained", "/proj", "/proj-other/plan.json", false},
+	}
+	for _, c := range cases {
+		if got := underProjectDir(c.projectDir, c.filePath); got != c.want {
+			t.Errorf("%s: underProjectDir(%q, %q) = %v, want %v", c.name, c.projectDir, c.filePath, got, c.want)
+		}
+	}
+}
+
+// -- isSanctionedLandingCommand: pinned to exactly the two covered verbs,
+// unlaunderable through any connector, subshell, or env-var-prefixed form.
+
+func TestIsSanctionedLandingCommand(t *testing.T) {
+	cases := []struct {
+		name    string
+		command string
+		want    bool
+	}{
+		{"bare merge", "git merge --no-ff feat/example -m mergemsg", true},
+		{"bare commit", "git commit -m done", true},
+		{"case-insensitive", "GIT MERGE --no-ff feat/example -m mergemsg", true},
+		{"non-covered verb alone", "git push origin main", false},
+		{"chained with &&", "git merge --no-ff feat/example -m mergemsg && rm -rf build", false},
+		{"chained with ;", "git commit -m x; rm -rf build", false},
+		{"piped", "git commit -m x | rm -rf build", false},
+		{"subshell", "(git merge --no-ff feat/example -m mergemsg && rm -rf build)", false},
+		{"env-var prefix", "FOO=bar git commit -m x", false},
+		{"redirect out", "git commit -m x > pwned.txt", false},
+		{"redirect append", "git commit -m x >> pwned.txt", false},
+		{"redirect in", "git commit -m x < payload", false},
+		{"command substitution", "git commit -m \"$(rm -rf build)\"", false},
+		{"backtick substitution", "git commit -m `rm -rf build`", false},
+		{"variable expansion", "git commit -m ${EVIL}", false},
+		{"backgrounded second command", "git commit -m x & rm -rf build", false},
+	}
+	for _, c := range cases {
+		if got := isSanctionedLandingCommand(c.command); got != c.want {
+			t.Errorf("%s: isSanctionedLandingCommand(%q) = %v, want %v", c.name, c.command, got, c.want)
+		}
+	}
+}
+
+// -- the merge-gate override is scoped to KindPrimary only, and a corrupt
+// tracking-doc artifact fails open rather than denying on it.
+
+func TestDecide_Bash_MergeGateScopedToPrimaryOnly_IndeterminateStillDenied(t *testing.T) {
+	fs := newFakeFS().file("/repo/.git", "not a gitdir line\n")
+	v := testVerbs(t)
+	d := Decide(fs.lstat, fs.readFile, v, nil, TrackingDocs{}, nil, Input{
+		ToolName: "Bash", CWD: "/repo", Command: "git merge --no-ff feat/example -m mergemsg", MergeGateEnabled: true,
+	})
+	if !d.Deny {
+		t.Fatal("expected deny: the override only covers a primary checkout, not an indeterminate one")
+	}
+}
+
+func TestDecide_Write_TrackingDocsDegradedArtifact_FailsOpenAndReportsDegraded(t *testing.T) {
+	fs := newFakeFS().dir("/proj/.dat/some-effort/.git")
+	tdErr := errors.New("worktree-gate: embedded trackingdocs.json is corrupt")
+	d := Decide(fs.lstat, fs.readFile, Verbs{}, nil, TrackingDocs{}, tdErr, Input{
+		ToolName: "Write", FilePath: "/proj/.dat/some-effort/plan.json", ProjectDir: "/proj",
+	})
+	if d.Deny {
+		t.Fatalf("expected fail-open on a degraded tracking-doc artifact, got deny: %s", d.Reason)
+	}
+	if d.Degraded == "" {
+		t.Fatal("expected Degraded to be set so the defect is surfaced loudly")
+	}
+}
+
+func TestDecide_Write_TrackingDocsDegradedArtifact_IrrelevantOutsideProjectDir(t *testing.T) {
+	// A corrupt tracking-doc artifact only matters for calls the exemption
+	// could ever have covered -- outside the project dir it can't have, so
+	// the ordinary primary-checkout deny is unaffected by the defect.
+	fs := primaryFS()
+	tdErr := errors.New("worktree-gate: embedded trackingdocs.json is corrupt")
+	d := Decide(fs.lstat, fs.readFile, Verbs{}, nil, TrackingDocs{}, tdErr, Input{
+		ToolName: "Write", FilePath: "/repo/a.go", ProjectDir: "",
+	})
+	if !d.Deny {
+		t.Fatal("expected the ordinary primary-checkout deny to hold: no project dir means the corrupt artifact was never consulted")
+	}
+	if d.Degraded != "" {
+		t.Errorf("expected no Degraded report: the tracking-doc artifact was never consulted, got %q", d.Degraded)
+	}
+}
+
 // -- Run: verify the degraded diagnostic goes to stderr, never stdout, and
 // never turns into a deny.
 
@@ -230,7 +343,7 @@ func TestRun_DegradedClassifierNeverDeniesAndReportsOnlyOnStderr(t *testing.T) {
 	fs := worktreeFS()
 	in := strings.NewReader(`{"tool_name":"Bash","cwd":"/repo/wt","tool_input":{"command":"git commit -m x"}}`)
 	var out, errOut bytes.Buffer
-	code := Run(in, &out, &errOut, fs.lstat, fs.readFile)
+	code := Run(in, &out, &errOut, fs.lstat, fs.readFile, noEnv)
 	if code != 0 || out.Len() != 0 {
 		t.Errorf("Run() = code=%d stdout=%q, want a silent allow inside an already-isolated worktree", code, out.String())
 	}
@@ -240,7 +353,7 @@ func TestRun_MissingFilePathOnWrite_NoOp(t *testing.T) {
 	in := strings.NewReader(`{"tool_name":"Write","tool_input":{}}`)
 	var out, errOut bytes.Buffer
 	fs := primaryFS()
-	code := Run(in, &out, &errOut, fs.lstat, fs.readFile)
+	code := Run(in, &out, &errOut, fs.lstat, fs.readFile, noEnv)
 	if code != 0 || out.Len() != 0 {
 		t.Errorf("Run() with no file_path = code=%d stdout=%q, want no-op", code, out.String())
 	}
@@ -250,7 +363,7 @@ func TestRun_BashEmptyCommand_NoOp(t *testing.T) {
 	in := strings.NewReader(`{"tool_name":"Bash","cwd":"/repo","tool_input":{"command":""}}`)
 	var out, errOut bytes.Buffer
 	fs := primaryFS()
-	code := Run(in, &out, &errOut, fs.lstat, fs.readFile)
+	code := Run(in, &out, &errOut, fs.lstat, fs.readFile, noEnv)
 	if code != 0 || out.Len() != 0 {
 		t.Errorf("Run() with empty command = code=%d stdout=%q, want no-op", code, out.String())
 	}
@@ -264,7 +377,7 @@ func TestRun_DenyAlwaysCarriesNonEmptyReason(t *testing.T) {
 	fs := primaryFS()
 	in := strings.NewReader(`{"tool_name":"Write","tool_input":{"file_path":"/repo/a.go"}}`)
 	var out, errOut bytes.Buffer
-	Run(in, &out, &errOut, fs.lstat, fs.readFile)
+	Run(in, &out, &errOut, fs.lstat, fs.readFile, noEnv)
 
 	var resp response
 	if err := json.Unmarshal(out.Bytes(), &resp); err != nil {

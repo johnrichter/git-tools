@@ -83,10 +83,10 @@ func Resolve(getenv func(string) string) Status {
 // Every path other than Enabled therefore returns 0 to stdout callers (the
 // tool call itself is never blocked) while still surfacing what happened on
 // errOut and, for SelfApplicationRisk, on the exit code.
-func Run(status Status, r io.Reader, stdout, errOut io.Writer, lstat detect.LstatFunc, readFile detect.ReadFileFunc) int {
+func Run(status Status, r io.Reader, stdout, errOut io.Writer, lstat detect.LstatFunc, readFile detect.ReadFileFunc, getenv func(string) string) int {
 	switch status {
 	case Enabled:
-		return detect.Run(r, stdout, errOut, lstat, readFile)
+		return detect.Run(r, stdout, errOut, lstat, readFile, getenv)
 	case SelfApplicationRisk:
 		fmt.Fprintf(errOut,
 			"worktree-gate: %s is set without %s -- forcing a pause: enforcement stays off until this rollout is validated in isolation, outside the session that set %s\n",
@@ -94,7 +94,7 @@ func Run(status Status, r io.Reader, stdout, errOut io.Writer, lstat detect.Lsta
 		return ForcedPauseExitCode
 	default: // Disabled
 		var wouldDeny bytes.Buffer
-		detect.Run(r, &wouldDeny, errOut, lstat, readFile)
+		detect.Run(r, &wouldDeny, errOut, lstat, readFile, getenv)
 		if wouldDeny.Len() > 0 {
 			fmt.Fprintf(errOut, "worktree-gate: rollout disabled (%s unset) -- observed a deny this call did not enforce: %s\n",
 				EnvVar, strings.TrimSpace(wouldDeny.String()))

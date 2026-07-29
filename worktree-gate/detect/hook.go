@@ -33,9 +33,10 @@ type response struct {
 // stdout only when denying -- an allowed call produces no output, so the
 // tool proceeds under the harness's default. A degraded (fail-open)
 // classifier defect is reported on errOut only, never on stdout, so it
-// never becomes part of the tool-call decision. It returns the process
-// exit code the caller should use.
-func Run(r io.Reader, stdout, errOut io.Writer, lstat LstatFunc, readFile ReadFileFunc) int {
+// never becomes part of the tool-call decision. getenv resolves the
+// environment signals Decide's allow-list overrides read (os.Getenv in
+// production). It returns the process exit code the caller should use.
+func Run(r io.Reader, stdout, errOut io.Writer, lstat LstatFunc, readFile ReadFileFunc, getenv func(string) string) int {
 	var p payload
 	if err := json.NewDecoder(r).Decode(&p); err != nil {
 		// An unparseable payload isn't this gate's call to make.
@@ -48,11 +49,14 @@ func Run(r io.Reader, stdout, errOut io.Writer, lstat LstatFunc, readFile ReadFi
 	}
 
 	verbs, verbsErr := DefaultVerbs()
-	decision := Decide(lstat, readFile, verbs, verbsErr, Input{
-		ToolName: p.ToolName,
-		CWD:      p.CWD,
-		FilePath: p.ToolInput.FilePath,
-		Command:  p.ToolInput.Command,
+	trackingDocs, trackingDocsErr := DefaultTrackingDocs()
+	decision := Decide(lstat, readFile, verbs, verbsErr, trackingDocs, trackingDocsErr, Input{
+		ToolName:         p.ToolName,
+		CWD:              p.CWD,
+		FilePath:         p.ToolInput.FilePath,
+		Command:          p.ToolInput.Command,
+		ProjectDir:       getenv(ProjectDirEnvVar),
+		MergeGateEnabled: getenv(MergeGateEnvVar) == "1",
 	})
 
 	if decision.Degraded != "" {

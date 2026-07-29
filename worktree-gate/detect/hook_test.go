@@ -12,7 +12,7 @@ func TestRun_DeniesWriteOutsideWorktree(t *testing.T) {
 	in := strings.NewReader(`{"tool_name":"Write","tool_input":{"file_path":"/repo/a.go"}}`)
 	var out, errOut bytes.Buffer
 
-	code := Run(in, &out, &errOut, fs.lstat, fs.readFile)
+	code := Run(in, &out, &errOut, fs.lstat, fs.readFile, noEnv)
 
 	if code != 0 {
 		t.Fatalf("Run() exit code = %d, want 0 (the deny is carried in stdout JSON, not the exit code)", code)
@@ -31,7 +31,7 @@ func TestRun_AllowsWriteInsideWorktree_NoOutput(t *testing.T) {
 	in := strings.NewReader(`{"tool_name":"Write","tool_input":{"file_path":"/repo/wt/a.go"}}`)
 	var out, errOut bytes.Buffer
 
-	code := Run(in, &out, &errOut, fs.lstat, fs.readFile)
+	code := Run(in, &out, &errOut, fs.lstat, fs.readFile, noEnv)
 
 	if code != 0 || out.Len() != 0 {
 		t.Errorf("Run() = code=%d stdout=%q, want code=0 and no stdout for an allowed call", code, out.String())
@@ -43,7 +43,7 @@ func TestRun_DeniesUncertainBashInPrimaryCheckout(t *testing.T) {
 	in := strings.NewReader(`{"tool_name":"Bash","cwd":"/repo","tool_input":{"command":"some-unlisted-tool"}}`)
 	var out, errOut bytes.Buffer
 
-	Run(in, &out, &errOut, fs.lstat, fs.readFile)
+	Run(in, &out, &errOut, fs.lstat, fs.readFile, noEnv)
 
 	var resp response
 	if err := json.Unmarshal(out.Bytes(), &resp); err != nil {
@@ -59,7 +59,7 @@ func TestRun_ReadBashNeverTrips(t *testing.T) {
 	in := strings.NewReader(`{"tool_name":"Bash","cwd":"/repo","tool_input":{"command":"git status"}}`)
 	var out, errOut bytes.Buffer
 
-	code := Run(in, &out, &errOut, fs.lstat, fs.readFile)
+	code := Run(in, &out, &errOut, fs.lstat, fs.readFile, noEnv)
 
 	if code != 0 || out.Len() != 0 {
 		t.Errorf("Run() = code=%d stdout=%q, want no-op for a read command", code, out.String())
@@ -71,7 +71,7 @@ func TestRun_UnrecognizedToolIsNoOp(t *testing.T) {
 	var out, errOut bytes.Buffer
 	fs := primaryFS()
 
-	code := Run(in, &out, &errOut, fs.lstat, fs.readFile)
+	code := Run(in, &out, &errOut, fs.lstat, fs.readFile, noEnv)
 
 	if code != 0 || out.Len() != 0 || errOut.Len() != 0 {
 		t.Errorf("Run() on an ungoverned tool = code=%d stdout=%q stderr=%q, want a silent no-op", code, out.String(), errOut.String())
@@ -81,9 +81,56 @@ func TestRun_UnrecognizedToolIsNoOp(t *testing.T) {
 func TestRun_UnparseablePayloadIsNoOp(t *testing.T) {
 	in := strings.NewReader(`not json`)
 	var out, errOut bytes.Buffer
-	code := Run(in, &out, &errOut, primaryFS().lstat, primaryFS().readFile)
+	code := Run(in, &out, &errOut, primaryFS().lstat, primaryFS().readFile, noEnv)
 
 	if code != 0 || out.Len() != 0 {
 		t.Errorf("Run() on an unparseable payload = code=%d stdout=%q, want a silent no-op", code, out.String())
+	}
+}
+
+// -- Run: the two environment overrides are read here, not in Decide, so
+// their resolution rules (exact "1", nothing else) are proven end to end.
+
+func envWith(values map[string]string) func(string) string {
+	return func(key string) string { return values[key] }
+}
+
+func TestRun_ProjectDirEnvVar_FeedsTrackingDocExemption(t *testing.T) {
+	fs := newFakeFS().dir("/proj/.dat/some-effort/.git")
+	in := strings.NewReader(`{"tool_name":"Write","tool_input":{"file_path":"/proj/.dat/some-effort/plan.json"}}`)
+	var out, errOut bytes.Buffer
+
+	code := Run(in, &out, &errOut, fs.lstat, fs.readFile, envWith(map[string]string{ProjectDirEnvVar: "/proj"}))
+
+	if code != 0 || out.Len() != 0 {
+		t.Errorf("Run() = code=%d stdout=%q, want an allowed tracking-doc write under the project dir", code, out.String())
+	}
+}
+
+func TestRun_MergeGateEnvVar_ExactValueOneAllows(t *testing.T) {
+	fs := primaryFS()
+	in := strings.NewReader(`{"tool_name":"Bash","cwd":"/repo","tool_input":{"command":"git merge --no-ff feat/example -m mergemsg"}}`)
+	var out, errOut bytes.Buffer
+
+	code := Run(in, &out, &errOut, fs.lstat, fs.readFile, envWith(map[string]string{MergeGateEnvVar: "1"}))
+
+	if code != 0 || out.Len() != 0 {
+		t.Errorf("Run() = code=%d stdout=%q, want an allowed sanctioned landing merge", code, out.String())
+	}
+}
+
+func TestRun_MergeGateEnvVar_AnyOtherValueStaysDenied(t *testing.T) {
+	fs := primaryFS()
+	command := `{"tool_name":"Bash","cwd":"/repo","tool_input":{"command":"git merge --no-ff feat/example -m mergemsg"}}`
+
+	baseline := new(bytes.Buffer)
+	Run(strings.NewReader(command), baseline, new(bytes.Buffer), fs.lstat, fs.readFile, noEnv)
+
+	for _, v := range []string{"0", "true", "yes", "01"} {
+		var out, errOut bytes.Buffer
+		Run(strings.NewReader(command), &out, &errOut, fs.lstat, fs.readFile, envWith(map[string]string{MergeGateEnvVar: v}))
+		if out.String() != baseline.String() {
+			t.Errorf("%s=%q: deny = %q, want byte-identical to the unset baseline %q", MergeGateEnvVar, v, out.String(), baseline.String())
+		}
 	}
 }
