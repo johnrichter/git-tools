@@ -2,11 +2,38 @@ package cli
 
 import (
 	"fmt"
+	"path/filepath"
 
 	"github.com/spf13/cobra"
 
 	"github.com/johnrichter/claude-shared-tooling/go/git"
 )
+
+// worktreeRegisteredAt reports whether list contains an entry at path,
+// comparing resolved (symlink-free) absolute paths so a caller-supplied
+// relative path still matches what `git worktree list` reports.
+func worktreeRegisteredAt(list []git.WorktreeInfo, path string) bool {
+	want := resolvedPath(path)
+	for _, wt := range list {
+		if resolvedPath(wt.Path) == want {
+			return true
+		}
+	}
+	return false
+}
+
+// resolvedPath returns p's absolute, symlink-resolved form, falling back to
+// its absolute form (then p itself) when either resolution step fails.
+func resolvedPath(p string) string {
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		abs = p
+	}
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		return resolved
+	}
+	return abs
+}
 
 // worktreeEntry renders a git.WorktreeInfo with the snake_case field names
 // clikit's own conventions use, rather than the library type's Go-exported
@@ -51,6 +78,21 @@ func newWorktreeAddCmd() *cobra.Command {
 
 			if err := repo.WorktreeAdd(cmd.Context(), path, ref, git.WorktreeAddOptions{NewBranch: branch, Force: force, DryRun: dryRun}); err != nil {
 				return handleGitError(cmd, err, "internal.git.worktree_add_failed", fmt.Sprintf("add worktree %s at %s", path, ref))
+			}
+
+			if !dryRun {
+				// Self-verify: `git worktree add` reporting success is not
+				// itself proof of a correctly isolated worktree. Re-read the
+				// registered list and confirm the new path is actually there
+				// before telling a caller it can rely on it.
+				list, listErr := repo.WorktreeList(cmd.Context())
+				if listErr != nil {
+					return finishErr(cmd, "internal.git.worktree_verify_failed", "verify the worktree was created", listErr)
+				}
+				if !worktreeRegisteredAt(list, path) {
+					return finishErr(cmd, "internal.git.worktree_add_unverified", "verify the worktree was created",
+						fmt.Errorf("git worktree add reported success but %s does not appear in `git worktree list`", path))
+				}
 			}
 
 			data := map[string]any{"path": path, "ref": ref, "dry_run": dryRun}
