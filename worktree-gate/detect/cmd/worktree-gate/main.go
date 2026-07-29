@@ -15,5 +15,5 @@ import (
 
 func main() {
 	status := rollout.Resolve(os.Getenv)
-	os.Exit(rollout.Run(status, os.Stdin, os.Stdout, os.Stderr, os.Lstat, os.ReadFile))
+	os.Exit(rollout.Run(status, os.Stdin, os.Stdout, os.Stderr, os.Lstat, os.ReadFile, os.Getenv))
 }

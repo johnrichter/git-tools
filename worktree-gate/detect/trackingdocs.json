@@ -1,0 +1,11 @@
+{
+  "basenames": [
+    "design.md",
+    "plan.json",
+    "plan.md",
+    "execution.json",
+    "execution.md",
+    "feedback.json",
+    "feedback.md"
+  ]
+}

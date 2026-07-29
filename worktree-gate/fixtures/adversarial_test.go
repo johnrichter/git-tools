@@ -6,18 +6,22 @@ import (
 	"github.com/johnrichter/git-tools/worktree-gate/detect"
 )
 
-// TestAdversarialSuite_SatisfiesSCWorktree is the acceptance test for
-// SC-WORKTREE: every declared write-fixture must deny, every read-fixture
-// must never deny, and every uncertain-fixture must deny (fail closed). Any
-// failure here means the gate itself regressed.
+// TestAdversarialSuite_SatisfiesSCWorktree is the acceptance test for the
+// worktree-isolation invariant: every declared write-fixture must deny,
+// every read-fixture must never deny, and every uncertain-fixture must deny
+// (fail closed). Any failure here means the gate itself regressed.
 func TestAdversarialSuite_SatisfiesSCWorktree(t *testing.T) {
 	verbs, err := detect.DefaultVerbs()
 	if err != nil {
 		t.Fatalf("DefaultVerbs: %v", err)
 	}
+	trackingDocs, err := detect.DefaultTrackingDocs()
+	if err != nil {
+		t.Fatalf("DefaultTrackingDocs: %v", err)
+	}
 
 	cases := Set()
-	for _, f := range Verify(cases, verbs, nil) {
+	for _, f := range Verify(cases, verbs, nil, trackingDocs, nil) {
 		t.Error(f.String())
 	}
 

@@ -5,6 +5,11 @@ import (
 	"time"
 )
 
+// noEnv stands in for a getenv with every variable unset -- the default a
+// test opts out of unless it's specifically exercising an environment
+// override.
+func noEnv(string) string { return "" }
+
 // fakeFileInfo is a minimal fs.FileInfo for test fixtures.
 type fakeFileInfo struct {
 	name string

@@ -42,6 +42,9 @@ type Case struct {
 	FilePath string // Write/Edit target
 	CWD      string // Bash working directory
 	Command  string // Bash command
+
+	ProjectDir       string // CLAUDE_PROJECT_DIR, feeds the tracking-doc exemption
+	MergeGateEnabled bool   // DAT_MERGE_GATE == "1", feeds the landing-merge override
 }
 
 // wantDeny is the invariant Category encodes: only Read fixtures may pass
@@ -49,7 +52,10 @@ type Case struct {
 func (c Case) wantDeny() bool { return c.Category != Read }
 
 func (c Case) toInput() detect.Input {
-	return detect.Input{ToolName: c.Tool, CWD: c.CWD, FilePath: c.FilePath, Command: c.Command}
+	return detect.Input{
+		ToolName: c.Tool, CWD: c.CWD, FilePath: c.FilePath, Command: c.Command,
+		ProjectDir: c.ProjectDir, MergeGateEnabled: c.MergeGateEnabled,
+	}
 }
 
 // anchorDir is where buildFS plants the case's `.git` entry: the Write/Edit
@@ -62,7 +68,7 @@ func (c Case) anchorDir() string {
 }
 
 // Set is the declared adversarial fixture set: every Case Decide must
-// resolve correctly for the gate to satisfy SC-WORKTREE.
+// resolve correctly for the gate to satisfy the worktree-isolation invariant.
 func Set() []Case {
 	return []Case{
 		// -- write: file writes into the primary checkout, any extension --
@@ -127,5 +133,63 @@ func Set() []Case {
 
 		// -- uncertain: no working directory reported for a Bash call --
 		{Name: "bash-no-cwd-reported", Category: Uncertain, Topology: NoRepo, Tool: "Bash", CWD: "", Command: "git status"},
+
+		// -- read: the incumbent's non-mutating-tool no-op, re-expressed --
+		{Name: "read-tool-is-noop", Category: Read, Topology: Primary, Tool: "Read", FilePath: "/repo/a.go"},
+
+		// -- read: tracking-doc exemption -- a Write/Edit under the configured
+		// project dir whose basename is in the delivery-agent-team tracking-doc
+		// set is allowed even in a primary checkout, matching the incumbent
+		// write-locus-gate.sh's own $PROJ carve-out --
+		{Name: "write-tracking-doc-exempt-plan-json", Category: Read, Topology: Primary, Tool: "Write", ProjectDir: "/proj", FilePath: "/proj/.dat/some-effort/plan.json"},
+		{Name: "edit-tracking-doc-exempt-plan-json", Category: Read, Topology: Primary, Tool: "Edit", ProjectDir: "/proj", FilePath: "/proj/.dat/some-effort/plan.json"},
+		{Name: "write-tracking-doc-exempt-design-md", Category: Read, Topology: Primary, Tool: "Write", ProjectDir: "/proj", FilePath: "/proj/.dat/some-effort/design.md"},
+		{Name: "write-tracking-doc-exempt-plan-md", Category: Read, Topology: Primary, Tool: "Write", ProjectDir: "/proj", FilePath: "/proj/.dat/some-effort/plan.md"},
+		{Name: "write-tracking-doc-exempt-execution-json", Category: Read, Topology: Primary, Tool: "Write", ProjectDir: "/proj", FilePath: "/proj/.dat/some-effort/execution.json"},
+		{Name: "write-tracking-doc-exempt-execution-md", Category: Read, Topology: Primary, Tool: "Write", ProjectDir: "/proj", FilePath: "/proj/.dat/some-effort/execution.md"},
+		{Name: "write-tracking-doc-exempt-feedback-json", Category: Read, Topology: Primary, Tool: "Write", ProjectDir: "/proj", FilePath: "/proj/.dat/some-effort/feedback.json"},
+		{Name: "write-tracking-doc-exempt-feedback-md", Category: Read, Topology: Primary, Tool: "Write", ProjectDir: "/proj", FilePath: "/proj/.dat/some-effort/feedback.md"},
+		{Name: "write-tracking-doc-exempt-at-any-depth", Category: Read, Topology: Primary, Tool: "Write", ProjectDir: "/proj", FilePath: "/proj/a/b/c/design.md"},
+
+		// -- write: tracking-doc exemption narrowing negatives -- each
+		// precondition drops separately, so the exemption stays pinned to
+		// its exact case rather than widening --
+		{Name: "write-tracking-doc-no-project-dir-denied", Category: Write, Topology: Primary, Tool: "Write", ProjectDir: "", FilePath: "/repo/.dat/some-effort/plan.json"},
+		{Name: "write-tracking-doc-outside-project-dir-denied", Category: Write, Topology: Primary, Tool: "Write", ProjectDir: "/proj", FilePath: "/otherrepo/.dat/some-effort/plan.json"},
+		{Name: "write-tracking-doc-nonexempt-basename-md-denied", Category: Write, Topology: Primary, Tool: "Write", ProjectDir: "/proj", FilePath: "/proj/.dat/some-effort/notes.md"},
+		{Name: "write-tracking-doc-nonexempt-basename-json-denied", Category: Write, Topology: Primary, Tool: "Write", ProjectDir: "/proj", FilePath: "/proj/.dat/some-effort/config.json"},
+
+		// -- read: sanctioned-landing-merge override -- with DAT_MERGE_GATE=1,
+		// a bare `git merge`/`git commit` from the primary checkout is
+		// allowed, matching build-with-team's documented landing flow --
+		{Name: "bash-merge-gate-allows-merge", Category: Read, Topology: Primary, Tool: "Bash", CWD: "/repo", Command: "git merge --no-ff feat/example -m mergemsg", MergeGateEnabled: true},
+		{Name: "bash-merge-gate-allows-commit", Category: Read, Topology: Primary, Tool: "Bash", CWD: "/repo", Command: "git commit -m done", MergeGateEnabled: true},
+
+		// -- write/uncertain: sanctioned-landing-merge override narrowing
+		// negatives -- unset stays byte-identical to today, a non-covered
+		// verb stays denied even with the override on, and the override is
+		// scoped to a primary checkout only --
+		{Name: "bash-merge-without-gate-var-denied", Category: Write, Topology: Primary, Tool: "Bash", CWD: "/repo", Command: "git merge --no-ff feat/example -m mergemsg", MergeGateEnabled: false},
+		{Name: "bash-merge-gate-does-not-cover-push", Category: Write, Topology: Primary, Tool: "Bash", CWD: "/repo", Command: "git push origin main", MergeGateEnabled: true},
+		{Name: "bash-merge-gate-scoped-to-primary-denied", Category: Uncertain, Topology: Indeterminate, Tool: "Bash", CWD: "/repo", Command: "git merge --no-ff feat/example -m mergemsg", MergeGateEnabled: true},
+
+		// -- write/uncertain: the override is unlaunderable -- a non-covered
+		// write verb riding alongside a covered one stays denied, one fixture
+		// per laundering form (&&, ;, |, subshell, env-prefix) --
+		{Name: "bash-merge-gate-laundered-chain-denied", Category: Write, Topology: Primary, Tool: "Bash", CWD: "/repo", Command: "git merge --no-ff feat/example -m mergemsg && rm -rf build", MergeGateEnabled: true},
+		{Name: "bash-merge-gate-laundered-semicolon-denied", Category: Write, Topology: Primary, Tool: "Bash", CWD: "/repo", Command: "git commit -m x; rm -rf build", MergeGateEnabled: true},
+		{Name: "bash-merge-gate-laundered-pipe-denied", Category: Write, Topology: Primary, Tool: "Bash", CWD: "/repo", Command: "git commit -m x | rm -rf build", MergeGateEnabled: true},
+		{Name: "bash-merge-gate-laundered-subshell-denied", Category: Write, Topology: Primary, Tool: "Bash", CWD: "/repo", Command: "(git merge --no-ff feat/example -m mergemsg && rm -rf build)", MergeGateEnabled: true},
+		{Name: "bash-merge-gate-laundered-env-prefix-denied", Category: Uncertain, Topology: Primary, Tool: "Bash", CWD: "/repo", Command: "FOO=bar git commit -m x", MergeGateEnabled: true},
+
+		// -- write: the override is unlaunderable through write-carrying shell
+		// metacharacters that live inside the single covered piece -- a
+		// redirect, command/variable substitution, or backgrounding operator
+		// must not ride along past the verb match --
+		{Name: "bash-merge-gate-laundered-redirect-denied", Category: Write, Topology: Primary, Tool: "Bash", CWD: "/repo", Command: "git commit -m x > pwned.txt", MergeGateEnabled: true},
+		{Name: "bash-merge-gate-laundered-append-denied", Category: Write, Topology: Primary, Tool: "Bash", CWD: "/repo", Command: "git commit -m x >> pwned.txt", MergeGateEnabled: true},
+		{Name: "bash-merge-gate-laundered-cmdsubst-denied", Category: Write, Topology: Primary, Tool: "Bash", CWD: "/repo", Command: "git commit -m \"$(rm -rf build)\"", MergeGateEnabled: true},
+		{Name: "bash-merge-gate-laundered-backtick-denied", Category: Write, Topology: Primary, Tool: "Bash", CWD: "/repo", Command: "git commit -m `rm -rf build`", MergeGateEnabled: true},
+		{Name: "bash-merge-gate-laundered-background-denied", Category: Write, Topology: Primary, Tool: "Bash", CWD: "/repo", Command: "git commit -m x & rm -rf build", MergeGateEnabled: true},
 	}
 }

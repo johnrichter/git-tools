@@ -68,7 +68,7 @@ func TestRun_Disabled_NeverDeniesButLogsTheObservedDeny(t *testing.T) {
 	in := strings.NewReader(`{"tool_name":"Write","tool_input":{"file_path":"/repo/a.go"}}`)
 	var out, errOut bytes.Buffer
 
-	code := Run(Disabled, in, &out, &errOut, primaryLstat, primaryReadFile)
+	code := Run(Disabled, in, &out, &errOut, primaryLstat, primaryReadFile, fakeGetenv(nil))
 
 	if code != 0 || out.Len() != 0 {
 		t.Fatalf("Run(Disabled) = code=%d stdout=%q, want a silent allow -- disabled must never enforce", code, out.String())
@@ -82,7 +82,7 @@ func TestRun_Disabled_TotallySilentWhenTheRealGateWouldAllow(t *testing.T) {
 	in := strings.NewReader(`{"tool_name":"Bash","cwd":"/repo","tool_input":{"command":"git status"}}`)
 	var out, errOut bytes.Buffer
 
-	code := Run(Disabled, in, &out, &errOut, primaryLstat, primaryReadFile)
+	code := Run(Disabled, in, &out, &errOut, primaryLstat, primaryReadFile, fakeGetenv(nil))
 
 	if code != 0 || out.Len() != 0 || errOut.Len() != 0 {
 		t.Fatalf("Run(Disabled) on an allow = code=%d stdout=%q stderr=%q, want total silence", code, out.String(), errOut.String())
@@ -95,7 +95,7 @@ func TestRun_Enabled_DelegatesToDetectAndEnforces(t *testing.T) {
 	in := strings.NewReader(`{"tool_name":"Write","tool_input":{"file_path":"/repo/a.go"}}`)
 	var out, errOut bytes.Buffer
 
-	code := Run(Enabled, in, &out, &errOut, primaryLstat, primaryReadFile)
+	code := Run(Enabled, in, &out, &errOut, primaryLstat, primaryReadFile, fakeGetenv(nil))
 
 	if code != 0 || !strings.Contains(out.String(), `"deny"`) {
 		t.Fatalf("Run(Enabled) = code=%d stdout=%q, want the real deny response enforced on stdout", code, out.String())
@@ -108,7 +108,7 @@ func TestRun_SelfApplicationRisk_NeverDeniesAndForcesADistinctExitCode(t *testin
 	in := strings.NewReader(`{"tool_name":"Write","tool_input":{"file_path":"/repo/a.go"}}`)
 	var out, errOut bytes.Buffer
 
-	code := Run(SelfApplicationRisk, in, &out, &errOut, primaryLstat, primaryReadFile)
+	code := Run(SelfApplicationRisk, in, &out, &errOut, primaryLstat, primaryReadFile, fakeGetenv(nil))
 
 	if out.Len() != 0 {
 		t.Fatalf("Run(SelfApplicationRisk) stdout = %q, want nothing emitted -- the call must still proceed", out.String())
