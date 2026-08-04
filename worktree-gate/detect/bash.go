@@ -37,17 +37,6 @@ type Verbs struct {
 
 var shellConnectors = regexp.MustCompile(`&&|\|\||;|\n|\|`)
 
-// shellWriteMetachars are shell constructs that can carry a side-effecting
-// write or a second command inside a single connector-split piece:
-// redirects (`>`, `<` and their process-substitution forms), command and
-// variable substitution (`$(...)`, `${...}`, backticks), and backgrounding
-// (a lone `&`, which shellConnectors deliberately does not split on). The
-// sanctioned-landing override rejects any command containing one, so no
-// write can ride along inside an otherwise-covered git merge/commit -- the
-// base classifier catches these via WriteContains, but the override
-// bypasses that classification entirely.
-var shellWriteMetachars = regexp.MustCompile("[<>&$`]")
-
 // ClassifyBash splits a compound command on its shell connectors (&&, ||,
 // ;, |, newlines) and classifies each piece independently: one write-like
 // piece makes the whole command a write, the dominant and conservative
@@ -104,44 +93,4 @@ func hasCommandPrefix(piece, r string) bool {
 	}
 	rest := piece[len(r):]
 	return rest == "" || rest[0] == ' '
-}
-
-// mergeGateVerbs are the only two commands the DAT_MERGE_GATE override may
-// allow: build-with-team's documented landing-merge flow, run directly from
-// the primary checkout.
-var mergeGateVerbs = []string{"git merge", "git commit"}
-
-// isSanctionedLandingCommand reports whether command is a single,
-// unconnected invocation of one of mergeGateVerbs. Splitting on the same
-// shell connectors ClassifyBash uses means any chained, piped, or
-// newline-joined command is disqualified by carrying more than one piece;
-// a subshell or an env-var-prefixed form is disqualified too, since neither
-// starts with the exact verb text. Any redirect, command/variable
-// substitution, or backgrounding metacharacter disqualifies it as well, so a
-// write cannot ride along inside the single covered piece. A non-covered
-// write verb can never ride along with a covered one.
-func isSanctionedLandingCommand(command string) bool {
-	if shellWriteMetachars.MatchString(command) {
-		return false
-	}
-	var only string
-	pieces := 0
-	for _, piece := range shellConnectors.Split(command, -1) {
-		piece = strings.TrimSpace(piece)
-		if piece == "" {
-			continue
-		}
-		pieces++
-		only = piece
-	}
-	if pieces != 1 {
-		return false
-	}
-	lower := strings.ToLower(only)
-	for _, v := range mergeGateVerbs {
-		if hasCommandPrefix(lower, v) {
-			return true
-		}
-	}
-	return false
 }

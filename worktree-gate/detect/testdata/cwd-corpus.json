@@ -1,0 +1,85 @@
+{
+  "cases": [
+    {
+      "command": "git commit -m x",
+      "expect": "",
+      "name": "no-cd-uses-session-cwd"
+    },
+    {
+      "command": "cd /srv/repo && git commit -m x",
+      "expect": "/srv/repo",
+      "name": "leading-cd"
+    },
+    {
+      "command": "FLAG=1 cd /srv/repo && git commit -m x",
+      "expect": "/srv/repo",
+      "name": "non-leading-cd-after-bare-var-assignment"
+    },
+    {
+      "command": "echo starting && cd /srv/repo && git commit -m x",
+      "expect": "/srv/repo",
+      "name": "cd-after-unrelated-command"
+    },
+    {
+      "command": "cd /srv && cd repo && git commit -m x",
+      "expect": "/srv/repo",
+      "name": "chained-relative-cd"
+    },
+    {
+      "command": "cd /a && cd b && cd c && git commit -m x",
+      "expect": "/a/b/c",
+      "name": "chained-relative-cd-deep"
+    },
+    {
+      "command": "git -C /srv/repo commit -m x",
+      "expect": "/srv/repo",
+      "name": "dash-C-absolute"
+    },
+    {
+      "command": "cd /srv && git -C repo commit -m x",
+      "expect": "/srv/repo",
+      "name": "dash-C-relative-composes-onto-cd"
+    },
+    {
+      "command": "cd /srv && git -Crepo commit -m x",
+      "expect": "/srv/repo",
+      "name": "dash-C-glued-relative"
+    },
+    {
+      "command": "cd \"/srv/repo\" && git commit -m x",
+      "expect": "/srv/repo",
+      "name": "double-quoted-literal-quote-strip"
+    },
+    {
+      "command": "cd '/srv/repo' && git commit -m x",
+      "expect": "/srv/repo",
+      "name": "single-quoted-literal-quote-strip"
+    },
+    {
+      "command": "cd \"$WT\" && git commit -m x",
+      "expect": "DENY",
+      "name": "quoted-variable-target-unresolvable"
+    },
+    {
+      "command": "cd $WT && git commit -m x",
+      "expect": "DENY",
+      "name": "unquoted-variable-target-unresolvable"
+    },
+    {
+      "command": "git -C \"$WT\" commit -m x",
+      "expect": "DENY",
+      "name": "dash-C-variable-target-unresolvable"
+    },
+    {
+      "command": "cd \"$WT\" && cd /srv/repo && git commit -m x",
+      "expect": "/srv/repo",
+      "name": "absolute-cd-cures-earlier-unresolvable"
+    },
+    {
+      "command": "git commit -m x && cd /other",
+      "expect": "",
+      "name": "only-cds-preceding-the-git-invocation-count"
+    }
+  ],
+  "description": "Golden effective-working-directory resolution corpus (SC-CWD-RESOLVER-CONTRACT). Each case gives a Bash command string and `expect`, the statically-resolved effective working directory of the first git invocation: an absolute path, \"\" for the session cwd (no cd/-C), or \"DENY\" when the directory depends on a value not in the command text (a variable/unexpandable cd or -C target). The canonical resolver is git-gate.sh (invoked as `--print-eff-dir <command>`); the Go worktree gate mirrors this corpus at git-tools/worktree-gate/detect/testdata/cwd-corpus.json, pinned content-equal by a test."
+}

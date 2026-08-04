@@ -47,7 +47,7 @@ func withRepoLock(ctx context.Context, worktreesDir string, fn func() error) err
 	if !locked {
 		return fmt.Errorf("lifecycle: timed out waiting for lock %s", lockPath)
 	}
-	defer fl.Unlock()
+	defer func() { _ = fl.Unlock() }()
 
 	return fn()
 }

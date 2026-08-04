@@ -10,13 +10,10 @@ const (
 	// ProjectDirEnvVar names the project root the tracking-doc exemption
 	// checks a Write/Edit target against (see decideFileWrite).
 	ProjectDirEnvVar = "CLAUDE_PROJECT_DIR"
-	// MergeGateEnvVar opts a Bash call into the sanctioned-landing-merge
-	// override (see decideBash). Only the exact value "1" opts in.
-	MergeGateEnvVar = "DAT_MERGE_GATE"
 )
 
-// Input is the subset of a PreToolUse payload the gate needs, plus the two
-// environment signals its allow-list overrides read.
+// Input is the subset of a PreToolUse payload the gate needs, plus the
+// environment signal its tracking-doc exemption reads.
 type Input struct {
 	ToolName string // "Write", "Edit", or "Bash"
 	CWD      string // session working directory, used for Bash
@@ -26,9 +23,6 @@ type Input struct {
 	// ProjectDir is CLAUDE_PROJECT_DIR, empty when unset. Feeds the
 	// tracking-doc exemption in decideFileWrite.
 	ProjectDir string
-	// MergeGateEnabled is true iff DAT_MERGE_GATE is set to exactly "1".
-	// Feeds the sanctioned-landing-merge override in decideBash.
-	MergeGateEnabled bool
 }
 
 // Decision is the gate's verdict for one tool call.
@@ -36,18 +30,24 @@ type Decision struct {
 	// Deny blocks the call. Reason is the operator-facing explanation.
 	Deny   bool
 	Reason string
-	// Degraded is non-empty when a data-artifact defect forced this
-	// Decision to fail open rather than resolve normally. A caller must
-	// still allow the call but should surface Degraded loudly (e.g. on
-	// stderr), since it names a packaging defect worth fixing.
+	// Degraded is non-empty when a data-artifact defect was detected but
+	// didn't change this Decision -- the call was already resolved on its
+	// own merits (e.g. confirmed inside a worktree) without needing the
+	// broken artifact. A caller should still surface Degraded loudly (e.g.
+	// on stderr), since it names a packaging defect worth fixing, but must
+	// never read it as "this call was allowed because of the defect": a
+	// defect that could have changed the verdict denies instead (fail
+	// closed), it never fails open.
 	Degraded string
 }
 
 // Decide evaluates one PreToolUse call against the worktree-isolation
-// invariant: a repo-modifying write outside a worktree is denied, and a
-// call this gate cannot resolve confidently is denied too (fail closed) --
-// except when the classifier's own data artifact is the thing that failed,
-// which fails open instead (see Decision.Degraded).
+// invariant: a repo-modifying write outside a worktree is denied, a call
+// this gate cannot resolve confidently is denied too (fail closed), and a
+// classifier or tracking-doc data-artifact defect that could have affected
+// the verdict denies as well rather than failing open. The one exception is
+// Decision.Degraded: a defect surfaced without changing the verdict, because
+// the call was already independently resolved.
 func Decide(lstat LstatFunc, readFile ReadFileFunc, verbs Verbs, verbsErr error, trackingDocs TrackingDocs, trackingDocsErr error, in Input) Decision {
 	switch in.ToolName {
 	case "Write", "Edit":
@@ -68,9 +68,10 @@ func decideFileWrite(lstat LstatFunc, readFile ReadFileFunc, trackingDocs Tracki
 	if underProjectDir(in.ProjectDir, filePath) {
 		if trackingDocsErr != nil {
 			// Can't verify tracking-doc membership without the data
-			// artifact -- fail open rather than risk denying a legitimate
-			// tracking-doc write on a packaging defect.
-			return Decision{Degraded: trackingDocsErr.Error()}
+			// artifact -- deny rather than risk allowing an unisolated
+			// write on a packaging defect.
+			return Decision{Deny: true, Reason: fmt.Sprintf(
+				"worktree-gate: cannot verify the tracking-doc exemption for %q (%v); denying rather than risk an unisolated write", filePath, trackingDocsErr)}
 		}
 		if trackingDocs.has(filepath.Base(filePath)) {
 			return Decision{}
@@ -116,14 +117,20 @@ func decideBash(lstat LstatFunc, readFile ReadFileFunc, verbs Verbs, verbsErr er
 	if strings.TrimSpace(in.Command) == "" {
 		return Decision{}
 	}
-	if in.CWD == "" {
+
+	cwd, unresolvable := effectiveBashCWD(in.CWD, in.Command)
+	if unresolvable {
+		return Decision{Deny: true, Reason: fmt.Sprintf(
+			"worktree-gate: %q resolves to a working directory this gate cannot determine statically; denying rather than risk an unisolated write", in.Command)}
+	}
+	if cwd == "" {
 		return Decision{Deny: true, Reason: "worktree-gate: no working directory reported for this Bash call; denying rather than risk an unisolated write"}
 	}
 
-	root, gitEntry, found, err := FindRepoRoot(lstat, in.CWD)
+	root, gitEntry, found, err := FindRepoRoot(lstat, cwd)
 	if err != nil {
 		return Decision{Deny: true, Reason: fmt.Sprintf(
-			"worktree-gate: cannot determine whether %q is inside a git repository (%v); denying rather than risk an unisolated write", in.CWD, err)}
+			"worktree-gate: cannot determine whether %q is inside a git repository (%v); denying rather than risk an unisolated write", cwd, err)}
 	}
 	if !found {
 		return Decision{} // confidently outside any repo: out of scope
@@ -136,18 +143,12 @@ func decideBash(lstat LstatFunc, readFile ReadFileFunc, verbs Verbs, verbsErr er
 		return degradedOnly(verbsErr)
 	}
 
-	if kind == KindPrimary && in.MergeGateEnabled && isSanctionedLandingCommand(in.Command) {
-		// The documented landing-merge flow runs `git merge`/`git commit`
-		// directly from the primary checkout -- an explicit, narrow
-		// override of the primary-checkout deny, independent of classifier
-		// health.
-		return degradedOnly(verbsErr)
-	}
-
 	if verbsErr != nil {
-		// The classifier itself is broken: a packaging defect, not a
-		// signal about this command. Fail open, loud, never deny on it.
-		return degradedOnly(verbsErr)
+		// The classifier itself is broken and this location isn't already
+		// independently safe: the defect could be masking a real write, so
+		// deny rather than fail open on it.
+		return Decision{Deny: true, Reason: fmt.Sprintf(
+			"worktree-gate: cannot classify %q (%v); denying rather than risk an unisolated write", in.Command, verbsErr)}
 	}
 
 	switch ClassifyBash(verbs, in.Command) {
