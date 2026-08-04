@@ -1,8 +1,0 @@
-{
-    "name": "git-tools",
-    "description": "Forces Claude toward git-tools (signing/rewrite, worktree/branch, merge/rebase, content-guardrail scans) instead of the raw `git`/Bash calls it supersedes, denies a repo-modifying Write/Edit/Bash call made outside a git worktree, and provisions both binaries on session start.",
-    "author": {
-        "name": "John Richter"
-    },
-    "version": "0.1.0"
-}
