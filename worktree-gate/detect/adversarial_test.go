@@ -60,6 +60,23 @@ func TestDecide_Bash_WorktreeWithDegradedClassifier_AllowedAndDegraded(t *testin
 	}
 }
 
+// -- SC9: the opaque-script residual. decideBash never inspects what a
+// script actually does; an arbitrary script run from a primary checkout
+// (e.g. a build step that writes .claude/settings.json) matches no known
+// read or write pattern and falls to the fail-closed Uncertain default, so
+// it denies without any script-specific logic.
+
+func TestDecide_Bash_SC9_OpaqueScriptWritingClaudeSettingsFromPrimaryCheckout_Denied(t *testing.T) {
+	fs := primaryFS()
+	v := testVerbs(t)
+	d := Decide(fs.lstat, fs.readFile, v, nil, TrackingDocs{}, nil, Input{
+		ToolName: "Bash", CWD: "/repo", Command: "./build.sh",
+	})
+	if !d.Deny {
+		t.Fatal("SC9: expected deny for an opaque script (./build.sh) run from a primary checkout -- it could write .claude/settings.json or any other file, and this gate cannot inspect an arbitrary script's behavior")
+	}
+}
+
 // -- ClassifyBash: case-insensitivity, whitespace, and conservative bias --
 
 func TestClassifyBash_CaseInsensitiveWritePrefix(t *testing.T) {
@@ -255,64 +272,17 @@ func TestUnderProjectDir(t *testing.T) {
 	}
 }
 
-// -- isSanctionedLandingCommand: pinned to exactly the two covered verbs,
-// unlaunderable through any connector, subshell, or env-var-prefixed form.
+// -- a corrupt tracking-doc artifact denies rather than fails open, for any
+// call the exemption could have covered.
 
-func TestIsSanctionedLandingCommand(t *testing.T) {
-	cases := []struct {
-		name    string
-		command string
-		want    bool
-	}{
-		{"bare merge", "git merge --no-ff feat/example -m mergemsg", true},
-		{"bare commit", "git commit -m done", true},
-		{"case-insensitive", "GIT MERGE --no-ff feat/example -m mergemsg", true},
-		{"non-covered verb alone", "git push origin main", false},
-		{"chained with &&", "git merge --no-ff feat/example -m mergemsg && rm -rf build", false},
-		{"chained with ;", "git commit -m x; rm -rf build", false},
-		{"piped", "git commit -m x | rm -rf build", false},
-		{"subshell", "(git merge --no-ff feat/example -m mergemsg && rm -rf build)", false},
-		{"env-var prefix", "FOO=bar git commit -m x", false},
-		{"redirect out", "git commit -m x > pwned.txt", false},
-		{"redirect append", "git commit -m x >> pwned.txt", false},
-		{"redirect in", "git commit -m x < payload", false},
-		{"command substitution", "git commit -m \"$(rm -rf build)\"", false},
-		{"backtick substitution", "git commit -m `rm -rf build`", false},
-		{"variable expansion", "git commit -m ${EVIL}", false},
-		{"backgrounded second command", "git commit -m x & rm -rf build", false},
-	}
-	for _, c := range cases {
-		if got := isSanctionedLandingCommand(c.command); got != c.want {
-			t.Errorf("%s: isSanctionedLandingCommand(%q) = %v, want %v", c.name, c.command, got, c.want)
-		}
-	}
-}
-
-// -- the merge-gate override is scoped to KindPrimary only, and a corrupt
-// tracking-doc artifact fails open rather than denying on it.
-
-func TestDecide_Bash_MergeGateScopedToPrimaryOnly_IndeterminateStillDenied(t *testing.T) {
-	fs := newFakeFS().file("/repo/.git", "not a gitdir line\n")
-	v := testVerbs(t)
-	d := Decide(fs.lstat, fs.readFile, v, nil, TrackingDocs{}, nil, Input{
-		ToolName: "Bash", CWD: "/repo", Command: "git merge --no-ff feat/example -m mergemsg", MergeGateEnabled: true,
-	})
-	if !d.Deny {
-		t.Fatal("expected deny: the override only covers a primary checkout, not an indeterminate one")
-	}
-}
-
-func TestDecide_Write_TrackingDocsDegradedArtifact_FailsOpenAndReportsDegraded(t *testing.T) {
+func TestDecide_Write_TrackingDocsDegradedArtifact_DeniedFailClosed(t *testing.T) {
 	fs := newFakeFS().dir("/proj/.dat/some-effort/.git")
 	tdErr := errors.New("worktree-gate: embedded trackingdocs.json is corrupt")
 	d := Decide(fs.lstat, fs.readFile, Verbs{}, nil, TrackingDocs{}, tdErr, Input{
 		ToolName: "Write", FilePath: "/proj/.dat/some-effort/plan.json", ProjectDir: "/proj",
 	})
-	if d.Deny {
-		t.Fatalf("expected fail-open on a degraded tracking-doc artifact, got deny: %s", d.Reason)
-	}
-	if d.Degraded == "" {
-		t.Fatal("expected Degraded to be set so the defect is surfaced loudly")
+	if !d.Deny {
+		t.Fatal("expected deny: a degraded tracking-doc artifact could be masking a real write in scope of the exemption (fail closed, not fail open)")
 	}
 }
 

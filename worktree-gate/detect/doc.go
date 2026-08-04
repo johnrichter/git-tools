@@ -12,7 +12,9 @@
 // A call this package cannot resolve confidently is denied (fail closed):
 // an unblocked write outside a worktree can destroy committed work with no
 // way to reconstruct it, so the safe default is to refuse rather than
-// guess. The one exception is the package's own classifier data: a missing
-// or corrupt embedded artifact is a packaging defect, not a signal, and
-// fails open with a loud diagnostic instead of denying on it.
+// guess. A missing or corrupt embedded classifier artifact denies too,
+// since it could be masking a real write. The one exception is a call
+// already resolved independently of the artifact (e.g. confirmed inside a
+// worktree): there the defect is only surfaced as a loud diagnostic
+// (Decision.Degraded), never as a reason to change the verdict.
 package detect

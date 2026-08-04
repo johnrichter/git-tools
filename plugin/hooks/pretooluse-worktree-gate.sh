@@ -7,9 +7,8 @@
 # worktree-gate is a plain hook binary (see worktree-gate/detect/hook.go): it
 # reads the PreToolUse payload on stdin and, when it denies, writes the deny
 # response to stdout -- this wrapper only resolves which binary to run and
-# execs it unmodified, stdin and stdout untouched. Its own rollout staging
-# (GIT_TOOLS_WORKTREE_GATE_ENFORCE) lives in the
-# rollout package the binary links, not here.
+# execs it unmodified, stdin and stdout untouched. The binary always enforces
+# once resolved; there is no rollout-staging env gate.
 #
 # Resolution order: WORKTREE_GATE_BIN (bootstrap-worktree-gate.sh's
 # provisioned, checksum-verified path), else `command -v worktree-gate`. Fail

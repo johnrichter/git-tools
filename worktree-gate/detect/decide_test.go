@@ -97,15 +97,12 @@ func TestDecide_Bash_IndeterminateRepoMembership_DeniedFailClosed(t *testing.T) 
 	}
 }
 
-func TestDecide_Bash_DegradedClassifier_FailsOpenAndReportsDegraded(t *testing.T) {
+func TestDecide_Bash_DegradedClassifierInPrimaryCheckout_DeniedFailClosed(t *testing.T) {
 	fs := primaryFS()
 	verbsErr := errors.New("worktree-gate: embedded verbs.json is corrupt")
 	d := Decide(fs.lstat, fs.readFile, Verbs{}, verbsErr, TrackingDocs{}, nil, Input{ToolName: "Bash", CWD: "/repo", Command: "git commit -m x"})
-	if d.Deny {
-		t.Fatalf("expected fail-open on a degraded classifier artifact, got deny: %s", d.Reason)
-	}
-	if d.Degraded == "" {
-		t.Fatal("expected Degraded to be set so the defect is surfaced loudly")
+	if !d.Deny {
+		t.Fatal("expected deny: a degraded classifier artifact in a primary checkout could be masking a real write (fail closed, not fail open)")
 	}
 }
 
@@ -182,52 +179,5 @@ func TestDecide_Write_TrackingDocExempt_BasenameNotInSet_Denied(t *testing.T) {
 	})
 	if !d.Deny {
 		t.Fatal("expected deny: notes.md is not in the tracking-doc set")
-	}
-}
-
-// -- sanctioned-landing-merge override: with MergeGateEnabled, a bare `git
-// merge`/`git commit` from the primary checkout is allowed.
-
-func TestDecide_Bash_MergeGateAllowsMergeInPrimaryCheckout(t *testing.T) {
-	fs := primaryFS()
-	v := testVerbs(t)
-	d := Decide(fs.lstat, fs.readFile, v, nil, TrackingDocs{}, nil, Input{
-		ToolName: "Bash", CWD: "/repo", Command: "git merge --no-ff feat/example -m mergemsg", MergeGateEnabled: true,
-	})
-	if d.Deny {
-		t.Fatalf("expected allow: DAT_MERGE_GATE covers a bare git merge from the primary checkout, got deny: %s", d.Reason)
-	}
-}
-
-func TestDecide_Bash_MergeGateAllowsCommitInPrimaryCheckout(t *testing.T) {
-	fs := primaryFS()
-	v := testVerbs(t)
-	d := Decide(fs.lstat, fs.readFile, v, nil, TrackingDocs{}, nil, Input{
-		ToolName: "Bash", CWD: "/repo", Command: "git commit -m done", MergeGateEnabled: true,
-	})
-	if d.Deny {
-		t.Fatalf("expected allow: DAT_MERGE_GATE covers a bare git commit from the primary checkout, got deny: %s", d.Reason)
-	}
-}
-
-func TestDecide_Bash_MergeGateDisabled_DeniedSameAsBaseline(t *testing.T) {
-	fs := primaryFS()
-	v := testVerbs(t)
-	d := Decide(fs.lstat, fs.readFile, v, nil, TrackingDocs{}, nil, Input{
-		ToolName: "Bash", CWD: "/repo", Command: "git merge --no-ff feat/example -m mergemsg", MergeGateEnabled: false,
-	})
-	if !d.Deny {
-		t.Fatal("expected deny: DAT_MERGE_GATE is not set, so the merge stays denied like any other write")
-	}
-}
-
-func TestDecide_Bash_MergeGateDoesNotCoverOtherWriteVerbs(t *testing.T) {
-	fs := primaryFS()
-	v := testVerbs(t)
-	d := Decide(fs.lstat, fs.readFile, v, nil, TrackingDocs{}, nil, Input{
-		ToolName: "Bash", CWD: "/repo", Command: "git push origin main", MergeGateEnabled: true,
-	})
-	if !d.Deny {
-		t.Fatal("expected deny: the override covers only git merge/git commit, not every write verb")
 	}
 }

@@ -25,7 +25,9 @@ func touchActivity(worktreesDir, id string) error {
 	if err != nil {
 		return err
 	}
-	f.Close()
+	if err := f.Close(); err != nil {
+		return err
+	}
 	return os.Chtimes(path, now, now)
 }
 

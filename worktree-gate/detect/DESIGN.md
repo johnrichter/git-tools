@@ -45,10 +45,10 @@ approval on an ask-prompt landing an unisolated write, at the cost of hard-block
 legitimate-but-unclassifiable call that previously could proceed after confirmation -- the
 operator must resolve the ambiguity (e.g. create the worktree) rather than override it.
 
-## 4. Two allow paths restored, narrowly, so retirement can't regress the incumbent
+## 4. One allow path restored, narrowly, so retirement can't regress the incumbent
 
 Widening scope to Bash and to every file class (items 1-2) closes real gaps, but the incumbent
-also carried two ALLOW behaviors this gate lacked outright. Each is restored as a data-driven,
+also carried an ALLOW behavior this gate lacked outright. It's restored as a data-driven,
 pinned-to-its-exact-case override rather than a general loosening.
 
 **Tracking-doc exemption.** A Write/Edit whose target sits at any depth under the configured
@@ -58,34 +58,20 @@ set (`design.md`, `plan.json`, `plan.md`, `execution.json`, `execution.md`, `fee
 carve-out. The basename set ships as `trackingdocs.json`, a data artifact next to `verbs.json`,
 not a literal in `decide.go`. The check runs before the repo-root walk and is extension-agnostic
 by construction: this gate has no source-extension filter to begin with, so the exemption applies
-to the basename alone. **Fail direction:** a missing or corrupt `trackingdocs.json` fails open and
-loud (`Decision.Degraded`) for any call the exemption could have covered (target under the
-configured project dir) -- never a deny. A call outside that scope is unaffected by the defect,
-since the exemption could never have applied to it regardless.
+to the basename alone. **Fail direction:** a missing or corrupt `trackingdocs.json` denies (see
+"Packaging defects deny" below) for any call the exemption could have covered (target under the
+configured project dir). A call outside that scope is unaffected by the defect, since the
+exemption could never have applied to it regardless.
 
-**Sanctioned-landing-merge override.** With `DAT_MERGE_GATE=1`, a Bash `git merge` or `git commit`
-whose cwd is a primary checkout is allowed -- build-with-team's documented landing flow
-(`git merge --no-ff <branch> -m ...`) run directly from the primary checkout. The incumbent never
-gated Bash at all, so this exact pattern was never blocked before; the override exists so
-superseding it doesn't newly block a sanctioned flow. It is pinned narrowly: the whole command,
-after splitting on the same shell connectors `ClassifyBash` uses, must reduce to exactly one piece
-that is itself `git merge` or `git commit` at a word boundary. Any connector (`&&`, `;`, `|`,
-newline) disqualifies it by producing more than one piece; a subshell or an env-var-prefixed form
-disqualifies it too, since neither piece then starts with the exact verb text. A write-carrying
-shell metacharacter inside the single piece -- a redirect (`>`/`<`), command or variable
-substitution (`$(...)`, `${...}`, backticks), or a backgrounding `&` -- disqualifies it as well,
-since those never split into a separate piece yet still carry a side effect the base classifier
-would otherwise catch via `WriteContains`. So a non-covered write verb can never ride along. The
-override is scoped to `KindPrimary` only and is independent
-of classifier health, same as the existing worktree short-circuit. **Fail direction:** unset, or
-any value other than exactly `"1"`, leaves the deny byte-identical to today's.
+**Blast radius:** the path is narrowly scoped, so it doesn't reopen the worktree-isolation
+invariant generally -- only the one case the incumbent already allowed.
 
-**Blast radius:** both paths are opt-in and narrowly scoped, so they don't reopen the
-worktree-isolation invariant generally -- only the two named cases the incumbent already allowed.
+## Packaging defects deny, except where the verdict was never in question
 
-## Unchanged: the packaging-defect exception
-
-A missing or corrupt classifier artifact fails open and loud (see `doc.go`), never denies -- a
-broken data file is never treated as a signal about the call being gated. The incumbent applies
-the same fail-open rule to its own missing/corrupt extension-set data file, and the tracking-doc
-basename set (item 4 above) follows the identical rule.
+A missing or corrupt classifier artifact (`verbs.json`, `trackingdocs.json`) denies rather than
+allows: the defect could be masking a real write, so it's treated the same as any other signal
+this gate can't resolve confidently (fail closed). The one exception is a call already resolved
+independently of the artifact -- e.g. a Bash call confirmed to run inside a worktree needs no
+classification at all to allow. There, the defect is surfaced as a loud diagnostic
+(`Decision.Degraded`) without changing the verdict, since there was never a verdict for it to
+change.

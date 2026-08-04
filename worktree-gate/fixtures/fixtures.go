@@ -43,8 +43,7 @@ type Case struct {
 	CWD      string // Bash working directory
 	Command  string // Bash command
 
-	ProjectDir       string // CLAUDE_PROJECT_DIR, feeds the tracking-doc exemption
-	MergeGateEnabled bool   // DAT_MERGE_GATE == "1", feeds the landing-merge override
+	ProjectDir string // CLAUDE_PROJECT_DIR, feeds the tracking-doc exemption
 }
 
 // wantDeny is the invariant Category encodes: only Read fixtures may pass
@@ -54,7 +53,7 @@ func (c Case) wantDeny() bool { return c.Category != Read }
 func (c Case) toInput() detect.Input {
 	return detect.Input{
 		ToolName: c.Tool, CWD: c.CWD, FilePath: c.FilePath, Command: c.Command,
-		ProjectDir: c.ProjectDir, MergeGateEnabled: c.MergeGateEnabled,
+		ProjectDir: c.ProjectDir,
 	}
 }
 
@@ -91,6 +90,13 @@ func Set() []Case {
 		{Name: "bash-npm-install-in-primary", Category: Write, Topology: Primary, Tool: "Bash", CWD: "/repo", Command: "npm install left-pad"},
 		{Name: "bash-read-then-write-in-primary", Category: Write, Topology: Primary, Tool: "Bash", CWD: "/repo", Command: "git status && rm -rf build"},
 		{Name: "bash-find-delete-in-primary", Category: Write, Topology: Primary, Tool: "Bash", CWD: "/repo", Command: "find . -delete"},
+
+		// -- uncertain: SC9, the opaque-script residual -- an arbitrary script
+		// invoked from the primary checkout (e.g. a build script that could
+		// write .claude/settings.json) matches no known read or write
+		// pattern, so it falls to the fail-closed Uncertain default and
+		// denies without this gate ever inspecting what the script does.
+		{Name: "bash-opaque-script-in-primary-sc9", Category: Uncertain, Topology: Primary, Tool: "Bash", CWD: "/repo", Command: "./build.sh"},
 
 		// -- read: no-op calls this gate never governs --
 		{Name: "write-empty-file-path-is-noop", Category: Read, Topology: Primary, Tool: "Write", FilePath: ""},
@@ -158,38 +164,5 @@ func Set() []Case {
 		{Name: "write-tracking-doc-outside-project-dir-denied", Category: Write, Topology: Primary, Tool: "Write", ProjectDir: "/proj", FilePath: "/otherrepo/.dat/some-effort/plan.json"},
 		{Name: "write-tracking-doc-nonexempt-basename-md-denied", Category: Write, Topology: Primary, Tool: "Write", ProjectDir: "/proj", FilePath: "/proj/.dat/some-effort/notes.md"},
 		{Name: "write-tracking-doc-nonexempt-basename-json-denied", Category: Write, Topology: Primary, Tool: "Write", ProjectDir: "/proj", FilePath: "/proj/.dat/some-effort/config.json"},
-
-		// -- read: sanctioned-landing-merge override -- with DAT_MERGE_GATE=1,
-		// a bare `git merge`/`git commit` from the primary checkout is
-		// allowed, matching build-with-team's documented landing flow --
-		{Name: "bash-merge-gate-allows-merge", Category: Read, Topology: Primary, Tool: "Bash", CWD: "/repo", Command: "git merge --no-ff feat/example -m mergemsg", MergeGateEnabled: true},
-		{Name: "bash-merge-gate-allows-commit", Category: Read, Topology: Primary, Tool: "Bash", CWD: "/repo", Command: "git commit -m done", MergeGateEnabled: true},
-
-		// -- write/uncertain: sanctioned-landing-merge override narrowing
-		// negatives -- unset stays byte-identical to today, a non-covered
-		// verb stays denied even with the override on, and the override is
-		// scoped to a primary checkout only --
-		{Name: "bash-merge-without-gate-var-denied", Category: Write, Topology: Primary, Tool: "Bash", CWD: "/repo", Command: "git merge --no-ff feat/example -m mergemsg", MergeGateEnabled: false},
-		{Name: "bash-merge-gate-does-not-cover-push", Category: Write, Topology: Primary, Tool: "Bash", CWD: "/repo", Command: "git push origin main", MergeGateEnabled: true},
-		{Name: "bash-merge-gate-scoped-to-primary-denied", Category: Uncertain, Topology: Indeterminate, Tool: "Bash", CWD: "/repo", Command: "git merge --no-ff feat/example -m mergemsg", MergeGateEnabled: true},
-
-		// -- write/uncertain: the override is unlaunderable -- a non-covered
-		// write verb riding alongside a covered one stays denied, one fixture
-		// per laundering form (&&, ;, |, subshell, env-prefix) --
-		{Name: "bash-merge-gate-laundered-chain-denied", Category: Write, Topology: Primary, Tool: "Bash", CWD: "/repo", Command: "git merge --no-ff feat/example -m mergemsg && rm -rf build", MergeGateEnabled: true},
-		{Name: "bash-merge-gate-laundered-semicolon-denied", Category: Write, Topology: Primary, Tool: "Bash", CWD: "/repo", Command: "git commit -m x; rm -rf build", MergeGateEnabled: true},
-		{Name: "bash-merge-gate-laundered-pipe-denied", Category: Write, Topology: Primary, Tool: "Bash", CWD: "/repo", Command: "git commit -m x | rm -rf build", MergeGateEnabled: true},
-		{Name: "bash-merge-gate-laundered-subshell-denied", Category: Write, Topology: Primary, Tool: "Bash", CWD: "/repo", Command: "(git merge --no-ff feat/example -m mergemsg && rm -rf build)", MergeGateEnabled: true},
-		{Name: "bash-merge-gate-laundered-env-prefix-denied", Category: Uncertain, Topology: Primary, Tool: "Bash", CWD: "/repo", Command: "FOO=bar git commit -m x", MergeGateEnabled: true},
-
-		// -- write: the override is unlaunderable through write-carrying shell
-		// metacharacters that live inside the single covered piece -- a
-		// redirect, command/variable substitution, or backgrounding operator
-		// must not ride along past the verb match --
-		{Name: "bash-merge-gate-laundered-redirect-denied", Category: Write, Topology: Primary, Tool: "Bash", CWD: "/repo", Command: "git commit -m x > pwned.txt", MergeGateEnabled: true},
-		{Name: "bash-merge-gate-laundered-append-denied", Category: Write, Topology: Primary, Tool: "Bash", CWD: "/repo", Command: "git commit -m x >> pwned.txt", MergeGateEnabled: true},
-		{Name: "bash-merge-gate-laundered-cmdsubst-denied", Category: Write, Topology: Primary, Tool: "Bash", CWD: "/repo", Command: "git commit -m \"$(rm -rf build)\"", MergeGateEnabled: true},
-		{Name: "bash-merge-gate-laundered-backtick-denied", Category: Write, Topology: Primary, Tool: "Bash", CWD: "/repo", Command: "git commit -m `rm -rf build`", MergeGateEnabled: true},
-		{Name: "bash-merge-gate-laundered-background-denied", Category: Write, Topology: Primary, Tool: "Bash", CWD: "/repo", Command: "git commit -m x & rm -rf build", MergeGateEnabled: true},
 	}
 }
