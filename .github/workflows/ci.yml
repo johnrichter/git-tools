@@ -14,10 +14,6 @@
 #
 # guardrail gates every other job: SC-VERSIONING (tag-prefix.sh, tag pushes only) and
 # SC-DISTRIBUTION (no-committed-binaries.sh, every run) -- see release/guard/README.md.
-#
-# `go test ./...` includes internal/plugincheck's frozen-fixture adoption test (SC-FORCEDUSE):
-# the plugin's own routing-rules.json, loaded through plugin-foundation's BuildRegistry, must
-# clear the Phase-A adoption gate on the committed fixture transcript.
 
 name: CI
 
