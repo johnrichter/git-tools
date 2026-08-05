@@ -1,17 +1,6 @@
 # CI for git-tools: signing/rewrite, worktree/branch, merge/rebase, content-guardrail
 # scans, installable git hooks, and the worktree-gate PreToolUse gate binary.
 #
-# go.mod `replace`s git, githooks, clikit, fsx, sysops, adoption, transcript, gate and
-# plugin-foundation onto ../ai-shared-lib/go/* and ../ai-shared-lib/plugin-foundation (a
-# monorepo-development stand-in until those modules are independently tagged -- see the
-# `replace` block's comment in go.mod). actions/checkout refuses any path outside
-# $GITHUB_WORKSPACE, so every job that runs `go build`/`go vet`/`go test` checks out both
-# repos as workspace siblings (git-tools, ai-shared-lib) and runs with working-directory:
-# git-tools, which resolves the replace target at ../ai-shared-lib exactly as a local dev
-# checkout does. claude-shared-tooling is private, so the sibling checkout needs read access
-# via SIBLING_REPO_TOKEN (a PAT scoped to that repo) rather than the default, repo-scoped
-# GITHUB_TOKEN.
-#
 # guardrail gates every other job: SC-VERSIONING (tag-prefix.sh, tag pushes only) and
 # SC-DISTRIBUTION (no-committed-binaries.sh, every run) -- see release/guard/README.md.
 
@@ -54,13 +43,6 @@ jobs:
         with:
           path: git-tools
 
-      - name: Checkout ai-shared-lib sibling (go.mod replace target)
-        uses: actions/checkout@v5
-        with:
-          repository: johnrichter/claude-shared-tooling
-          token: ${{ secrets.SIBLING_REPO_TOKEN }}
-          path: ai-shared-lib
-
       - uses: actions/setup-go@v5
         with:
           go-version-file: git-tools/go.mod
@@ -92,13 +74,6 @@ jobs:
       - uses: actions/checkout@v5
         with:
           path: git-tools
-
-      - name: Checkout ai-shared-lib sibling (go.mod replace target)
-        uses: actions/checkout@v5
-        with:
-          repository: johnrichter/claude-shared-tooling
-          token: ${{ secrets.SIBLING_REPO_TOKEN }}
-          path: ai-shared-lib
 
       - uses: actions/setup-go@v5
         with:
