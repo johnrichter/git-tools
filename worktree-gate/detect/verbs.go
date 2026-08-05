@@ -11,8 +11,12 @@ var verbsJSON []byte
 
 // DefaultVerbs parses the classifier's embedded pattern set. A non-nil
 // error means the shipped artifact itself is malformed or empty -- a
-// packaging defect, not a signal about any tool call. Callers must treat
-// it as fail-open-and-loud, never let it drive a deny.
+// packaging defect, not a signal about any tool call. The gate treats it
+// fail-closed: the defect could be masking a real write, so a Bash call
+// whose location is not already independently safe denies on it. Only a
+// call resolved without the classifier -- confirmed inside a worktree --
+// is allowed, with the defect surfaced as a loud diagnostic
+// (Decision.Degraded), never as the reason for a verdict.
 func DefaultVerbs() (Verbs, error) {
 	var v Verbs
 	if err := json.Unmarshal(verbsJSON, &v); err != nil {

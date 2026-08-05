@@ -1,0 +1,19 @@
+{
+  "id": "contract:git-tools:bash-connector-set",
+  "description": "Canonical set of shell control operators that separate one command from the next. Every consumer that decomposes a Bash command into pieces splits on exactly this set, so a command breaks into the same pieces for every gate that examines it.",
+  "input": "A raw Bash command string.",
+  "output": "The command split into pieces at each unquoted occurrence of a listed operator; a two-character operator (&&, ||) always binds before its single-character form (&, |).",
+  "invariants": [
+    "SET-EQUAL across all consumers: the shell gate's sed splitter, the Go classifier, and the Go cwd resolver each split on this exact set; no consumer may add or drop an operator alone.",
+    "A redirect operator that begins with & (&>, &>>) or contains | (>|) is delimited by the redirect predicate, not split here, so its & or | is never mistaken for a lone connector.",
+    "Deterministically sorted by Unicode code point for byte-stable diffs."
+  ],
+  "connectors": [
+    "\n",
+    "&",
+    "&&",
+    ";",
+    "|",
+    "||"
+  ]
+}

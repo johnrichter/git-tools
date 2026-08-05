@@ -6,12 +6,6 @@ import (
 	"strings"
 )
 
-// cwdConnectors splits a Bash command into the segments a `cd` or a `git`
-// invocation can appear in: &&, ||, ;, |, a lone & (backgrounding), and a
-// literal newline. `&&` and `||` are listed ahead of their single-character
-// forms so a compound operator is never split as two single ones.
-var cwdConnectors = regexp.MustCompile(`&&|\|\||;|\n|\||&`)
-
 // envAssignmentToken matches a leading `VAR=value` command-segment prefix:
 // a letter/underscore, then any run of characters, then `=`. Such a prefix
 // is skipped without reading its name or value -- no environment or
@@ -36,10 +30,18 @@ const unresolvableCWD = "\x00worktree-gate:cwd-unresolvable\x00"
 // whatever `cd`s it does contain, so a non-git write (rm, mv, an installer)
 // is anchored at the directory the command actually reaches, not wherever
 // the tool call happened to start.
+//
+// It walks the same pieces the classifier does (decompose): one connector
+// set and one redirect-operator predicate, so a `cd` target and a git
+// invocation are read from a piece's argv -- the command words with redirect
+// operators and their targets already stripped, so `cd /a>/b` composes `/a`.
+// The resolver's own leading-token tolerance stays wider than the
+// classifier's on purpose (it skips a `VAR=value` prefix and a bare `(`), so
+// a non-leading `cd` still composes.
 func resolveEffectiveCWD(command string) (dir string, unresolvable bool) {
 	accum := ""
-	for _, seg := range cwdConnectors.Split(command, -1) {
-		tokens := skipAssignments(strings.Fields(seg))
+	for _, p := range decompose(command) {
+		tokens := skipAssignments(strings.Fields(p.argv))
 		if len(tokens) == 0 {
 			continue
 		}
@@ -52,7 +54,7 @@ func resolveEffectiveCWD(command string) (dir string, unresolvable bool) {
 		}
 		// Anything else -- an unrelated command word -- carries no cwd
 		// signal and is skipped; the scan keeps looking for the next `cd`
-		// or `git` in a later segment.
+		// or `git` in a later piece.
 	}
 	return asResult(accum)
 }

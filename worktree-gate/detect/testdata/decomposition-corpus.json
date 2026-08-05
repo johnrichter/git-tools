@@ -1,0 +1,80 @@
+{
+  "description": "Golden decomposition corpus for the one command decomposition both the classifier and the cwd resolver consume (SC16 parity). Each case gives a Bash command and `pieces`, the argv of each connector-delimited segment with redirect operators and their targets already stripped -- the exact piece list decompose() must produce for both consumers. A connector or redirect inside quotes or a command substitution is literal and does not split or delimit.",
+  "cases": [
+    {
+      "name": "and-operator",
+      "command": "git status && git diff",
+      "pieces": ["git status", "git diff"]
+    },
+    {
+      "name": "or-operator-not-two-pipes",
+      "command": "a || b",
+      "pieces": ["a", "b"]
+    },
+    {
+      "name": "pipe",
+      "command": "git log | head -20",
+      "pieces": ["git log", "head -20"]
+    },
+    {
+      "name": "semicolon",
+      "command": "cd /a; git status",
+      "pieces": ["cd /a", "git status"]
+    },
+    {
+      "name": "newline",
+      "command": "git status\ngit diff",
+      "pieces": ["git status", "git diff"]
+    },
+    {
+      "name": "lone-ampersand-background",
+      "command": "echo hi & git commit -m x",
+      "pieces": ["echo hi", "git commit -m x"]
+    },
+    {
+      "name": "redirect-glued-target-stripped-from-argv",
+      "command": "echo x>/p/tracked",
+      "pieces": ["echo x"]
+    },
+    {
+      "name": "redirect-before-cd-target-leaves-argv-cd-target",
+      "command": "cd /a>/b/tracked && git commit",
+      "pieces": ["cd /a", "git commit"]
+    },
+    {
+      "name": "fd-dup-stripped",
+      "command": "git status 2>&1",
+      "pieces": ["git status"]
+    },
+    {
+      "name": "input-redirect-stripped",
+      "command": "grep x < in.txt",
+      "pieces": ["grep x"]
+    },
+    {
+      "name": "ampersand-redirect-is-not-a-connector",
+      "command": "echo x &>> /p/tracked",
+      "pieces": ["echo x"]
+    },
+    {
+      "name": "quoted-connector-not-split",
+      "command": "echo \"a; b\" && ls",
+      "pieces": ["echo \"a; b\"", "ls"]
+    },
+    {
+      "name": "substitution-connector-not-split",
+      "command": "echo $(git status; git diff) && ls",
+      "pieces": ["echo $(git status; git diff)", "ls"]
+    },
+    {
+      "name": "heredoc-operator-line-tail-not-swallowed",
+      "command": "cat <<EOF && git commit\ndata\nEOF\n",
+      "pieces": ["cat", "git commit"]
+    },
+    {
+      "name": "command-after-closed-heredoc-block",
+      "command": "cat <<EOF\ndata\nEOF\nls\n",
+      "pieces": ["cat", "ls"]
+    }
+  ]
+}
