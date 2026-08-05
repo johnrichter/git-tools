@@ -1,0 +1,20 @@
+{
+  "id": "contract:git-tools:sc11-banned-env-names",
+  "description": "SC11's banned environment-variable and override names. No shipped code in governance-git/ or git-tools/ may read any of these, from the environment or by parsing a command-string token; no fallback resolves any of them. The path they once carried is computed deterministically instead.",
+  "input": "The source trees of governance-git/ and git-tools/.",
+  "output": "A grep-style verification finds zero reads of any listed name (env or command-string token); any hit is a hard failure.",
+  "invariants": [
+    "No runtime read, and no command-string token parse, of any listed name.",
+    "This artifact is the single source of truth the SC10/SC11 verification greps against; adding a newly-banned name here extends the check with no code change.",
+    "Deterministically sorted for byte-stable diffs."
+  ],
+  "banned_names": [
+    "DAT_MERGE_GATE",
+    "GIT_TOOLS_RELEASE_BASE_URL",
+    "GIT_TOOLS_WORKTREE_GATE_ENFORCE",
+    "PF_ARCH_OVERRIDE",
+    "PF_RELEASE_BASE_URL",
+    "PF_ROUTING_RULES",
+    "WORKTREE_GATE_BIN"
+  ]
+}

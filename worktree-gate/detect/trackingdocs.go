@@ -16,10 +16,13 @@ type TrackingDocs struct {
 	Basenames []string `json:"basenames"`
 }
 
-// DefaultTrackingDocs parses the classifier's embedded tracking-doc basename
-// set. A non-nil error means the shipped artifact itself is malformed or
-// empty -- a packaging defect, not a signal about any tool call. Callers
-// must treat it as fail-open-and-loud, never let it drive a deny.
+// DefaultTrackingDocs parses the embedded tracking-doc basename set. A
+// non-nil error means the shipped artifact itself is malformed or empty --
+// a packaging defect, not a signal about any tool call. The gate treats it
+// fail-closed: a Write/Edit the exemption could have covered -- a target
+// under the configured project dir -- denies on the defect rather than risk
+// an unisolated write. A target outside that scope is unaffected, since the
+// exemption could never have applied to it.
 func DefaultTrackingDocs() (TrackingDocs, error) {
 	var td TrackingDocs
 	if err := json.Unmarshal(trackingDocsJSON, &td); err != nil {
