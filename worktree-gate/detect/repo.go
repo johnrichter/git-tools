@@ -95,3 +95,18 @@ func ClassifyGitEntry(lstat LstatFunc, readFile ReadFileFunc, gitEntryPath strin
 	}
 	return KindIndeterminate
 }
+
+// namedPathKind classifies where an absolute path a Bash command names
+// resolves -- the primitive SC20's named-path rule judges a write-class
+// piece's targets against. The walk starts at absPath itself, not its parent,
+// so a target that IS a repository root (rm -rf <primary>) classifies as well
+// as one under it. found is false when the path sits confidently outside any
+// repository; a non-nil error means membership could not be determined and the
+// caller must fail closed.
+func namedPathKind(lstat LstatFunc, readFile ReadFileFunc, absPath string) (kind GitEntryKind, found bool, err error) {
+	_, gitEntry, found, err := FindRepoRoot(lstat, absPath)
+	if err != nil || !found {
+		return KindIndeterminate, found, err
+	}
+	return ClassifyGitEntry(lstat, readFile, gitEntry), true, nil
+}

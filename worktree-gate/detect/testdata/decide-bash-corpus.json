@@ -1,0 +1,238 @@
+{
+  "description": "Decision-layer fixtures for decideBash: SC20's named-path rule (a write-class piece naming a primary-checkout path is denied from any cwd, while a read-class piece naming the same path and the outside-any-repo uncertain class stay allowed) and SC15's digest-verified provisioned-CLI allowance (three verbs, no retarget, keyed on binary identity supplied as argv). The loader builds one fixed hermetic topology per case: primary checkout /repo, linked worktree /repo/wt, provisioned CLI at /plugin-data/bin/git-tools. arg_path/arg_digest default to the correct provisioned path and the sha256 of the binary's bytes; 'omit' passes an empty argv parameter, 'wrong' passes a valid-but-mismatched digest, and a literal overrides. bin_present=false withholds the binary so it cannot be re-hashed.",
+  "cases": [
+    {
+      "name": "ordering-cp-abs-primary-target-from-outside-any-repo-cwd",
+      "command": "cd /tmp && cp x /repo/tracked",
+      "cwd": "/repo",
+      "want_deny": true
+    },
+    {
+      "name": "ordering-sed-i-abs-primary-target-from-outside-any-repo-cwd",
+      "command": "cd /tmp && sed -i s/a/b/ /repo/f",
+      "cwd": "/repo",
+      "want_deny": true
+    },
+    {
+      "name": "ordering-cp-abs-primary-target-from-worktree-cwd",
+      "command": "cd /repo/wt && cp x /repo/tracked",
+      "cwd": "/repo",
+      "want_deny": true
+    },
+    {
+      "name": "named-redirect-abs-primary-from-worktree-cwd",
+      "command": "echo x>/repo/tracked",
+      "cwd": "/repo/wt",
+      "want_deny": true
+    },
+    {
+      "name": "named-redirect-abs-primary-from-primary-cwd",
+      "command": "echo x>/repo/tracked",
+      "cwd": "/repo",
+      "want_deny": true
+    },
+    {
+      "name": "named-redirect-abs-primary-from-outside-any-repo-cwd",
+      "command": "echo x>/repo/tracked",
+      "cwd": "/tmp",
+      "want_deny": true
+    },
+    {
+      "name": "named-redirect-append-abs-primary-from-outside-any-repo-cwd",
+      "command": "echo x>>/repo/tracked",
+      "cwd": "/tmp",
+      "want_deny": true
+    },
+    {
+      "name": "named-redirect-glued-cd-then-redirect-into-primary",
+      "command": "cd /repo>/repo/tracked",
+      "cwd": "/tmp",
+      "want_deny": true
+    },
+    {
+      "name": "named-redirect-outanderr-dup-nonfd-abs-primary",
+      "command": "echo x>&/repo/tracked",
+      "cwd": "/tmp",
+      "want_deny": true
+    },
+    {
+      "name": "named-redirect-amp-append-abs-primary",
+      "command": "echo x&>>/repo/tracked",
+      "cwd": "/tmp",
+      "want_deny": true
+    },
+    {
+      "name": "named-redirect-fd2-dup-nonfd-abs-primary",
+      "command": "echo x 2>&/repo/tracked",
+      "cwd": "/tmp",
+      "want_deny": true
+    },
+    {
+      "name": "named-redirect-spaced-abs-primary-same-verdict-as-glued",
+      "command": "echo x > /repo/tracked",
+      "cwd": "/tmp",
+      "want_deny": true
+    },
+    {
+      "name": "named-redirect-abs-worktree-target-allowed",
+      "command": "echo x>/repo/wt/tracked",
+      "cwd": "/tmp",
+      "want_deny": false
+    },
+    {
+      "name": "named-redirect-append-abs-worktree-target-allowed",
+      "command": "echo x>>/repo/wt/tracked",
+      "cwd": "/tmp",
+      "want_deny": false
+    },
+    {
+      "name": "named-relative-parent-escape-into-primary-from-worktree-cwd",
+      "command": "cp x ../tracked",
+      "cwd": "/repo/wt",
+      "want_deny": true
+    },
+    {
+      "name": "named-unresolvable-variable-target-write-class-denies",
+      "command": "cd /tmp && cp x $DEST/tracked",
+      "cwd": "/repo",
+      "want_deny": true
+    },
+    {
+      "name": "anti-lockout-read-cat-abs-primary-allowed",
+      "command": "cat /repo/f",
+      "cwd": "/repo",
+      "want_deny": false
+    },
+    {
+      "name": "anti-lockout-read-grep-abs-primary-allowed",
+      "command": "grep -rn x /repo",
+      "cwd": "/repo",
+      "want_deny": false
+    },
+    {
+      "name": "anti-lockout-read-variable-path-allowed",
+      "command": "cat $FOO/f",
+      "cwd": "/repo",
+      "want_deny": false
+    },
+    {
+      "name": "anti-lockout-fd-dup-stderr-allowed-at-primary",
+      "command": "echo x>&2",
+      "cwd": "/repo",
+      "want_deny": false
+    },
+    {
+      "name": "anti-lockout-read-git-status-fd-dup-allowed-at-primary",
+      "command": "git status 2>&1",
+      "cwd": "/repo",
+      "want_deny": false
+    },
+    {
+      "name": "sc15-merge-from-primary-allowed",
+      "command": "/plugin-data/bin/git-tools merge main",
+      "cwd": "/repo",
+      "want_deny": false
+    },
+    {
+      "name": "sc15-push-from-primary-allowed",
+      "command": "/plugin-data/bin/git-tools push origin main",
+      "cwd": "/repo",
+      "want_deny": false
+    },
+    {
+      "name": "sc15-worktree-add-names-primary-path-allowed-precedence",
+      "command": "/plugin-data/bin/git-tools worktree add /repo/.claude/worktrees/slug",
+      "cwd": "/repo",
+      "want_deny": false
+    },
+    {
+      "name": "sc15-bare-word-denies",
+      "command": "git-tools merge main",
+      "cwd": "/repo",
+      "want_deny": true
+    },
+    {
+      "name": "sc15-relative-path-denies",
+      "command": "./git-tools merge main",
+      "cwd": "/repo",
+      "want_deny": true
+    },
+    {
+      "name": "sc15-arbitrary-absolute-path-denies",
+      "command": "/home/x/git-tools merge main",
+      "cwd": "/repo",
+      "want_deny": true
+    },
+    {
+      "name": "sc15-unrecognised-verb-status-denies",
+      "command": "/plugin-data/bin/git-tools status",
+      "cwd": "/repo",
+      "want_deny": true
+    },
+    {
+      "name": "sc15-resign-verb-excluded-denies",
+      "command": "/plugin-data/bin/git-tools resign main",
+      "cwd": "/repo",
+      "want_deny": true
+    },
+    {
+      "name": "sc15-repo-retarget-denies",
+      "command": "/plugin-data/bin/git-tools merge --repo /other main",
+      "cwd": "/repo",
+      "want_deny": true
+    },
+    {
+      "name": "sc15-config-retarget-denies",
+      "command": "/plugin-data/bin/git-tools merge --config x main",
+      "cwd": "/repo",
+      "want_deny": true
+    },
+    {
+      "name": "sc15-digest-mismatch-denies",
+      "command": "/plugin-data/bin/git-tools merge main",
+      "cwd": "/repo",
+      "arg_digest": "wrong",
+      "want_deny": true
+    },
+    {
+      "name": "sc15-missing-per-os-arch-row-empty-digest-denies",
+      "command": "/plugin-data/bin/git-tools merge main",
+      "cwd": "/repo",
+      "arg_digest": "omit",
+      "want_deny": true
+    },
+    {
+      "name": "sc15-no-path-argv-parameter-denies",
+      "command": "/plugin-data/bin/git-tools merge main",
+      "cwd": "/repo",
+      "arg_path": "omit",
+      "want_deny": true
+    },
+    {
+      "name": "sc15-no-digest-argv-parameter-denies",
+      "command": "/plugin-data/bin/git-tools merge main",
+      "cwd": "/repo",
+      "arg_digest": "omit",
+      "want_deny": true
+    },
+    {
+      "name": "sc15-binary-unreadable-cannot-rehash-denies",
+      "command": "/plugin-data/bin/git-tools merge main",
+      "cwd": "/repo",
+      "bin_present": false,
+      "want_deny": true
+    },
+    {
+      "name": "per-piece-cli-then-write-denies-on-second-piece",
+      "command": "/plugin-data/bin/git-tools merge main; rm -rf /repo/x",
+      "cwd": "/repo",
+      "want_deny": true
+    },
+    {
+      "name": "per-piece-cli-alone-allows",
+      "command": "/plugin-data/bin/git-tools merge main",
+      "cwd": "/repo",
+      "want_deny": false
+    }
+  ]
+}
