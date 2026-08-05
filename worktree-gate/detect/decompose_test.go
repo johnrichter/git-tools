@@ -115,18 +115,6 @@ func TestConnectorSet_PinnedToCanonicalArtifact(t *testing.T) {
 	}
 }
 
-// The shell gate's sed pass is the third connector set. It lives in the
-// marketplace repo, so it is pinned to this same canonical artifact by
-// byte-equality against a copy the marketplace ships, opt-in when both repos
-// are checked out (matching the cwd-corpus / trackingdocs contract checks).
-func TestConnectorArtifact_ByteEqualsMarketplaceCanonicalCopy(t *testing.T) {
-	ref := os.Getenv("MARKETPLACE_CONNECTORS")
-	if ref == "" {
-		t.Skip("MARKETPLACE_CONNECTORS not set; skipping the cross-repo connector-set byte-equality check")
-	}
-	assertByteEqual(t, "contracts/connectors.json", ref)
-}
-
 // -- AC3: redirect-operator delimiting is a longest-first predicate --
 
 func TestRedirectOperator_LongestFirstPredicate(t *testing.T) {

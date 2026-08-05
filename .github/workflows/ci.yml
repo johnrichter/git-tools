@@ -3,6 +3,11 @@
 #
 # guardrail gates every other job: SC-VERSIONING (tag-prefix.sh, tag pushes only) and
 # SC-DISTRIBUTION (no-committed-binaries.sh, every run) -- see release/guard/README.md.
+#
+# surface-hygiene (SC10/SC11) and the pinned-digest checks in `go test` (part of
+# build-test) both run on every push and pull_request, unconditionally -- neither
+# guard is gated on an environment variable, a sibling checkout, or a path that
+# might not resolve.
 
 name: CI
 
@@ -83,3 +88,16 @@ jobs:
         with:
           version: v2.12.2
           working-directory: git-tools
+
+  surface-hygiene:
+    name: surface-hygiene
+    runs-on: ubuntu-latest
+    needs: guardrail
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: shellcheck scripts/surface-hygiene.sh (SC-SH-LINT)
+        run: shellcheck scripts/surface-hygiene.sh
+
+      - name: SC10/SC11 surface hygiene (whole repo)
+        run: bash scripts/surface-hygiene.sh
