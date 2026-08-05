@@ -26,17 +26,18 @@ type exitError struct{ code int }
 func (e *exitError) Error() string { return fmt.Sprintf("exit code %d", e.code) }
 
 // newRootCmd builds the command tree: sign/resign, worktree, branch, merge,
-// rebase, content scans and installable git hooks.
+// rebase, publish, content scans and installable git hooks.
 func newRootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:   "git-tools",
-		Short: "Signing, rewrite, worktree/branch/merge/rebase and content-guardrail operations over a git repository",
+		Short: "Signing, rewrite, worktree/branch/merge/rebase/push and content-guardrail operations over a git repository",
 		Long: `git-tools composes the shared git, githooks, fsx, sysops and clikit
 libraries into one CLI: re-sign commit ranges, manage worktrees and branches,
-merge and rebase, scan for secrets/raw-binaries/privacy violations, and
-install those scans as git hooks.`,
+merge and rebase, publish a branch or tag, scan for secrets/raw-binaries/
+privacy violations, and install those scans as git hooks.`,
 		Example: strings.TrimLeft(`
   git-tools resign --base main --repo . HEAD
+  git-tools push main
   git-tools scan all --staged --strict
   git-tools hooks install --hook pre-commit
 `, "\n"),
@@ -44,8 +45,8 @@ install those scans as git hooks.`,
 		SilenceErrors: true,
 	}
 	root.PersistentFlags().String("config", "", "path to a YAML config file (flag > env > file > default)")
-	root.PersistentFlags().String("repo", "", "git working tree to operate on (default \".\")")
-	root.PersistentFlags().String("remote", "", "remote name a force-with-lease push targets (default \"origin\")")
+	root.PersistentFlags().String("repo", "", "git working tree to operate on (default \".\"); refused by push")
+	root.PersistentFlags().String("remote", "", "remote name resign/rebase's force-with-lease report targets, and push publishes to (default \"origin\")")
 	root.PersistentFlags().String("privacy-tier", "", "privacy scan posture: public, datadog, or personal (default \"public\")")
 	root.PersistentFlags().Bool("strict", false, "escalate privacy warnings to failures")
 	root.PersistentFlags().Int64("max-binary-bytes", 0, "raw-binary scan size threshold in bytes (default githooks.DefaultMaxBytes)")
@@ -56,6 +57,7 @@ install those scans as git hooks.`,
 	root.AddCommand(newBranchCmd())
 	root.AddCommand(newMergeCmd())
 	root.AddCommand(newRebaseCmd())
+	root.AddCommand(newPushCmd())
 	root.AddCommand(newScanCmd())
 	root.AddCommand(newHooksCmd())
 	return root
@@ -226,6 +228,39 @@ func handleGitError(cmd *cobra.Command, err error, fallbackCode, fallbackMessage
 		return finishErr(cmd, fallbackCode, fallbackMessage, err)
 	}
 	result, buildErr := clikit.NewConflict(commandPath(cmd), nil, []clikit.Diagnostic{diag}, nil)
+	if buildErr != nil {
+		return finishErr(cmd, "internal.result.build_failed", "build result", buildErr)
+	}
+	return finish(cmd, result)
+}
+
+// finishDiagnostic builds a single-diagnostic result via build — one of
+// clikit's non-success, non-caveats constructors (NewPreconditionUnmet,
+// NewNotFound, NewConflict, NewUsage, NewTransient, ...) — and emits it.
+// finishErr and finishUsage each hand-roll this shape for one fixed status;
+// a caller needing a different status, triage or diagnostic context uses
+// this instead of repeating it.
+func finishDiagnostic(cmd *cobra.Command, build func(command []string, data map[string]any, errors, caveats []clikit.Diagnostic) (*clikit.Result, error), code, message string, triage clikit.Triage, context map[string]any) error {
+	diag, buildErr := clikit.NewError(code, sanitizeMessage(message), triage, context)
+	if buildErr != nil {
+		return finishErr(cmd, "internal.result.build_failed", "build diagnostic", buildErr)
+	}
+	result, buildErr := build(commandPath(cmd), nil, []clikit.Diagnostic{diag}, nil)
+	if buildErr != nil {
+		return finishErr(cmd, "internal.result.build_failed", "build result", buildErr)
+	}
+	return finish(cmd, result)
+}
+
+// finishCaveat builds a single-caveat clikit.StatusCaveats result carrying
+// data and emits it: the command did what was asked, but the outcome needs
+// qualifying — e.g. a no-op because the target already matched.
+func finishCaveat(cmd *cobra.Command, data map[string]any, code, message string, triage clikit.Triage, context map[string]any) error {
+	caveat, buildErr := clikit.NewCaveat(code, sanitizeMessage(message), triage, context)
+	if buildErr != nil {
+		return finishErr(cmd, "internal.result.build_failed", "build caveat", buildErr)
+	}
+	result, buildErr := clikit.NewCaveats(commandPath(cmd), data, []clikit.Diagnostic{caveat})
 	if buildErr != nil {
 		return finishErr(cmd, "internal.result.build_failed", "build result", buildErr)
 	}
