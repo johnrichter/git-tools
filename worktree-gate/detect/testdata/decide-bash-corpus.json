@@ -1,5 +1,5 @@
 {
-  "description": "Decision-layer fixtures for decideBash: SC20's named-path rule (a write-class piece naming a primary-checkout path is denied from any cwd, while a read-class piece naming the same path and the outside-any-repo uncertain class stay allowed) and SC15's digest-verified provisioned-CLI allowance (three verbs, no retarget, keyed on binary identity supplied as argv). The loader builds one fixed hermetic topology per case: primary checkout /repo, linked worktree /repo/wt, provisioned CLI at /plugin-data/bin/git-tools. arg_path/arg_digest default to the correct provisioned path and the sha256 of the binary's bytes; 'omit' passes an empty argv parameter, 'wrong' passes a valid-but-mismatched digest, and a literal overrides. bin_present=false withholds the binary so it cannot be re-hashed.",
+  "description": "Decision-layer fixtures for decideBash: SC20's named-path rule (a write-class piece naming a primary-checkout path is denied from any cwd, while a read-class piece naming the same path and the outside-any-repo uncertain class stay allowed), the destination scope of that rule (a write command's read sources, verb words, flags, and non-path flag values -- a git commit message, a cp source -- are not write targets and are left unjudged, so SC16's `git commit -m \"$(date)\"` is allowed from a worktree and denied from a primary checkout), and SC15's digest-verified provisioned-CLI allowance (three verbs, no retarget, keyed on binary identity supplied as argv). The loader builds one fixed hermetic topology per case: primary checkout /repo, linked worktree /repo/wt, provisioned CLI at /plugin-data/bin/git-tools. arg_path/arg_digest default to the correct provisioned path and the sha256 of the binary's bytes; 'omit' passes an empty argv parameter, 'wrong' passes a valid-but-mismatched digest, and a literal overrides. bin_present=false withholds the binary so it cannot be re-hashed.",
   "cases": [
     {
       "name": "ordering-cp-abs-primary-target-from-outside-any-repo-cwd",
@@ -233,6 +233,42 @@
       "command": "/plugin-data/bin/git-tools merge main",
       "cwd": "/repo",
       "want_deny": false
+    },
+    {
+      "name": "sc16-leniency-git-commit-substitution-message-from-worktree-allows",
+      "command": "git commit -m \"$(date)\"",
+      "cwd": "/repo/wt",
+      "want_deny": false
+    },
+    {
+      "name": "sc16-leniency-git-commit-substitution-message-from-primary-denies",
+      "command": "git commit -m \"$(date)\"",
+      "cwd": "/repo",
+      "want_deny": true
+    },
+    {
+      "name": "sc16-leniency-git-commit-variable-message-from-worktree-allows",
+      "command": "git commit -m \"$msg\"",
+      "cwd": "/repo/wt",
+      "want_deny": false
+    },
+    {
+      "name": "named-copy-variable-source-benign-dest-from-worktree-allows",
+      "command": "cp \"$SRC\" dst",
+      "cwd": "/repo/wt",
+      "want_deny": false
+    },
+    {
+      "name": "named-copy-variable-dest-from-worktree-denies",
+      "command": "cp src \"$DEST\"",
+      "cwd": "/repo/wt",
+      "want_deny": true
+    },
+    {
+      "name": "named-redirect-on-git-commit-substitution-into-primary-denies",
+      "command": "git commit -m \"$(date)\" > /repo/tracked",
+      "cwd": "/repo/wt",
+      "want_deny": true
     }
   ]
 }

@@ -297,15 +297,154 @@ func namedPathDenial(lstat LstatFunc, readFile ReadFileFunc, p piece, cwd string
 	return nil
 }
 
-// namedPaths returns the path candidates a write-class piece names: its argv
-// words (redirect operators and their targets already delimited out by
-// decompose) plus every file-writing redirect target recovered from the raw
-// segment. Both halves are tokenized by whitespace and by redirect operator,
-// so a target glued to the word beside it is still seen as a path rather than
-// missed by a fields-only split.
+// namedPaths returns the paths a write-class piece actually writes to: its
+// file-writing redirect targets, plus the destination operands of the command
+// itself. Only destinations are returned. A command's read sources, its verb
+// and subcommand words, its option flags, and an option's non-path value (a
+// commit message, a mode) name no file the command writes, so they are left
+// unjudged -- otherwise a benign token that happens to be unexpandable
+// (`git commit -m "$(date)"`, `cp "$SRC" dst`) would be mistaken for a write
+// into a primary checkout. A command whose writes land in its working directory
+// rather than a named operand (git's commit/add/reset/…, a package or build
+// tool) names no operand here at all; that locus is the cwd leg's to judge,
+// including a `git -C` retarget the resolver already composes. Redirect targets
+// are included whatever the command, since the shell -- not the command --
+// opens them.
 func namedPaths(p piece) []string {
-	out := shellTokens(p.argv)
-	return append(out, outputRedirectTargets(p.raw)...)
+	targets := outputRedirectTargets(p.raw)
+	toks := skipAssignments(shellTokens(p.argv))
+	if len(toks) == 0 {
+		return targets
+	}
+	switch cmd := commandWord(toks[0]); {
+	case cmd == "git":
+		return append(gitDestinations(toks[1:]), targets...)
+	case isCopyLikeWriter(cmd):
+		return append(copyDestinations(toks[1:]), targets...)
+	default:
+		// An unmodeled write command (rm, tee, sed -i, an editor, find
+		// -delete, …) writes the operands it names, so every non-flag operand
+		// is a candidate destination -- the conservative default that keeps a
+		// future write verb judged rather than silently exempt.
+		return append(operands(toks[1:]), targets...)
+	}
+}
+
+// commandWord reduces a leading argv token to a bare command name: quotes
+// stripped, directory prefix removed, lower-cased, so "/usr/bin/cp", "'cp'",
+// and "cp" all read as "cp".
+func commandWord(tok string) string {
+	return strings.ToLower(filepath.Base(stripQuotes(tok)))
+}
+
+func isCopyLikeWriter(cmd string) bool {
+	switch cmd {
+	case "cp", "mv", "ln", "install":
+		return true
+	}
+	return false
+}
+
+// operands returns the non-flag tokens in args, quote-stripped, treating every
+// token after a bare "--" as an operand even if it begins with "-".
+func operands(args []string) []string {
+	var out []string
+	rest := false
+	for _, a := range args {
+		if !rest && a == "--" {
+			rest = true
+			continue
+		}
+		if !rest && strings.HasPrefix(a, "-") {
+			continue
+		}
+		out = append(out, stripQuotes(a))
+	}
+	return out
+}
+
+// copyDestinations returns the write destination of a cp/mv/ln/install
+// invocation: a -t/--target-directory value when present, otherwise the last
+// positional operand. The leading operands are read sources, so a source that
+// is a variable or a substitution does not read as a write into a primary
+// checkout.
+func copyDestinations(args []string) []string {
+	if dir, ok := targetDirectory(args); ok {
+		return []string{stripQuotes(dir)}
+	}
+	ops := operands(args)
+	if len(ops) == 0 {
+		return nil
+	}
+	return ops[len(ops)-1:]
+}
+
+// targetDirectory returns the value of a -t / --target-directory option, which
+// names the destination regardless of operand order (its split, glued, and
+// =-joined spellings).
+func targetDirectory(args []string) (string, bool) {
+	for i, a := range args {
+		switch {
+		case a == "-t" || a == "--target-directory":
+			if i+1 < len(args) {
+				return args[i+1], true
+			}
+		case strings.HasPrefix(a, "--target-directory="):
+			return a[len("--target-directory="):], true
+		case strings.HasPrefix(a, "-t") && len(a) > 2:
+			return a[2:], true
+		}
+	}
+	return "", false
+}
+
+// gitDestinations returns the filesystem path a git subcommand writes as a
+// named operand, or nil when git writes its own working tree instead -- the
+// common case, governed by the cwd leg (including a composed `git -C`). Only
+// clone, init, and worktree add take an explicit destination path.
+func gitDestinations(args []string) []string {
+	sub, rest := gitSubcommand(args)
+	switch sub {
+	case "clone":
+		// git clone [opts] <url> [<dir>]: an explicit target dir is the last
+		// positional; a lone url clones into the cwd, which the cwd leg judges.
+		if ops := operands(rest); len(ops) >= 2 {
+			return ops[len(ops)-1:]
+		}
+	case "init":
+		if ops := operands(rest); len(ops) > 0 {
+			return ops[:1]
+		}
+	case "worktree":
+		if len(rest) > 0 && rest[0] == "add" {
+			if ops := operands(rest[1:]); len(ops) > 0 {
+				return ops[:1]
+			}
+		}
+	}
+	return nil
+}
+
+// gitSubcommand skips git's global options -- their split, glued, and =-joined
+// value forms -- and returns the subcommand token with the arguments after it.
+func gitSubcommand(args []string) (string, []string) {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "--":
+			if i+1 < len(args) {
+				return args[i+1], args[i+2:]
+			}
+			return "", nil
+		case a == "-C" || a == "-c" || a == "--git-dir" || a == "--work-tree" || a == "--namespace":
+			i++ // this global option consumes the next token as its value
+		case strings.HasPrefix(a, "-"):
+			// a valueless or =-joined/glued global option: one token
+		default:
+			return a, args[i+1:]
+		}
+	}
+	return "", nil
 }
 
 // outputRedirectTargets recovers the file-writing redirect targets from a raw

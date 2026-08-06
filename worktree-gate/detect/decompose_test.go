@@ -236,6 +236,46 @@ func TestSC16_UndecomposableBoundedByGovernedWord(t *testing.T) {
 	}
 }
 
+// SC16's leniency boundary keyed on the named-path rule's destination scope:
+// one command has two correct verdicts. `git commit -m "$(date)"` is a
+// write-class piece whose only unexpandable token is a commit message -- not a
+// path the command writes -- so from a worktree it is ALLOWED and from a
+// primary checkout it is DENIED (SC6), never denied merely for carrying a
+// substitution. The same scope leaves a copy's read source unjudged while still
+// judging its destination, and a redirect target is judged whatever the
+// command carries it.
+func TestSC16_LeniencyPair_NamedPathDestinationScope(t *testing.T) {
+	v := testVerbs(t)
+	fs := newFakeFS().
+		dir("/repo/.git").
+		file("/repo/wt/.git", "gitdir: /repo/.git/worktrees/wt\n")
+
+	cases := []struct {
+		name     string
+		cwd      string
+		command  string
+		wantDeny bool
+	}{
+		{"commit-substitution-message-from-worktree-allows", "/repo/wt", `git commit -m "$(date)"`, false},
+		{"commit-substitution-message-from-primary-denies", "/repo", `git commit -m "$(date)"`, true},
+		{"commit-variable-message-from-worktree-allows", "/repo/wt", `git commit -m "$msg"`, false},
+		{"copy-variable-source-benign-dest-from-worktree-allows", "/repo/wt", `cp "$SRC" dst`, false},
+		{"copy-variable-dest-from-worktree-denies", "/repo/wt", `cp src "$DEST"`, true},
+		{"copy-abs-primary-dest-from-worktree-denies", "/repo/wt", "cp src /repo/tracked", true},
+		{"commit-substitution-with-redirect-into-primary-denies", "/repo/wt", `git commit -m "$(date)" > /repo/tracked`, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			d := Decide(fs.lstat, fs.readFile, v, nil, TrackingDocs{}, nil, Input{
+				ToolName: "Bash", CWD: c.cwd, Command: c.command,
+			})
+			if d.Deny != c.wantDeny {
+				t.Errorf("Decide(cwd=%q, cmd=%q) deny=%v, want %v (reason=%q)", c.cwd, c.command, d.Deny, c.wantDeny, d.Reason)
+			}
+		})
+	}
+}
+
 // A command trailing a heredoc operator on the same line (the operator-line
 // tail) must still decompose and classify -- the body is pulled out, but the
 // tail is not swallowed with it. A write in the tail surfaces as a write and
