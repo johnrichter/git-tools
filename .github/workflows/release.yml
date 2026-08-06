@@ -67,11 +67,17 @@ jobs:
       # matrix builds from the one Linux runner. Both binaries ship under the one tag/version:
       # worktree-gate is a second entry point in this same module, not a separately versioned
       # component.
+      #
+      # binary-checksums.txt hashes the extracted binary itself (not the archive), so a
+      # consumer can verify a binary already unpacked from its tarball. That hash has to be
+      # taken here, inside the loop, because workdir -- and the binary in it -- is removed
+      # before the loop ends.
       - name: Cross-compile per-OS/arch archives + checksums
         run: |
           set -euo pipefail
           version="${{ steps.version.outputs.version }}"
           mkdir -p dist
+          binary_checksums="$(mktemp)"
           for entry in "git-tools:./cmd/git-tools" "worktree-gate:./worktree-gate/detect/cmd/worktree-gate"; do
             bin="${entry%%:*}"
             pkg="${entry#*:}"
@@ -80,19 +86,38 @@ jobs:
               arch="${target#*/}"
               workdir="$(mktemp -d)"
               GOOS="$os" GOARCH="$arch" CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o "${workdir}/${bin}" "${pkg}"
+              key="${bin}_${version}_${os}_${arch}"
+              sha256sum "${workdir}/${bin}" | awk -v key="${key}" '{ print $1, key }' OFS='  ' >> "${binary_checksums}"
               archive="dist/${bin}_${version}_${os}_${arch}.tar.gz"
               tar -czf "${archive}" -C "${workdir}" "${bin}"
               rm -rf "${workdir}"
             done
           done
+          sort -k2 "${binary_checksums}" > dist/binary-checksums.txt
+          rm -f "${binary_checksums}"
           ( cd dist && sha256sum ./*.tar.gz | sed 's#\./##' | sort -k2 > checksums.txt )
           ls -la dist
+
+      # The canonical sha256 of each SC-CONTRACT-DIGESTS artifact, so a consumer can verify
+      # the exact contract data this release's worktree-gate binary was built against without
+      # cloning the repo. Keyed by the same relative path the pinned-digest test uses.
+      - name: Canonical sha256 of the SC-CONTRACT-DIGESTS artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          ( cd worktree-gate/detect && sha256sum \
+              testdata/cwd-corpus.json \
+              trackingdocs.json \
+              contracts/connectors.json \
+              contracts/banned-names.json \
+            | sort -k2 ) > dist/contract-digests.txt
+          cat dist/contract-digests.txt
 
       - name: Publish the official release (per-OS/arch archives + checksums)
         if: ${{ github.event_name == 'push' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release create "${{ steps.version.outputs.tag }}" --title "${{ steps.version.outputs.tag }}" --generate-notes dist/*.tar.gz dist/checksums.txt
+        run: gh release create "${{ steps.version.outputs.tag }}" --title "${{ steps.version.outputs.tag }}" --generate-notes dist/*.tar.gz dist/checksums.txt dist/binary-checksums.txt dist/contract-digests.txt
 
       - name: Dry-run summary
         if: ${{ github.event_name != 'push' }}
