@@ -4,19 +4,31 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"testing"
 )
 
 // The fixed hermetic topology every corpus case runs against: a primary
-// checkout, a linked worktree under it, and the plugin-provisioned CLI at a
-// path outside any repo.
+// checkout, a linked worktree under it, an already-existing tracked file in
+// each, a device node outside any repo, and the plugin-provisioned CLI at a
+// path outside any repo. The existing files and the device node are what let a
+// case distinguish a write to a path that already exists from one to a new
+// path -- their own `.git` probe is an ENOTDIR, not a missing entry.
 const (
 	corpusPrimary        = "/repo"
+	corpusPrimaryFile    = "/repo/tracked.md"
 	corpusWorktree       = "/repo/wt"
+	corpusWorktreeFile   = "/repo/wt/tracked.md"
+	corpusDevice         = "/dev/null"
 	corpusProvisionedBin = "/plugin-data/bin/git-tools"
 	corpusBinContent     = "PROVISIONED-CLI-BYTES"
 )
+
+// errCorpusFSFailure stands in for an lstat failure that leaves repo membership
+// genuinely unknown -- permission denied, an I/O error -- as opposed to one
+// that answers the membership question. A case naming err_at must still deny.
+var errCorpusFSFailure = errors.New("simulated filesystem failure")
 
 type decideBashCase struct {
 	Name       string `json:"name"`
@@ -25,6 +37,7 @@ type decideBashCase struct {
 	ArgPath    string `json:"arg_path"`    // "" => correct provisioned path; "omit" => empty; else literal
 	ArgDigest  string `json:"arg_digest"`  // "" => correct digest; "omit" => empty; "wrong"; else literal
 	BinPresent *bool  `json:"bin_present"` // nil => true
+	ErrAt      string `json:"err_at"`      // path whose lstat fails indeterminately; "" => none
 	WantDeny   bool   `json:"want_deny"`
 }
 
@@ -59,9 +72,15 @@ func TestDecide_Bash_NamedPathAndSC15_Corpus(t *testing.T) {
 		t.Run(c.Name, func(t *testing.T) {
 			fs := newFakeFS().
 				dir(corpusPrimary+"/.git").
-				file(corpusWorktree+"/.git", "gitdir: /repo/.git/worktrees/wt\n")
+				file(corpusWorktree+"/.git", "gitdir: /repo/.git/worktrees/wt\n").
+				file(corpusPrimaryFile, "tracked\n").
+				file(corpusWorktreeFile, "tracked\n").
+				device(corpusDevice)
 			if c.BinPresent == nil || *c.BinPresent {
 				fs.file(corpusProvisionedBin, corpusBinContent)
+			}
+			if c.ErrAt != "" {
+				fs.errAt(c.ErrAt, errCorpusFSFailure)
 			}
 
 			argPath := corpusProvisionedBin

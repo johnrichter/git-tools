@@ -1,5 +1,5 @@
 {
-  "description": "Decision-layer fixtures for decideBash: SC20's named-path rule (a write-class piece naming a primary-checkout path is denied from any cwd, while a read-class piece naming the same path and the outside-any-repo uncertain class stay allowed), the destination scope of that rule (a write command's read sources, verb words, flags, and non-path flag values -- a git commit message, a cp source -- are not write targets and are left unjudged, so SC16's `git commit -m \"$(date)\"` is allowed from a worktree and denied from a primary checkout), and SC15's digest-verified provisioned-CLI allowance (three verbs, no retarget, keyed on binary identity supplied as argv). The loader builds one fixed hermetic topology per case: primary checkout /repo, linked worktree /repo/wt, provisioned CLI at /plugin-data/bin/git-tools. arg_path/arg_digest default to the correct provisioned path and the sha256 of the binary's bytes; 'omit' passes an empty argv parameter, 'wrong' passes a valid-but-mismatched digest, and a literal overrides. bin_present=false withholds the binary so it cannot be re-hashed.",
+  "description": "Decision-layer fixtures for decideBash: SC20's named-path rule (a write-class piece naming a primary-checkout path is denied from any cwd, while a read-class piece naming the same path and the outside-any-repo uncertain class stay allowed), the destination scope of that rule (a write command's read sources, verb words, flags, and non-path flag values -- a git commit message, a cp source -- are not write targets and are left unjudged, so SC16's `git commit -m \"$(date)\"` is allowed from a worktree and denied from a primary checkout), SC15's digest-verified provisioned-CLI allowance (three verbs, no retarget, keyed on binary identity supplied as argv), and the membership walk's indifference to whether a write target already exists (a target that is itself a file or a device node makes its own `.git` probe an ENOTDIR, which answers the membership question rather than clouding it, so an existing-file write earns the same verdict as a new-path one -- while a genuine lstat failure anywhere on the climb still denies). The loader builds one fixed hermetic topology per case: primary checkout /repo, linked worktree /repo/wt, an already-existing tracked.md in each, a device node at /dev/null, provisioned CLI at /plugin-data/bin/git-tools. arg_path/arg_digest default to the correct provisioned path and the sha256 of the binary's bytes; 'omit' passes an empty argv parameter, 'wrong' passes a valid-but-mismatched digest, and a literal overrides. bin_present=false withholds the binary so it cannot be re-hashed. err_at makes one path's lstat fail indeterminately.",
   "cases": [
     {
       "name": "ordering-cp-abs-primary-target-from-outside-any-repo-cwd",
@@ -268,6 +268,80 @@
       "name": "named-redirect-on-git-commit-substitution-into-primary-denies",
       "command": "git commit -m \"$(date)\" > /repo/tracked",
       "cwd": "/repo/wt",
+      "want_deny": true
+    },
+    {
+      "name": "existing-file-target-from-worktree-cwd-allowed",
+      "command": "echo x > /repo/wt/tracked.md",
+      "cwd": "/repo/wt",
+      "want_deny": false
+    },
+    {
+      "name": "new-path-target-from-worktree-cwd-allowed-identically",
+      "command": "echo x > /repo/wt/new.md",
+      "cwd": "/repo/wt",
+      "want_deny": false
+    },
+    {
+      "name": "existing-file-target-from-primary-cwd-denied",
+      "command": "echo x > /repo/tracked.md",
+      "cwd": "/repo",
+      "want_deny": true
+    },
+    {
+      "name": "new-path-target-from-primary-cwd-denied-identically",
+      "command": "echo x > /repo/new.md",
+      "cwd": "/repo",
+      "want_deny": true
+    },
+    {
+      "name": "existing-primary-file-target-from-worktree-cwd-denied",
+      "command": "echo x > /repo/tracked.md",
+      "cwd": "/repo/wt",
+      "want_deny": true
+    },
+    {
+      "name": "nested-under-existing-primary-file-denied",
+      "command": "echo x > /repo/tracked.md/child",
+      "cwd": "/repo/wt",
+      "want_deny": true
+    },
+    {
+      "name": "mv-onto-existing-worktree-file-allowed",
+      "command": "mv /repo/wt/new.md /repo/wt/tracked.md",
+      "cwd": "/repo/wt",
+      "want_deny": false
+    },
+    {
+      "name": "mv-onto-existing-primary-file-from-worktree-cwd-denied",
+      "command": "mv /repo/wt/new.md /repo/tracked.md",
+      "cwd": "/repo/wt",
+      "want_deny": true
+    },
+    {
+      "name": "devnull-redirect-from-worktree-cwd-allowed",
+      "command": "echo x > /dev/null",
+      "cwd": "/repo/wt",
+      "want_deny": false
+    },
+    {
+      "name": "devnull-redirect-is-no-blanket-allow-at-primary-cwd",
+      "command": "git status 2>/dev/null",
+      "cwd": "/repo",
+      "want_deny": true
+    },
+    {
+      "name": "adversarial-lstat-failure-on-existing-file-target-denies",
+      "command": "echo x > /repo/wt/tracked.md",
+      "cwd": "/repo/wt",
+      "err_at": "/repo/wt/tracked.md/.git",
+      "want_deny": true
+    },
+    {
+      "name": "adversarial-lstat-failure-mid-climb-denies-though-cwd-is-a-worktree",
+      "command": "echo x > /repo/wt/sub/deep.md",
+      "cwd": "/repo/wt",
+      "err_at": "/repo/wt/sub/.git",
       "want_deny": true
     }
   ]

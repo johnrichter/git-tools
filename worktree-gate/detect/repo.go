@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"path/filepath"
 	"strings"
+	"syscall"
 )
 
 // LstatFunc reports file metadata without following symlinks -- the single
@@ -15,21 +16,23 @@ type LstatFunc func(name string) (fs.FileInfo, error)
 // ReadFileFunc reads a file's full contents. os.ReadFile satisfies it.
 type ReadFileFunc func(name string) ([]byte, error)
 
-// ErrIndeterminate wraps a filesystem error, other than "not found", that
-// stopped repo-root detection from reaching a confident answer. Callers
-// must treat a wrapping error as uncertain, never as "no repo found".
+// ErrIndeterminate wraps a filesystem error that stopped repo-root detection
+// from reaching a confident answer -- every error except the two that answer
+// the question themselves (see FindRepoRoot). Callers must treat a wrapping
+// error as uncertain, never as "no repo found".
 var ErrIndeterminate = errors.New("worktree-gate: repo membership indeterminate")
 
 // FindRepoRoot walks up from dir looking for a `.git` entry -- the marker
 // of a repository's primary checkout or a linked worktree's redirect file.
-// The walk is purely lexical: it never requires an intermediate directory
-// to exist, so a target under a not-yet-created directory still resolves
-// against the same repo its nearest existing ancestor belongs to.
+// The walk is purely lexical: it requires no level of dir to exist, nor to
+// be a directory, so a target under a not-yet-created directory and a target
+// that is itself an existing file or device node both resolve against the
+// same repo their nearest containing directory belongs to.
 //
 // found is false only when the walk reaches the filesystem root without
 // locating a `.git` entry -- dir is confidently outside any repository. A
-// non-nil error means the walk hit a filesystem error other than "not
-// exist" and could not reach either answer.
+// non-nil error means the walk hit a filesystem error that leaves membership
+// genuinely unknown, and it reached neither answer.
 func FindRepoRoot(lstat LstatFunc, dir string) (root, gitEntry string, found bool, err error) {
 	dir = filepath.Clean(dir)
 	for {
@@ -39,6 +42,12 @@ func FindRepoRoot(lstat LstatFunc, dir string) (root, gitEntry string, found boo
 			return dir, candidate, true, nil
 		case errors.Is(statErr, fs.ErrNotExist):
 			// no entry here; keep climbing
+		case errors.Is(statErr, syscall.ENOTDIR):
+			// A component of the candidate is not a directory, so dir is not
+			// one either and cannot be a repo root. That is a determinate
+			// "no entry here", not an unknown -- keep climbing. Only this one
+			// errno may join the climb; widening it would trade the
+			// fail-closed guarantee below for convenience.
 		default:
 			return "", "", false, fmt.Errorf("%w: %s: %v", ErrIndeterminate, candidate, statErr)
 		}

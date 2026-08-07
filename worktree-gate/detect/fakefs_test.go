@@ -2,6 +2,8 @@ package detect
 
 import (
 	"io/fs"
+	"path/filepath"
+	"syscall"
 	"time"
 )
 
@@ -58,10 +60,17 @@ func (f *fakeFS) errAt(path string, err error) *fakeFS {
 	return f
 }
 
+// device registers a non-regular, non-directory node -- the shape /dev/null
+// has, and one a `.git` probe descends through exactly like a regular file.
+func (f *fakeFS) device(path string) *fakeFS {
+	f.nodes[path] = fakeNode{mode: fs.ModeDevice | fs.ModeCharDevice}
+	return f
+}
+
 func (f *fakeFS) lstat(path string) (fs.FileInfo, error) {
 	n, ok := f.nodes[path]
 	if !ok {
-		return nil, fs.ErrNotExist
+		return nil, f.absentErr(path)
 	}
 	if n.statErr != nil {
 		return nil, n.statErr
@@ -72,10 +81,27 @@ func (f *fakeFS) lstat(path string) (fs.FileInfo, error) {
 func (f *fakeFS) readFile(path string) ([]byte, error) {
 	n, ok := f.nodes[path]
 	if !ok {
-		return nil, fs.ErrNotExist
+		return nil, f.absentErr(path)
 	}
 	if n.statErr != nil {
 		return nil, n.statErr
 	}
 	return n.content, nil
+}
+
+// absentErr answers for a path holding no node, distinguishing the two errnos
+// a real filesystem distinguishes: a path whose ancestry runs through a
+// non-directory is ENOTDIR, anything else is ENOENT. The distinction is
+// load-bearing -- a write target that is itself an existing file makes its own
+// `.git` probe an ENOTDIR, and errors.Is must see it through the *fs.PathError
+// wrapper os.Lstat returns.
+func (f *fakeFS) absentErr(path string) error {
+	for parent := filepath.Dir(path); ; parent = filepath.Dir(parent) {
+		if n, ok := f.nodes[parent]; ok && n.statErr == nil && !n.dir {
+			return &fs.PathError{Op: "lstat", Path: path, Err: syscall.ENOTDIR}
+		}
+		if up := filepath.Dir(parent); up == parent {
+			return fs.ErrNotExist
+		}
+	}
 }
