@@ -24,7 +24,7 @@ var pinnedDigests = []struct {
 	path   string
 	sha256 string
 }{
-	{"testdata/cwd-corpus.json", "e4c9f07f2e323b7559ae4632e79dc165e405599421064adfc9c985f3b60d50e0"},
+	{"testdata/cwd-corpus.json", "34cb50bc13cd2abda88332b13eaf27e0b319c31ea71d9a016a0c07369ec194a1"},
 	{"trackingdocs.json", "199d5abf6229a5c3cce5be62f2337d49f92c65c3216aad1ab25dcf3249de6a90"},
 	{"contracts/connectors.json", "ef53c0b7154fc37dd2e2aa0d5be13f0ba0c61cd1463b67c17aa869ec3277c01e"},
 	{"contracts/banned-names.json", "8189784124b3dd59491f0fec9d208c250559a2639fdfe1a6823947e4f15f78aa"},

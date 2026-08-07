@@ -79,6 +79,21 @@
       "command": "git commit -m x && cd /other",
       "expect": "",
       "name": "only-cds-preceding-the-git-invocation-count"
+    },
+    {
+      "command": "cd /srv/repo>log && git commit -m x",
+      "expect": "/srv/repo",
+      "name": "redirect-operator-delimits-glued-cd-target"
+    },
+    {
+      "command": "cd /srv/repo >log && git commit -m x",
+      "expect": "/srv/repo",
+      "name": "redirect-operator-delimits-spaced-cd-target"
+    },
+    {
+      "command": "echo hi >log && cd /srv/repo && git commit -m x",
+      "expect": "/srv/repo",
+      "name": "redirect-on-earlier-command-then-cd"
     }
   ],
   "description": "Golden effective-working-directory resolution corpus (SC-CWD-RESOLVER-CONTRACT). Each case gives a Bash command string and `expect`, the statically-resolved effective working directory of the first git invocation: an absolute path, \"\" for the session cwd (no cd/-C), or \"DENY\" when the directory depends on a value not in the command text (a variable/unexpandable cd or -C target). The canonical resolver is git-gate.sh (invoked as `--print-eff-dir <command>`); the Go worktree gate mirrors this corpus at git-tools/worktree-gate/detect/testdata/cwd-corpus.json, pinned content-equal by a test."
