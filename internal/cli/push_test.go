@@ -277,6 +277,9 @@ func TestPush_DivergedHistory_RejectedNotForced(t *testing.T) {
 	// so dir's next push is a genuine non-fast-forward.
 	other := t.TempDir()
 	runGit(t, filepath.Dir(other), "clone", "-q", bare, other)
+	runGit(t, other, "config", "user.name", "Test User")
+	runGit(t, other, "config", "user.email", "test@example.com")
+	runGit(t, other, "config", "commit.gpgsign", "false")
 	runGit(t, other, "checkout", "-q", base)
 	runGit(t, other, "checkout", "-q", "-b", "tmp")
 	remoteTip := commitFile(t, other, "remote-only.txt", "remote\n", "advance main remotely")
