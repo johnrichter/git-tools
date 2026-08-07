@@ -309,7 +309,11 @@ func namedPathDenial(lstat LstatFunc, readFile ReadFileFunc, p piece, cwd string
 // tool) names no operand here at all; that locus is the cwd leg's to judge,
 // including a `git -C` retarget the resolver already composes. Redirect targets
 // are included whatever the command, since the shell -- not the command --
-// opens them.
+// opens them; they are returned first, ahead of the command's own destination
+// operands, so a denial on a piece carrying both names the redirect's real
+// target rather than a same-verdict operand that merely happens to resolve
+// into the same checkout first (`echo x >> primary/f` denies on `primary/f`,
+// not on `x`).
 func namedPaths(p piece) []string {
 	targets := outputRedirectTargets(p.raw)
 	toks := skipAssignments(shellTokens(p.argv))
@@ -318,15 +322,15 @@ func namedPaths(p piece) []string {
 	}
 	switch cmd := commandWord(toks[0]); {
 	case cmd == "git":
-		return append(gitDestinations(toks[1:]), targets...)
+		return append(targets, gitDestinations(toks[1:])...)
 	case isCopyLikeWriter(cmd):
-		return append(copyDestinations(toks[1:]), targets...)
+		return append(targets, copyDestinations(toks[1:])...)
 	default:
 		// An unmodeled write command (rm, tee, sed -i, an editor, find
 		// -delete, …) writes the operands it names, so every non-flag operand
 		// is a candidate destination -- the conservative default that keeps a
 		// future write verb judged rather than silently exempt.
-		return append(operands(toks[1:]), targets...)
+		return append(targets, operands(toks[1:])...)
 	}
 }
 

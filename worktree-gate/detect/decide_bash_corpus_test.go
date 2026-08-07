@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -59,6 +60,55 @@ func loadDecideBashCorpus(t *testing.T) []decideBashCase {
 	return c.Cases
 }
 
+// runDecideBashCase builds one case's fixed hermetic topology plus its
+// per-case argv overrides and returns Decide's verdict, so every test driving
+// the corpus judges the same fixture the same way.
+func runDecideBashCase(t *testing.T, v Verbs, correctDigest string, c decideBashCase) Decision {
+	t.Helper()
+	fs := newFakeFS().
+		dir(corpusPrimary+"/.git").
+		file(corpusWorktree+"/.git", "gitdir: /repo/.git/worktrees/wt\n").
+		file(corpusPrimaryFile, "tracked\n").
+		file(corpusWorktreeFile, "tracked\n").
+		device(corpusDevice)
+	if c.BinPresent == nil || *c.BinPresent {
+		fs.file(corpusProvisionedBin, corpusBinContent)
+	}
+	if c.ErrAt != "" {
+		fs.errAt(c.ErrAt, errCorpusFSFailure)
+	}
+
+	argPath := corpusProvisionedBin
+	switch c.ArgPath {
+	case "omit":
+		argPath = ""
+	case "":
+		// keep the correct provisioned path
+	default:
+		argPath = c.ArgPath
+	}
+
+	argDigest := correctDigest
+	switch c.ArgDigest {
+	case "omit":
+		argDigest = ""
+	case "wrong":
+		argDigest = "0000000000000000000000000000000000000000000000000000000000000000"
+	case "":
+		// keep the correct digest
+	default:
+		argDigest = c.ArgDigest
+	}
+
+	return Decide(fs.lstat, fs.readFile, v, nil, TrackingDocs{}, nil, Input{
+		ToolName:             "Bash",
+		CWD:                  c.CWD,
+		Command:              c.Command,
+		ProvisionedBinPath:   argPath,
+		ProvisionedBinDigest: argDigest,
+	})
+}
+
 // TestDecide_Bash_NamedPathAndSC15_Corpus drives Decide over the full
 // SC20/SC15 fixture matrix: named-path denial ahead of both cwd short-circuits,
 // the read-class and worktree-target anti-lockout allowances, and SC15's
@@ -70,51 +120,56 @@ func TestDecide_Bash_NamedPathAndSC15_Corpus(t *testing.T) {
 
 	for _, c := range loadDecideBashCorpus(t) {
 		t.Run(c.Name, func(t *testing.T) {
-			fs := newFakeFS().
-				dir(corpusPrimary+"/.git").
-				file(corpusWorktree+"/.git", "gitdir: /repo/.git/worktrees/wt\n").
-				file(corpusPrimaryFile, "tracked\n").
-				file(corpusWorktreeFile, "tracked\n").
-				device(corpusDevice)
-			if c.BinPresent == nil || *c.BinPresent {
-				fs.file(corpusProvisionedBin, corpusBinContent)
-			}
-			if c.ErrAt != "" {
-				fs.errAt(c.ErrAt, errCorpusFSFailure)
-			}
-
-			argPath := corpusProvisionedBin
-			switch c.ArgPath {
-			case "omit":
-				argPath = ""
-			case "":
-				// keep the correct provisioned path
-			default:
-				argPath = c.ArgPath
-			}
-
-			argDigest := correctDigest
-			switch c.ArgDigest {
-			case "omit":
-				argDigest = ""
-			case "wrong":
-				argDigest = "0000000000000000000000000000000000000000000000000000000000000000"
-			case "":
-				// keep the correct digest
-			default:
-				argDigest = c.ArgDigest
-			}
-
-			d := Decide(fs.lstat, fs.readFile, v, nil, TrackingDocs{}, nil, Input{
-				ToolName:             "Bash",
-				CWD:                  c.CWD,
-				Command:              c.Command,
-				ProvisionedBinPath:   argPath,
-				ProvisionedBinDigest: argDigest,
-			})
+			d := runDecideBashCase(t, v, correctDigest, c)
 			if d.Deny != c.WantDeny {
 				t.Errorf("Decide(cwd=%q, cmd=%q) deny=%v, want deny=%v (reason=%q)",
 					c.CWD, c.Command, d.Deny, c.WantDeny, d.Reason)
+			}
+		})
+	}
+}
+
+// namedPathOrderingWantsTarget pins SC-D: a corpus case whose write-class
+// piece names both a redirect target and a destination operand, where the
+// operand used to resolve into a repo before the redirect target got a
+// chance to. Its Reason must now name the listed target -- the path the shell
+// actually opens for writing -- instead of the operand.
+var namedPathOrderingWantsTarget = map[string]string{
+	"named-redirect-abs-primary-from-primary-cwd":         "/repo/tracked",
+	"named-redirect-glued-cd-then-redirect-into-primary":  "/repo/tracked",
+	"sc15-stderr-to-file-denies":                          "/repo/somefile",
+	"sc15-stdout-to-file-denies":                          "/repo/somefile",
+	"sc15-mixed-fd-dup-then-file-redirect-denies":         "/repo/somefile",
+	"sc15-mixed-file-redirect-then-fd-dup-denies":         "/repo/somefile",
+	"sc15-fd-dup-lookalike-target-is-a-file-denies":       "/repo/1x",
+	"existing-file-target-from-primary-cwd-denied":        "/repo/tracked.md",
+	"new-path-target-from-primary-cwd-denied-identically": "/repo/new.md",
+}
+
+// TestDecide_Bash_NamedPathOrdering_RedirectTargetPrecedesOperand re-runs the
+// full pre-existing corpus and asserts the SC-D reorder (redirect targets
+// judged ahead of a command's own destination operands) is message-only: the
+// denied set stays identical to the corpus's want_deny values -- zero verdict
+// flips -- and only the cases in namedPathOrderingWantsTarget gain a Reason
+// naming the redirect's real target; every other case's Reason is unaffected
+// by the reorder because it never carries both a redirect target and a
+// destination operand to reorder between.
+func TestDecide_Bash_NamedPathOrdering_RedirectTargetPrecedesOperand(t *testing.T) {
+	v := testVerbs(t)
+	correctDigest := hex.EncodeToString(sha256Sum(corpusBinContent))
+
+	for _, c := range loadDecideBashCorpus(t) {
+		t.Run(c.Name, func(t *testing.T) {
+			d := runDecideBashCase(t, v, correctDigest, c)
+			if d.Deny != c.WantDeny {
+				t.Fatalf("verdict flip: Decide(cwd=%q, cmd=%q) deny=%v, want deny=%v (reason=%q)",
+					c.CWD, c.Command, d.Deny, c.WantDeny, d.Reason)
+			}
+			if want, ok := namedPathOrderingWantsTarget[c.Name]; ok {
+				if !strings.Contains(d.Reason, want) {
+					t.Errorf("Decide(cwd=%q, cmd=%q) reason %q does not name the redirect target %q",
+						c.CWD, c.Command, d.Reason, want)
+				}
 			}
 		})
 	}
