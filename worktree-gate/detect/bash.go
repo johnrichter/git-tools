@@ -60,14 +60,20 @@ const maxInteriorDepth = 8
 // extraction reads so nothing is lost to redirect stripping. writesFile is
 // set when the segment opens a real (non-fd-dup) path for writing. hasRedirect
 // records that any redirect operator was present, which disqualifies the
-// segment from SC22's cd skip. heredocs holds the bodies of any here-documents
-// the segment opened -- undecomposable regions bounded by governed-word tests.
+// segment from SC22's cd skip. openingRedirect narrows that to the redirects
+// that open something -- a path in either direction, or a here-document --
+// leaving out a bare file-descriptor duplication (2>&1, >&-), which opens
+// nothing; SC15's landing allowance keys on it rather than on writesFile so
+// the allowance never rides on classification semantics. heredocs holds the
+// bodies of any here-documents the segment opened -- undecomposable regions
+// bounded by governed-word tests.
 type piece struct {
-	argv        string
-	raw         string
-	writesFile  bool
-	hasRedirect bool
-	heredocs    []string
+	argv            string
+	raw             string
+	writesFile      bool
+	hasRedirect     bool
+	openingRedirect bool
+	heredocs        []string
 }
 
 // decompose splits a Bash command into the pieces both the classifier and the
@@ -196,6 +202,7 @@ func decompose(command string) []piece {
 		if delim, next, ok := heredocOperatorAt(command, i); ok {
 			pendingDelims = append(pendingDelims, delim)
 			cur.hasRedirect = true
+			cur.openingRedirect = true
 			i = next
 			atWordStart = true
 			continue
@@ -225,8 +232,11 @@ func decompose(command string) []piece {
 			}
 			target, next := readTarget(command, i)
 			i = next
-			if output && target != "" && !isFdDupTarget(target) {
-				cur.writesFile = true
+			if target != "" && !isFdDupTarget(target) {
+				cur.openingRedirect = true
+				if output {
+					cur.writesFile = true
+				}
 			}
 			argv.WriteByte(' ')
 			atWordStart = true

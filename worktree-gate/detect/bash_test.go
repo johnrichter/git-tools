@@ -70,3 +70,47 @@ func TestClassifyBash_MixedUnknownAndReadIsUncertain(t *testing.T) {
 		t.Errorf("ClassifyBash() = %v, want ClassUncertain when any piece is unrecognized", got)
 	}
 }
+
+// openingRedirect must separate a redirect that opens something from a bare fd
+// duplication, and must stay set whenever a file-writing redirect is present --
+// including alongside a co-present dup, so a dup can never mask a write.
+func TestDecompose_OpeningRedirectSeparatesFdDupFromRealWrite(t *testing.T) {
+	cases := []struct {
+		command             string
+		wantOpeningRedirect bool
+		wantWritesFile      bool
+	}{
+		{"tool run", false, false},
+		{"tool run 2>&1", false, false},
+		{"tool run >&2", false, false},
+		{"tool run 2>&-", false, false},
+		{"tool run 2>&10", false, false},
+		{"tool run >out", true, true},
+		{"tool run 2>out", true, true},
+		{"tool run >>out", true, true},
+		{"tool run &>out", true, true},
+		{"tool run 2>&1 >out", true, true},
+		{"tool run >out 2>&1", true, true},
+		{"tool run 2>&1x", true, true},
+		{"tool run <in", true, false},
+		{"tool run <<EOF\nbody\nEOF\n", true, false},
+		// A21 (deferred): a bare-digit target reads as a duplication, not the
+		// file bash would create. Pinned as-is -- neither widened nor narrowed.
+		{"tool run >1", false, false},
+	}
+	for _, c := range cases {
+		pieces := decompose(c.command)
+		if len(pieces) != 1 {
+			t.Errorf("decompose(%q) produced %d pieces, want 1", c.command, len(pieces))
+			continue
+		}
+		p := pieces[0]
+		if p.openingRedirect != c.wantOpeningRedirect || p.writesFile != c.wantWritesFile {
+			t.Errorf("decompose(%q) = (openingRedirect=%v, writesFile=%v), want (%v, %v)",
+				c.command, p.openingRedirect, p.writesFile, c.wantOpeningRedirect, c.wantWritesFile)
+		}
+		if p.writesFile && !p.openingRedirect {
+			t.Errorf("decompose(%q): a file-writing redirect must always set openingRedirect", c.command)
+		}
+	}
+}

@@ -512,7 +512,10 @@ func outputRedirectTargets(raw string) []string {
 // invocation: its leading token is the argv-supplied provisioned binary path,
 // the binary at that path re-hashes to the argv-supplied expected digest, its
 // verb is one of the three landing verbs, and it carries no repo-retargeting
-// flag or redirect. The allowance is keyed on BINARY IDENTITY, not a command
+// flag and no redirect that opens a file. A bare file-descriptor duplication
+// (2>&1) opens nothing and so does not void the allowance -- the common
+// spelling of a landing call must not be denied for merging its streams.
+// The allowance is keyed on BINARY IDENTITY, not a command
 // word, so a bare/relative/PATH-resolved name, a wrong digest, or a missing
 // argv parameter all fall through to the fail-closed verdict.
 func sc15Exempt(readFile ReadFileFunc, verifiedPath, expectedDigest string, p piece) bool {
@@ -520,8 +523,8 @@ func sc15Exempt(readFile ReadFileFunc, verifiedPath, expectedDigest string, p pi
 	if verifiedPath == "" || expected == "" {
 		return false // both parameters arrive as argv; absence of either denies
 	}
-	if p.hasRedirect || len(p.heredocs) > 0 {
-		return false // a redirect on the CLI piece is a smuggled write, not the allowance
+	if p.openingRedirect || len(p.heredocs) > 0 {
+		return false // an opening redirect on the CLI piece is a smuggled write, not the allowance
 	}
 	toks := shellTokens(p.argv)
 	for i, tok := range toks {

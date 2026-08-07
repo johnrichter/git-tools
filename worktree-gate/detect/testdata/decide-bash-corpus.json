@@ -1,5 +1,5 @@
 {
-  "description": "Decision-layer fixtures for decideBash: SC20's named-path rule (a write-class piece naming a primary-checkout path is denied from any cwd, while a read-class piece naming the same path and the outside-any-repo uncertain class stay allowed), the destination scope of that rule (a write command's read sources, verb words, flags, and non-path flag values -- a git commit message, a cp source -- are not write targets and are left unjudged, so SC16's `git commit -m \"$(date)\"` is allowed from a worktree and denied from a primary checkout), SC15's digest-verified provisioned-CLI allowance (three verbs, no retarget, keyed on binary identity supplied as argv), and the membership walk's indifference to whether a write target already exists (a target that is itself a file or a device node makes its own `.git` probe an ENOTDIR, which answers the membership question rather than clouding it, so an existing-file write earns the same verdict as a new-path one -- while a genuine lstat failure anywhere on the climb still denies). The loader builds one fixed hermetic topology per case: primary checkout /repo, linked worktree /repo/wt, an already-existing tracked.md in each, a device node at /dev/null, provisioned CLI at /plugin-data/bin/git-tools. arg_path/arg_digest default to the correct provisioned path and the sha256 of the binary's bytes; 'omit' passes an empty argv parameter, 'wrong' passes a valid-but-mismatched digest, and a literal overrides. bin_present=false withholds the binary so it cannot be re-hashed. err_at makes one path's lstat fail indeterminately.",
+  "description": "Decision-layer fixtures for decideBash: SC20's named-path rule (a write-class piece naming a primary-checkout path is denied from any cwd, while a read-class piece naming the same path and the outside-any-repo uncertain class stay allowed), the destination scope of that rule (a write command's read sources, verb words, flags, and non-path flag values -- a git commit message, a cp source -- are not write targets and are left unjudged, so SC16's `git commit -m \"$(date)\"` is allowed from a worktree and denied from a primary checkout), SC15's digest-verified provisioned-CLI allowance (three verbs, no retarget, keyed on binary identity supplied as argv), and the membership walk's indifference to whether a write target already exists (a target that is itself a file or a device node makes its own `.git` probe an ENOTDIR, which answers the membership question rather than clouding it, so an existing-file write earns the same verdict as a new-path one -- while a genuine lstat failure anywhere on the climb still denies). The loader builds one fixed hermetic topology per case: primary checkout /repo, linked worktree /repo/wt, an already-existing tracked.md in each, a device node at /dev/null, provisioned CLI at /plugin-data/bin/git-tools. arg_path/arg_digest default to the correct provisioned path and the sha256 of the binary's bytes; 'omit' passes an empty argv parameter, 'wrong' passes a valid-but-mismatched digest, and a literal overrides. bin_present=false withholds the binary so it cannot be re-hashed. err_at makes one path's lstat fail indeterminately. The sc15 redirect pairs pin what voids that allowance: a bare fd duplication (2>&1, 2>&-) opens no file and leaves a landing call allowed, identical to its no-redirect baseline, while any redirect that opens something -- a file-writing one, a lookalike target that is really a path, an input redirect, a here-document -- voids it, including when a benign fd-dup sits alongside on the same command. The `>1` case pins the known bare-digit imprecision in the fd-dup predicate (A21, deferred): such a target reads as a duplication rather than the file bash would create, and this corpus records that behavior unchanged rather than fixing it here.",
   "cases": [
     {
       "name": "ordering-cp-abs-primary-target-from-outside-any-repo-cwd",
@@ -221,6 +221,78 @@
       "cwd": "/repo",
       "bin_present": false,
       "want_deny": true
+    },
+    {
+      "name": "sc15-worktree-add-no-redirect-baseline-allowed",
+      "command": "/plugin-data/bin/git-tools worktree add /repo/.claude/worktrees/slug main",
+      "cwd": "/repo",
+      "want_deny": false
+    },
+    {
+      "name": "sc15-worktree-add-fd-dup-allowed-same-as-baseline",
+      "command": "/plugin-data/bin/git-tools worktree add /repo/.claude/worktrees/slug main 2>&1",
+      "cwd": "/repo",
+      "want_deny": false
+    },
+    {
+      "name": "sc15-merge-fd-dup-allowed",
+      "command": "/plugin-data/bin/git-tools merge main 2>&1",
+      "cwd": "/repo",
+      "want_deny": false
+    },
+    {
+      "name": "sc15-fd-dup-close-stderr-allowed",
+      "command": "/plugin-data/bin/git-tools merge main 2>&-",
+      "cwd": "/repo",
+      "want_deny": false
+    },
+    {
+      "name": "sc15-stderr-to-file-denies",
+      "command": "/plugin-data/bin/git-tools merge main 2>somefile",
+      "cwd": "/repo",
+      "want_deny": true
+    },
+    {
+      "name": "sc15-stdout-to-file-denies",
+      "command": "/plugin-data/bin/git-tools merge main >somefile",
+      "cwd": "/repo",
+      "want_deny": true
+    },
+    {
+      "name": "sc15-mixed-fd-dup-then-file-redirect-denies",
+      "command": "/plugin-data/bin/git-tools merge main 2>&1 >somefile",
+      "cwd": "/repo",
+      "want_deny": true
+    },
+    {
+      "name": "sc15-mixed-file-redirect-then-fd-dup-denies",
+      "command": "/plugin-data/bin/git-tools merge main >somefile 2>&1",
+      "cwd": "/repo",
+      "want_deny": true
+    },
+    {
+      "name": "sc15-fd-dup-lookalike-target-is-a-file-denies",
+      "command": "/plugin-data/bin/git-tools merge main 2>&1x",
+      "cwd": "/repo",
+      "want_deny": true
+    },
+    {
+      "name": "sc15-input-redirect-from-file-denies",
+      "command": "/plugin-data/bin/git-tools merge main </repo/tracked.md",
+      "cwd": "/repo",
+      "want_deny": true
+    },
+    {
+      "name": "sc15-heredoc-on-landing-piece-denies",
+      "command": "/plugin-data/bin/git-tools merge main <<EOF\nbody\nEOF\n",
+      "cwd": "/repo",
+      "want_deny": true
+    },
+    {
+      "name": "sc15-a21-bare-digit-redirect-target-reads-as-fd-dup-allowed",
+      "command": "/plugin-data/bin/git-tools merge main >1",
+      "cwd": "/repo",
+      "want_deny": false
     },
     {
       "name": "per-piece-cli-then-write-denies-on-second-piece",
