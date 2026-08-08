@@ -7,6 +7,7 @@
 | FB3 | design-architect lacked local-checkout-to-remote-name mapping | — | 2 | 2 | 4 |
 | FB4 | A5 bypass demonstrated live: git branch -d succeeded from the primary checkout | A5 | 4 | 4 | 16 |
 | FB5 | The gate cannot reach zero worktrees: worktree remove is not a sanctioned verb | — | 3 | 3 | 9 |
+| FB6 | Correction to FB5: the gate can reach zero worktrees, from outside the repo | A5 | 3 | 4 | 12 |
 
 ## FB1 — plan-with-team self-declared readiness at the round cap
 
@@ -37,4 +38,10 @@
 - feedback: sc15VerbAllowed (worktree-gate/detect/decide.go:554-566) allows only merge, push, and worktree add from the primary checkout. worktree remove is excluded. Removing a worktree therefore requires standing in a different worktree, so the last worktree can never be removed through the gate. Cleanup of the final worktree needs an ungated shell. The asymmetry is notable: the gate sanctions creating a worktree from the primary checkout but not deleting one.
 - proposed solution: Decide whether the exclusion is intended. If worktree remove is safe to sanction, add it to sc15VerbAllowed alongside worktree add, since it is the same binary, the same identity check, and the same retargeting guard. If the exclusion is deliberate, document the intended cleanup path so an operator is not left with an unremovable worktree.
 - why it matters: Worktree accumulation is the visible cost. Each stale worktree is a full checkout on disk and a line in every worktree list. More importantly, a governance tool that can create state it cannot remove pushes operators outside the sanctioned channel to finish routine work.
+
+## FB6 — Correction to FB5: the gate can reach zero worktrees, from outside the repo
+
+- feedback: FB5 states the last worktree can never be removed through the gate. That is wrong, and this entry supersedes that specific claim. Running the sanctioned binary from a directory outside any git repository, with an explicit --repo pointing at the primary checkout, passes the gate and removes the worktree. That is how the final worktree was removed in this session. FB5's accurate residue: worktree remove is not in sc15VerbAllowed, so it is denied from the primary checkout itself, and the workaround requires either another worktree or a cwd outside the repo. The asymmetry against worktree add stands. The impossibility claim does not.
+- proposed solution: Treat FB5 as an ergonomics finding, not a dead end. Consider whether --repo voiding the sc15 allowance is correct given that the same flag is what makes removal work from outside the repo. Correct FB5's title and why-it-matters text if the register gains an edit path.
+- why it matters: An uncorrected FB5 would tell the build that a supported operation is impossible, and could justify work to solve a problem that does not exist.
 

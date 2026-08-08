@@ -56,6 +56,18 @@
       "urgency": 3,
       "criticality": 9,
       "added": "2026-08-08T22:19:43Z"
+    },
+    {
+      "id": "FB6",
+      "title": "Correction to FB5: the gate can reach zero worktrees, from outside the repo",
+      "source_task_id": "A5",
+      "feedback": "FB5 states the last worktree can never be removed through the gate. That is wrong, and this entry supersedes that specific claim. Running the sanctioned binary from a directory outside any git repository, with an explicit --repo pointing at the primary checkout, passes the gate and removes the worktree. That is how the final worktree was removed in this session. FB5's accurate residue: worktree remove is not in sc15VerbAllowed, so it is denied from the primary checkout itself, and the workaround requires either another worktree or a cwd outside the repo. The asymmetry against worktree add stands. The impossibility claim does not.",
+      "proposed_solution": "Treat FB5 as an ergonomics finding, not a dead end. Consider whether --repo voiding the sc15 allowance is correct given that the same flag is what makes removal work from outside the repo. Correct FB5's title and why-it-matters text if the register gains an edit path.",
+      "why_it_matters": "An uncorrected FB5 would tell the build that a supported operation is impossible, and could justify work to solve a problem that does not exist.",
+      "impact": 3,
+      "urgency": 4,
+      "criticality": 12,
+      "added": "2026-08-08T22:21:33Z"
     }
   ]
 }
