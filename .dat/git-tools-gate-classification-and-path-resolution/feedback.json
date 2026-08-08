@@ -68,6 +68,17 @@
       "urgency": 4,
       "criticality": 12,
       "added": "2026-08-08T22:21:33Z"
+    },
+    {
+      "id": "FB7",
+      "title": "Over-block: the gate denies deleting untracked, gitignored scratch state",
+      "feedback": "Removing a dangling symlink at .claude/worktrees/ai-shared-lib was denied. The target no longer existed, the path was untracked, and git status --ignored reported the whole .claude/worktrees/ directory as ignored. The denial is target-based, not cwd-based: retrying from /tmp produced the identical refusal, so no working directory avoids it. The operator removed it from an ungated shell instead. Set this beside FB4 from the same session: the gate ALLOWED 'git branch -d', a real repository mutation, and DENIED deleting ignored scratch. The layer is imprecise in both directions at once, and on this evidence its precision is inverted.",
+      "proposed_solution": "Consider consulting ignore status before denying a delete whose only target is untracked and ignored. A cheap check is 'git check-ignore --quiet \u003cpath\u003e' plus 'git ls-files --error-unmatch \u003cpath\u003e' failing, which together prove the path is neither tracked nor intended content. If that costs too much on the hot path, at least let the denial message name the ungated remedy, because the current text says 'create one and retry' and creating a worktree does not help when the target lives in the primary checkout.",
+      "why_it_matters": "The gate exists to protect tracked repository content. Ignored scratch state is not that content. Denying its cleanup pushes routine work outside the sanctioned channel, which is the same outcome FB5 describes and which trains an operator to reach for an ungated shell by habit.",
+      "impact": 3,
+      "urgency": 3,
+      "criticality": 9,
+      "added": "2026-08-08T22:29:50Z"
     }
   ]
 }

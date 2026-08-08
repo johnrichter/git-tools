@@ -8,6 +8,7 @@
 | FB4 | A5 bypass demonstrated live: git branch -d succeeded from the primary checkout | A5 | 4 | 4 | 16 |
 | FB5 | The gate cannot reach zero worktrees: worktree remove is not a sanctioned verb | — | 3 | 3 | 9 |
 | FB6 | Correction to FB5: the gate can reach zero worktrees, from outside the repo | A5 | 3 | 4 | 12 |
+| FB7 | Over-block: the gate denies deleting untracked, gitignored scratch state | — | 3 | 3 | 9 |
 
 ## FB1 — plan-with-team self-declared readiness at the round cap
 
@@ -44,4 +45,10 @@
 - feedback: FB5 states the last worktree can never be removed through the gate. That is wrong, and this entry supersedes that specific claim. Running the sanctioned binary from a directory outside any git repository, with an explicit --repo pointing at the primary checkout, passes the gate and removes the worktree. That is how the final worktree was removed in this session. FB5's accurate residue: worktree remove is not in sc15VerbAllowed, so it is denied from the primary checkout itself, and the workaround requires either another worktree or a cwd outside the repo. The asymmetry against worktree add stands. The impossibility claim does not.
 - proposed solution: Treat FB5 as an ergonomics finding, not a dead end. Consider whether --repo voiding the sc15 allowance is correct given that the same flag is what makes removal work from outside the repo. Correct FB5's title and why-it-matters text if the register gains an edit path.
 - why it matters: An uncorrected FB5 would tell the build that a supported operation is impossible, and could justify work to solve a problem that does not exist.
+
+## FB7 — Over-block: the gate denies deleting untracked, gitignored scratch state
+
+- feedback: Removing a dangling symlink at .claude/worktrees/ai-shared-lib was denied. The target no longer existed, the path was untracked, and git status --ignored reported the whole .claude/worktrees/ directory as ignored. The denial is target-based, not cwd-based: retrying from /tmp produced the identical refusal, so no working directory avoids it. The operator removed it from an ungated shell instead. Set this beside FB4 from the same session: the gate ALLOWED 'git branch -d', a real repository mutation, and DENIED deleting ignored scratch. The layer is imprecise in both directions at once, and on this evidence its precision is inverted.
+- proposed solution: Consider consulting ignore status before denying a delete whose only target is untracked and ignored. A cheap check is 'git check-ignore --quiet <path>' plus 'git ls-files --error-unmatch <path>' failing, which together prove the path is neither tracked nor intended content. If that costs too much on the hot path, at least let the denial message name the ungated remedy, because the current text says 'create one and retry' and creating a worktree does not help when the target lives in the primary checkout.
+- why it matters: The gate exists to protect tracked repository content. Ignored scratch state is not that content. Denying its cleanup pushes routine work outside the sanctioned channel, which is the same outcome FB5 describes and which trains an operator to reach for an ungated shell by habit.
 
