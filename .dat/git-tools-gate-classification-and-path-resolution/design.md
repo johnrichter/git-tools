@@ -14,7 +14,7 @@ links:
   - project:git-governance-emergency-followup:design
   - project:git-governance-emergency-followup:feedback-review-record
   - project:dat-single-workspace-plans-and-programs:design
-updated: 2026-08-08T22:04:16Z
+updated: 2026-08-08T22:31:00Z
 ---
 
 # git-tools — Gate Classification Layer + Relative-Path Resolution
@@ -298,16 +298,17 @@ One question remains open for the operator, and does not block this build:
 
 ## Readiness record
 
-This document passed four `design-architect` CRITIQUE rounds. Each round verified every claim against source rather than accepting the text.
+This document passed five `design-architect` CRITIQUE rounds. Each round verified every claim against source rather than accepting the text.
 
 | Round | Verdict | What it found |
 | --- | --- | --- |
 | 1 | NEEDS-WORK | Release scope breached the single-repo thesis. A1 and A2 acceptance criteria were unsatisfiable against pinned fixtures. The A1 root-cause framing invited a fix that would let a genuine write through. |
 | 2 | NOT-READY | The refactor silently required splits for `worktree`, `config`, `reflog`, and `stash` that no section listed. The document contradicted itself on whether git classification lives in code or in `verbs.json`. |
 | 3 | NEEDS-WORK | Removing git from `verbs.json` breaks five assertions in `TestDefaultVerbs_CriticalVerbsPresent`. The write-default would newly deny `git branch -a`, `git branch -v`, and `git tag -l`. |
-| 4 | NEEDS-WORK, then resolved | `git tag -v` means verify and reads. It was listed as a write, which would deny a command allowed today. `git config --get-all` is denied today, so listing it as read added a sixth behavior change. |
+| 4 | NEEDS-WORK | `git tag -v` means verify and reads. It was listed as a write, which would deny a command allowed today. `git config --get-all` is denied today, so listing it as read added a sixth behavior change. |
+| 5 | **READY** | Confirmed both round-4 fixes landed with no surviving restatement. Verified `git tag -u` is a genuine write. Found no new contradiction against criteria 8, 10, and 11, or against acceptance criterion 2. No findings. |
 
-Round 4's two findings were mechanical enumeration corrections and are applied above. Every other finding across the four rounds is applied.
+Every finding across the five rounds is applied. Round 5 is the confirming round and returned READY with an empty findings list.
 
 Two claims in this document were measured, not reasoned. The A5 table came from calling `classifyPiece` against the shipped `verbs.json`. The round-2 critique reproduced every row independently. The `worktree add` arity in criterion 12 was read from `internal/cli/worktree.go:60-62`.
 
