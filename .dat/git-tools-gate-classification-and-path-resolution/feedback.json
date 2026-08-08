@@ -33,6 +33,29 @@
       "urgency": 2,
       "criticality": 4,
       "added": "2026-08-08T22:11:10Z"
+    },
+    {
+      "id": "FB4",
+      "title": "A5 bypass demonstrated live: git branch -d succeeded from the primary checkout",
+      "source_task_id": "A5",
+      "feedback": "During cleanup, 'git branch -d fix/gate-classification-and-path-resolution' ran from the primary checkout and deleted the branch. The gate allowed it. Deleting a branch modifies the repository, so the gate should have denied it. The command passed because 'git branch' sits in read_prefixes and hasCommandPrefix matches every subcommand of it. This is defect A5 observed in production rather than measured in a test harness.",
+      "proposed_solution": "No new work. A5 already specifies the branch split. Add this command to the corpus as a want_deny:true case, since it is now a recorded real-world instance rather than a hypothetical one.",
+      "why_it_matters": "It upgrades A5 from a measured classification result to an observed bypass. The gate permitted a repository mutation from the primary checkout, which is the exact condition the gate exists to prevent.",
+      "impact": 4,
+      "urgency": 4,
+      "criticality": 16,
+      "added": "2026-08-08T22:19:31Z"
+    },
+    {
+      "id": "FB5",
+      "title": "The gate cannot reach zero worktrees: worktree remove is not a sanctioned verb",
+      "feedback": "sc15VerbAllowed (worktree-gate/detect/decide.go:554-566) allows only merge, push, and worktree add from the primary checkout. worktree remove is excluded. Removing a worktree therefore requires standing in a different worktree, so the last worktree can never be removed through the gate. Cleanup of the final worktree needs an ungated shell. The asymmetry is notable: the gate sanctions creating a worktree from the primary checkout but not deleting one.",
+      "proposed_solution": "Decide whether the exclusion is intended. If worktree remove is safe to sanction, add it to sc15VerbAllowed alongside worktree add, since it is the same binary, the same identity check, and the same retargeting guard. If the exclusion is deliberate, document the intended cleanup path so an operator is not left with an unremovable worktree.",
+      "why_it_matters": "Worktree accumulation is the visible cost. Each stale worktree is a full checkout on disk and a line in every worktree list. More importantly, a governance tool that can create state it cannot remove pushes operators outside the sanctioned channel to finish routine work.",
+      "impact": 3,
+      "urgency": 3,
+      "criticality": 9,
+      "added": "2026-08-08T22:19:43Z"
     }
   ]
 }

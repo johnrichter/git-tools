@@ -5,6 +5,8 @@
 | FB1 | plan-with-team self-declared readiness at the round cap | — | 5 | 4 | 20 |
 | FB2 | The gate under repair obstructs its own repair session | — | 3 | 3 | 9 |
 | FB3 | design-architect lacked local-checkout-to-remote-name mapping | — | 2 | 2 | 4 |
+| FB4 | A5 bypass demonstrated live: git branch -d succeeded from the primary checkout | A5 | 4 | 4 | 16 |
+| FB5 | The gate cannot reach zero worktrees: worktree remove is not a sanctioned verb | — | 3 | 3 | 9 |
 
 ## FB1 — plan-with-team self-declared readiness at the round cap
 
@@ -23,4 +25,16 @@
 - feedback: Round 1 reported that the design named a non-existent repo, ai-shared-lib, and should say claude-shared-tooling. Both are correct. The local checkout directory is ai-shared-lib and its GitHub remote is claude-shared-tooling. The agent inferred the repo name from go.mod alone and could not see the sibling checkout layout.
 - proposed solution: When dispatching design-architect on a design that references sibling repos, include a short map of local checkout directory to module path or remote name in the prompt. Alternatively teach the agent to read .git/config of a named sibling before declaring a repo missing.
 - why it matters: A confident false finding costs an operator round to disprove, and could have led to filing a hand-off against the wrong repo name.
+
+## FB4 — A5 bypass demonstrated live: git branch -d succeeded from the primary checkout
+
+- feedback: During cleanup, 'git branch -d fix/gate-classification-and-path-resolution' ran from the primary checkout and deleted the branch. The gate allowed it. Deleting a branch modifies the repository, so the gate should have denied it. The command passed because 'git branch' sits in read_prefixes and hasCommandPrefix matches every subcommand of it. This is defect A5 observed in production rather than measured in a test harness.
+- proposed solution: No new work. A5 already specifies the branch split. Add this command to the corpus as a want_deny:true case, since it is now a recorded real-world instance rather than a hypothetical one.
+- why it matters: It upgrades A5 from a measured classification result to an observed bypass. The gate permitted a repository mutation from the primary checkout, which is the exact condition the gate exists to prevent.
+
+## FB5 — The gate cannot reach zero worktrees: worktree remove is not a sanctioned verb
+
+- feedback: sc15VerbAllowed (worktree-gate/detect/decide.go:554-566) allows only merge, push, and worktree add from the primary checkout. worktree remove is excluded. Removing a worktree therefore requires standing in a different worktree, so the last worktree can never be removed through the gate. Cleanup of the final worktree needs an ungated shell. The asymmetry is notable: the gate sanctions creating a worktree from the primary checkout but not deleting one.
+- proposed solution: Decide whether the exclusion is intended. If worktree remove is safe to sanction, add it to sc15VerbAllowed alongside worktree add, since it is the same binary, the same identity check, and the same retargeting guard. If the exclusion is deliberate, document the intended cleanup path so an operator is not left with an unremovable worktree.
+- why it matters: Worktree accumulation is the visible cost. Each stale worktree is a full checkout on disk and a line in every worktree list. More importantly, a governance tool that can create state it cannot remove pushes operators outside the sanctioned channel to finish routine work.
 
