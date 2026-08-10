@@ -274,6 +274,32 @@ func TestWorktree_AddListRemove(t *testing.T) {
 	}
 }
 
+// TestWorktreeAdd_RelativePathIsCwdIndependent covers the case where the
+// process's current directory differs from the --repo working tree: the
+// <path> argument is git's concept of "relative to the repository", so
+// self-verification must resolve it the same way, not against the
+// process's cwd.
+func TestWorktreeAdd_RelativePathIsCwdIndependent(t *testing.T) {
+	bin := buildCLI(t)
+	dir := initRepo(t)
+	elsewhere := t.TempDir()
+
+	cmd := exec.Command(bin, "worktree", "add", "review", "HEAD", "--repo", dir, "--branch", "review")
+	cmd.Dir = elsewhere
+	out, _ := cmd.Output()
+	var r wireResult
+	if err := json.Unmarshal(out, &r); err != nil {
+		t.Fatalf("output is not valid JSON: %v\nraw: %s", err, out)
+	}
+	exit := cmd.ProcessState.ExitCode()
+	if r.Status != "success" || exit != 0 {
+		t.Fatalf("status=%s exit=%d, want success/0: %+v", r.Status, exit, r)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "review", "base.txt")); err != nil {
+		t.Fatalf("worktree add did not check out files: %v", err)
+	}
+}
+
 func TestMerge_FastForward(t *testing.T) {
 	bin := buildCLI(t)
 	dir := initRepo(t)

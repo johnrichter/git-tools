@@ -213,8 +213,24 @@ func TestDefaultVerbs_ShippedArtifactIsPopulatedAndValid(t *testing.T) {
 	if len(v.WriteContains) == 0 {
 		t.Error("shipped verbs.json has no write_contains")
 	}
+	// Git verbs are classified from the in-code subcommand sets, never from
+	// verbs.json -- a `git …` prefix here would be dead at best and a
+	// re-introduced leading-global-option/prefix-collision defect at worst.
+	for _, list := range [][]string{v.ReadPrefixes, v.WritePrefixes} {
+		for _, p := range list {
+			if strings.Fields(p)[0] == "git" {
+				t.Errorf("verbs.json still carries a git prefix %q; git is classified in code", p)
+			}
+		}
+	}
 }
 
+// TestDefaultVerbs_CriticalVerbsPresent pins the classifier's load-bearing
+// verbs: the non-git patterns that still ship in verbs.json, and the in-code
+// git subcommand sets. The git assertions are behavioral (via classifyGit) so
+// dropping merge-base from the read set, dropping a plain write verb, or
+// removing a split verb's case -- which would let its read forms fall to the
+// write default -- all trip a check here.
 func TestDefaultVerbs_CriticalVerbsPresent(t *testing.T) {
 	v := testVerbs(t)
 	mustContain := func(list []string, want string) {
@@ -226,15 +242,76 @@ func TestDefaultVerbs_CriticalVerbsPresent(t *testing.T) {
 		}
 		t.Errorf("expected %q among the shipped patterns, not found", want)
 	}
-	mustContain(v.WritePrefixes, "git commit")
-	mustContain(v.WritePrefixes, "git add")
 	mustContain(v.WritePrefixes, "rm ")
 	mustContain(v.WritePrefixes, "mv ")
 	mustContain(v.WriteContains, ">")
 	mustContain(v.WriteContains, ">>")
-	mustContain(v.ReadPrefixes, "git status")
-	mustContain(v.ReadPrefixes, "git diff")
-	mustContain(v.ReadPrefixes, "git log")
+
+	mustClassifyGit := func(want BashClass, args ...string) {
+		t.Helper()
+		if got := classifyGit(args); got != want {
+			t.Errorf("classifyGit(%v) = %v, want %v", args, got, want)
+		}
+	}
+	// Plain reads, including the merge-base addition (A4) that must stay a read
+	// while merge stays a write.
+	mustClassifyGit(ClassRead, "status")
+	mustClassifyGit(ClassRead, "diff")
+	mustClassifyGit(ClassRead, "log")
+	mustClassifyGit(ClassRead, "show")
+	mustClassifyGit(ClassRead, "merge-base", "a", "b")
+	// Plain writes.
+	mustClassifyGit(ClassWrite, "commit", "-m", "x")
+	mustClassifyGit(ClassWrite, "add", ".")
+	mustClassifyGit(ClassWrite, "merge", "main")
+	// Split verbs: a preserved read form and a write form each -- removing a
+	// split case flips the read form to the write default and trips here.
+	mustClassifyGit(ClassRead, "remote", "-v")
+	mustClassifyGit(ClassWrite, "remote", "add", "o", "u")
+	mustClassifyGit(ClassRead, "branch", "-a")
+	mustClassifyGit(ClassWrite, "branch", "-D", "x")
+	mustClassifyGit(ClassRead, "tag", "-l")
+	mustClassifyGit(ClassWrite, "tag", "-d", "x")
+	mustClassifyGit(ClassRead, "worktree", "list")
+	mustClassifyGit(ClassWrite, "worktree", "add", "p")
+	mustClassifyGit(ClassRead, "config", "--get", "k")
+	mustClassifyGit(ClassWrite, "config", "--set", "k", "v")
+	mustClassifyGit(ClassRead, "reflog", "show")
+	mustClassifyGit(ClassWrite, "reflog", "expire")
+	mustClassifyGit(ClassWrite, "stash")
+}
+
+// TestClassifyGit_LeadingGlobalOptionParity pins A3/L1.9: gitSubcommand skips a
+// leading global option, so every git verb classifies identically with and
+// without one, across each option's value-consuming and =-joined forms.
+func TestClassifyGit_LeadingGlobalOptionParity(t *testing.T) {
+	globals := [][]string{
+		{"-C", "somedir"},
+		{"-c", "user.name=x"},
+		{"--git-dir", "/g"},
+		{"--git-dir=/g"},
+		{"--work-tree", "/w"},
+		{"--work-tree=/w"},
+		{"--namespace", "n"},
+		{"--namespace=n"},
+	}
+	verbs := [][]string{
+		{"status"}, {"commit", "-m", "x"}, {"merge-base", "a", "b"},
+		{"merge", "main"}, {"remote", "-v"}, {"remote", "add", "o", "u"},
+		{"branch", "-a"}, {"branch", "-D", "x"}, {"tag", "-l"}, {"tag", "-d", "x"},
+		{"worktree", "list"}, {"worktree", "add", "p"},
+		{"config", "--get", "k"}, {"config", "--set", "k", "v"},
+		{"reflog", "show"}, {"stash"},
+	}
+	for _, verb := range verbs {
+		base := classifyGit(verb)
+		for _, g := range globals {
+			withOpt := append(append([]string{}, g...), verb...)
+			if got := classifyGit(withOpt); got != base {
+				t.Errorf("classifyGit(%v) = %v, differs from classifyGit(%v) = %v", withOpt, got, verb, base)
+			}
+		}
+	}
 }
 
 // -- trackingdocs.json packaging integrity, mirroring verbs.json's own

@@ -4,14 +4,11 @@ go 1.26
 
 require (
 	github.com/gofrs/flock v0.13.0
-	github.com/johnrichter/claude-shared-tooling/go/adoption v0.1.0
 	github.com/johnrichter/claude-shared-tooling/go/clikit v0.1.0
 	github.com/johnrichter/claude-shared-tooling/go/fsx v0.1.0
-	github.com/johnrichter/claude-shared-tooling/go/git v0.1.0
+	github.com/johnrichter/claude-shared-tooling/go/git v0.2.0
 	github.com/johnrichter/claude-shared-tooling/go/githooks v0.1.0
 	github.com/johnrichter/claude-shared-tooling/go/sysops v0.1.0
-	github.com/johnrichter/claude-shared-tooling/go/transcript v0.1.0
-	github.com/johnrichter/claude-shared-tooling/plugin-foundation v0.1.0
 	github.com/knadh/koanf/parsers/yaml v1.1.0
 	github.com/knadh/koanf/providers/confmap v1.0.0
 	github.com/knadh/koanf/providers/env v1.1.0
@@ -29,7 +26,6 @@ require (
 	github.com/google/renameio/v2 v2.0.2 // indirect
 	github.com/gowebpki/jcs v1.0.1 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
-	github.com/johnrichter/claude-shared-tooling/go/gate v0.1.0 // indirect
 	github.com/johnrichter/claude-shared-tooling/go/logkit v0.1.0 // indirect
 	github.com/knadh/koanf/maps v0.1.2 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect

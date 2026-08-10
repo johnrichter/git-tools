@@ -476,7 +476,15 @@ func classifyPiece(v Verbs, p piece) BashClass {
 		// fail-closed Uncertain default that a bare `cd` would otherwise hit.
 		return ClassRead
 	}
-	lower := strings.ToLower(stripGroupOpeners(p.argv))
+	stripped := stripGroupOpeners(p.argv)
+	if toks := shellTokens(stripped); len(toks) > 0 && commandWord(toks[0]) == "git" {
+		// Every `git …` verb is classified from the in-code subcommand sets
+		// (see classifyGit), not the verbs.json prefixes, so a leading global
+		// option never defeats the match and merge-base stays a read while
+		// merge is a write.
+		return classifyGit(toks[1:])
+	}
+	lower := strings.ToLower(stripped)
 	for _, w := range v.WritePrefixes {
 		if strings.HasPrefix(lower, w) {
 			return ClassWrite

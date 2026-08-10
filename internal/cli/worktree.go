@@ -6,25 +6,34 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/johnrichter/claude-shared-tooling/go/clikit"
 	"github.com/johnrichter/claude-shared-tooling/go/git"
 )
 
 // worktreeRegisteredAt reports whether list contains an entry at path,
 // comparing resolved (symlink-free) absolute paths so a caller-supplied
-// relative path still matches what `git worktree list` reports.
-func worktreeRegisteredAt(list []git.WorktreeInfo, path string) bool {
-	want := resolvedPath(path)
+// relative path still matches what `git worktree list` reports. A relative
+// path is resolved against repoDir (the repository's working tree), not the
+// process's current directory, since git itself interprets `worktree add`'s
+// <path> relative to the repository, not the caller's cwd.
+func worktreeRegisteredAt(list []git.WorktreeInfo, repoDir, path string) bool {
+	want := resolvedPath(repoDir, path)
 	for _, wt := range list {
-		if resolvedPath(wt.Path) == want {
+		if resolvedPath(repoDir, wt.Path) == want {
 			return true
 		}
 	}
 	return false
 }
 
-// resolvedPath returns p's absolute, symlink-resolved form, falling back to
-// its absolute form (then p itself) when either resolution step fails.
-func resolvedPath(p string) string {
+// resolvedPath returns p's absolute, symlink-resolved form. A relative p is
+// joined against base first; an already-absolute p is used as-is. It falls
+// back to the absolute (unresolved) form, then p itself, when resolution
+// fails.
+func resolvedPath(base, p string) string {
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(base, p)
+	}
 	abs, err := filepath.Abs(p)
 	if err != nil {
 		abs = p
@@ -89,9 +98,11 @@ func newWorktreeAddCmd() *cobra.Command {
 				if listErr != nil {
 					return finishErr(cmd, "internal.git.worktree_verify_failed", "verify the worktree was created", listErr)
 				}
-				if !worktreeRegisteredAt(list, path) {
-					return finishErr(cmd, "internal.git.worktree_add_unverified", "verify the worktree was created",
-						fmt.Errorf("git worktree add reported success but %s does not appear in `git worktree list`", path))
+				if !worktreeRegisteredAt(list, repo.Dir, path) {
+					return finishDiagnostic(cmd, clikit.NewInternal, "internal.git.worktree_add_unverified",
+						fmt.Sprintf("verify the worktree was created: git worktree add reported success but %s does not appear in `git worktree list`", path),
+						clikit.Manual(fmt.Sprintf("run `git -C %s worktree list` to see what git actually registered, and re-check the path passed to `worktree add`", repo.Dir)),
+						nil)
 				}
 			}
 
