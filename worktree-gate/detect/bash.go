@@ -62,9 +62,10 @@ const maxInteriorDepth = 8
 // records that any redirect operator was present, which disqualifies the
 // segment from SC22's cd skip. openingRedirect narrows that to the redirects
 // that open something -- a path in either direction, or a here-document --
-// leaving out a bare file-descriptor duplication (2>&1, >&-), which opens
-// nothing; SC15's landing allowance keys on it rather than on writesFile so
-// the allowance never rides on classification semantics. heredocs holds the
+// leaving out a bare file-descriptor duplication (2>&1, >&-) or a /dev/null
+// discard, neither of which opens a repo file; SC15's landing allowance keys
+// on it rather than on writesFile so the allowance never rides on
+// classification semantics. heredocs holds the
 // bodies of any here-documents the segment opened -- undecomposable regions
 // bounded by governed-word tests.
 type piece struct {
@@ -226,13 +227,14 @@ func decompose(command string) []piece {
 		// and the `|` in `>|` are never taken as a lone connector.
 		if length, output, ok := redirectOperatorAt(command, i, atWordStart); ok {
 			cur.hasRedirect = true
+			dupCapable := strings.HasSuffix(command[i:i+length], "&")
 			i += length
 			for i < n && command[i] == ' ' {
 				i++
 			}
 			target, next := readTarget(command, i)
 			i = next
-			if target != "" && !isFdDupTarget(target) {
+			if target != "" && !isFdDupOrDiscardTarget(target, dupCapable) {
 				cur.openingRedirect = true
 				if output {
 					cur.writesFile = true
@@ -362,6 +364,24 @@ func isFdDupTarget(word string) bool {
 		}
 	}
 	return true
+}
+
+// isFdDupOrDiscardTarget reports whether a redirect naming target opens no
+// repo file, so it carries no write signal regardless of direction: either
+// /dev/null, the canonical discard device, exempt under any operator (A1 --
+// a discard is never a repo write), or a genuine file-descriptor duplication
+// (isFdDupTarget), admitted only when the matched operator itself is
+// dup-capable -- ends in "&" (>&, <&, and their numeric-fd-prefixed forms
+// like 2>&1) -- the one shell form where a bare digit or "-" dups a
+// descriptor rather than naming a file. Under a plain operator (>, >>, <,
+// &>, &>>) the same bare-digit or "-" spelling is the literal file bash
+// opens, so `tool run >1` writes a file called "1"; it does not duplicate a
+// descriptor (A2, reversing the prior deferral).
+func isFdDupOrDiscardTarget(target string, dupCapable bool) bool {
+	if target == "/dev/null" {
+		return true
+	}
+	return dupCapable && isFdDupTarget(target)
 }
 
 // heredocOperatorAt reports whether a here-document operator (<<DELIM or

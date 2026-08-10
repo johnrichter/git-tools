@@ -94,9 +94,11 @@ func TestDecompose_OpeningRedirectSeparatesFdDupFromRealWrite(t *testing.T) {
 		{"tool run 2>&1x", true, true},
 		{"tool run <in", true, false},
 		{"tool run <<EOF\nbody\nEOF\n", true, false},
-		// A21 (deferred): a bare-digit target reads as a duplication, not the
-		// file bash would create. Pinned as-is -- neither widened nor narrowed.
-		{"tool run >1", false, false},
+		// A21, reversed: a bare-digit target duplicates a descriptor only
+		// when the matched operator itself carries the "&" (>&, <&, e.g.
+		// 2>&1); under a plain operator, as here, the digit is the literal
+		// file bash opens, so this now writes rather than reading as a dup.
+		{"tool run >1", true, true},
 	}
 	for _, c := range cases {
 		pieces := decompose(c.command)

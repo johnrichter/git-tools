@@ -681,10 +681,13 @@ func gitFlagKey(tok string) string {
 }
 
 // outputRedirectTargets recovers the file-writing redirect targets from a raw
-// segment, using the same longest-first operator predicate and fd-dup
-// exclusion the decomposition applies, so `echo x>&2` yields no target while
-// `echo x>&/p/f` yields `/p/f`. Quotes and backslashes are honored so a `>`
-// inside "a > b" never reads as an operator.
+// segment, using the same longest-first operator predicate and the same
+// discard/dup exclusion (isFdDupOrDiscardTarget) the decomposition applies:
+// `echo x>&2` yields no target (a genuine duplication under the dup-capable
+// `>&` operator), `echo x>/dev/null` yields none either (the discard
+// device), while `echo x>&/p/f` and `echo x>1` (a plain, non-dup-capable
+// operator) both yield their real path. Quotes and backslashes are honored
+// so a `>` inside "a > b" never reads as an operator.
 func outputRedirectTargets(raw string) []string {
 	var targets []string
 	i, n := 0, len(raw)
@@ -723,13 +726,14 @@ func outputRedirectTargets(raw string) []string {
 			continue
 		}
 		if length, output, ok := redirectOperatorAt(raw, i, atWordStart); ok {
+			dupCapable := strings.HasSuffix(raw[i:i+length], "&")
 			i += length
 			for i < n && raw[i] == ' ' {
 				i++
 			}
 			target, next := readTarget(raw, i)
 			i = next
-			if output && target != "" && !isFdDupTarget(target) {
+			if output && target != "" && !isFdDupOrDiscardTarget(target, dupCapable) {
 				targets = append(targets, target)
 			}
 			atWordStart = true
