@@ -34,10 +34,10 @@ func TestSC15_SDET_AdversarialProbe(t *testing.T) {
 			note:     "worktree alone (no 'add') must not satisfy the three-verb allowance",
 		},
 		{
-			name:     "worktree-list-wrong-subverb-denies",
+			name:     "worktree-list-read-verb-allows",
 			command:  bin + " worktree list",
-			wantDeny: true,
-			note:     "worktree list is not one of the three allowed landing verbs",
+			wantDeny: false,
+			note:     "worktree list is the CLI's one read verb; identity-verified, it reads rather than falling to the fail-closed default",
 		},
 		{
 			name:     "leading-var-assignment-prefix-denies",

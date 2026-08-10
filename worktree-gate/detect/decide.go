@@ -200,16 +200,20 @@ func decideBash(lstat LstatFunc, readFile ReadFileFunc, verbs Verbs, verbsErr er
 
 // scanBash walks a command's pieces the way ClassifyBash does -- including
 // SC16's recursion into decomposable interiors and here-document bodies --
-// but layers two per-piece rules ahead of the class tally. SC15's
-// provisioned-CLI allowance, evaluated FIRST and only at the top level,
-// exempts a qualifying piece from both the tally and the named-path rule
-// (so `worktree add <primary>/…` is not denied by the very rule shipped
-// alongside it). SC20's named-path rule then denies a write-class piece that
-// names a path resolving into a primary checkout, however that path is
-// spelled. It returns the strictest class over the non-exempt pieces and the
-// first named-path denial found; unlike ClassifyBash it does not stop at the
-// first write, since a later piece may name a primary-checkout path the rule
-// must still catch (the allowance is per piece, never per command).
+// but layers SC15's two provisioned-CLI allowances and SC20's named-path rule
+// onto the class tally. The write allowance (sc15Exempt), evaluated FIRST and
+// only at the top level, exempts a qualifying landing-write piece from both the
+// tally and the named-path rule (so `worktree add <primary>/…` is not denied by
+// the very rule shipped alongside it). The read allowance (sc15ReadAllowed) is
+// applied instead only where a piece would otherwise be ClassUncertain -- after
+// classifyPiece has resolved any file-opening redirect to write -- reclassifying
+// the CLI's one read verb (worktree list) as read rather than waiving any rule.
+// SC20's named-path rule then denies a write-class piece that names a path
+// resolving into a primary checkout, however that path is spelled. It returns
+// the strictest class over the non-exempt pieces and the first named-path denial
+// found; unlike ClassifyBash it does not stop at the first write, since a later
+// piece may name a primary-checkout path the rule must still catch (the
+// allowances are per piece, never per command).
 func scanBash(lstat LstatFunc, readFile ReadFileFunc, verbs Verbs, sc15Path, sc15Digest, command, cwd string, cwdUnresolvable bool, depth int) (BashClass, *Decision) {
 	worst := ClassRead
 	for _, p := range decompose(command) {
@@ -224,6 +228,17 @@ func scanBash(lstat LstatFunc, readFile ReadFileFunc, verbs Verbs, sc15Path, sc1
 		exempt := depth == 0 && sc15Exempt(readFile, sc15Path, sc15Digest, p)
 		if !exempt {
 			pc := classifyPiece(verbs, p)
+			if pc == ClassUncertain && depth == 0 &&
+				sc15ReadAllowed(readFile, sc15Path, sc15Digest, p) {
+				// SC15's read allowance: the digest-verified CLI's one read verb
+				// (worktree list) writes nothing, so a piece that would otherwise
+				// fail closed as ClassUncertain reads instead. Evaluated only
+				// here, after classifyPiece has already resolved a file-opening
+				// output redirect to ClassWrite, so `worktree list > <primary>/f`
+				// is caught by the class tally and the named-path rule below
+				// rather than read away into a primary checkout.
+				pc = ClassRead
+			}
 			if pc == ClassWrite {
 				if d := namedPathDenial(lstat, readFile, p, cwd, cwdUnresolvable); d != nil {
 					return ClassWrite, d
@@ -745,40 +760,82 @@ func outputRedirectTargets(raw string) []string {
 	return targets
 }
 
-// sc15Exempt reports whether a top-level piece is SC15's sanctioned landing
-// invocation: its leading token is the argv-supplied provisioned binary path,
-// the binary at that path re-hashes to the argv-supplied expected digest, its
-// verb is one of the three landing verbs, and it carries no repo-retargeting
-// flag and no redirect that opens a file. A bare file-descriptor duplication
-// (2>&1) opens nothing and so does not void the allowance -- the common
-// spelling of a landing call must not be denied for merging its streams.
-// The allowance is keyed on BINARY IDENTITY, not a command
-// word, so a bare/relative/PATH-resolved name, a wrong digest, or a missing
-// argv parameter all fall through to the fail-closed verdict.
-func sc15Exempt(readFile ReadFileFunc, verifiedPath, expectedDigest string, p piece) bool {
+// sc15Identity reports whether a top-level piece is an invocation of SC15's
+// digest-verified provisioned CLI over a channel the shell cannot use to
+// smuggle a write past it: its leading token is the argv-supplied provisioned
+// binary path, the binary at that path re-hashes to the argv-supplied expected
+// digest, and it opens no file -- no redirect that opens a path in either
+// direction, no here-document. A bare file-descriptor duplication (2>&1) opens
+// nothing and so does not void identity, the common spelling of a landing call.
+// Identity is keyed on BINARY IDENTITY, never a command word or basename, so a
+// bare/relative/PATH-resolved name, a wrong digest, an unreadable binary, or a
+// missing argv parameter all fall through to the fail-closed verdict. On a
+// match it returns the tokens after the path so a caller can apply its own verb
+// policy; ok is false when identity does not hold. This is the shared half of
+// both SC15 allowances -- the write exemption (sc15Exempt) and the read
+// reclassification (sc15ReadAllowed) layer their own verb policy behind it.
+func sc15Identity(readFile ReadFileFunc, verifiedPath, expectedDigest string, p piece) (args []string, ok bool) {
 	expected := strings.ToLower(strings.TrimSpace(expectedDigest))
 	if verifiedPath == "" || expected == "" {
-		return false // both parameters arrive as argv; absence of either denies
+		return nil, false // both parameters arrive as argv; absence of either denies
 	}
 	if p.openingRedirect || len(p.heredocs) > 0 {
-		return false // an opening redirect on the CLI piece is a smuggled write, not the allowance
+		return nil, false // a file-opening redirect is the shell's write, not the CLI's
 	}
 	toks := shellTokens(p.argv)
 	for i, tok := range toks {
 		toks[i] = stripQuotes(tok)
 	}
 	if len(toks) < 2 || toks[0] != verifiedPath {
-		return false
-	}
-	if !sc15VerbAllowed(toks[1:]) || sc15Retargets(toks[1:]) {
-		return false
+		return nil, false
 	}
 	b, err := readFile(verifiedPath)
 	if err != nil {
-		return false // cannot re-verify the binary's identity: not the allowance
+		return nil, false // cannot re-verify the binary's identity: not the CLI
 	}
 	sum := sha256.Sum256(b)
-	return hex.EncodeToString(sum[:]) == expected
+	if hex.EncodeToString(sum[:]) != expected {
+		return nil, false
+	}
+	return toks[1:], true
+}
+
+// sc15Exempt reports whether a top-level piece is SC15's sanctioned landing
+// WRITE invocation: it clears the shared identity check and its verb is one of
+// the three landing verbs (merge, push, worktree add) carrying no
+// repo-retargeting flag -- the sanctioned channel acts on the repo it is invoked
+// in, never one it is pointed at. An exempt piece is waived from both the class
+// tally and the named-path rule, so `worktree add <primary>/…` is not denied by
+// the very rule shipped alongside it.
+func sc15Exempt(readFile ReadFileFunc, verifiedPath, expectedDigest string, p piece) bool {
+	args, ok := sc15Identity(readFile, verifiedPath, expectedDigest, p)
+	if !ok {
+		return false
+	}
+	return sc15VerbAllowed(args) && !sc15Retargets(args)
+}
+
+// sc15ReadAllowed reports whether a top-level piece is the digest-verified CLI's
+// one READ verb, worktree list. It shares sc15Identity with the write allowance
+// but not its verb policy: a read verb writes nothing and names no repo it could
+// be retargeted onto, so a --repo/--config flag does not void it (retargeting is
+// only the write channel's concern). Unlike the write allowance it waives no
+// rule -- the caller applies it only where a piece would otherwise be
+// ClassUncertain, reclassifying it read.
+func sc15ReadAllowed(readFile ReadFileFunc, verifiedPath, expectedDigest string, p piece) bool {
+	args, ok := sc15Identity(readFile, verifiedPath, expectedDigest, p)
+	if !ok {
+		return false
+	}
+	return sc15ReadVerb(args)
+}
+
+// sc15ReadVerb reports whether the tokens after the binary name the CLI's one
+// read verb, `worktree list`. A bare `worktree`, any other worktree subcommand,
+// and every other verb are not reads. Trailing flags and operands do not
+// matter: the verb writes nothing however it is spelled.
+func sc15ReadVerb(args []string) bool {
+	return len(args) >= 2 && args[0] == "worktree" && args[1] == "list"
 }
 
 // sc15VerbAllowed reports whether the tokens after the binary name one of the

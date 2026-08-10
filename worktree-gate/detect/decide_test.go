@@ -1,6 +1,7 @@
 package detect
 
 import (
+	"encoding/hex"
 	"errors"
 	"testing"
 )
@@ -179,5 +180,129 @@ func TestDecide_Write_TrackingDocExempt_BasenameNotInSet_Denied(t *testing.T) {
 	})
 	if !d.Deny {
 		t.Fatal("expected deny: notes.md is not in the tracking-doc set")
+	}
+}
+
+// -- SC15 read allowance (A6): the digest-verified provisioned CLI's one read
+// verb, `worktree list`, is reclassified read where it would otherwise fail
+// closed as ClassUncertain, so it is allowed from a primary checkout. It shares
+// the identity check with the write allowance but not its retarget policy, and
+// voids on any file-opening redirect or here-document.
+
+const (
+	sc15Bin        = "/plugin-data/bin/git-tools"
+	sc15BinContent = "PROVISIONED-CLI-BYTES"
+)
+
+// sc15Argv resolves the corpus-style argv sentinels ("" => correct value,
+// "omit" => empty parameter, "wrong" => a valid-but-mismatched digest, else a
+// literal) so a case can drive the identity inputs off argv alone.
+func sc15Argv(pathSel, digestSel, correctDigest string) (path, digest string) {
+	path = sc15Bin
+	switch pathSel {
+	case "omit":
+		path = ""
+	case "":
+	default:
+		path = pathSel
+	}
+	digest = correctDigest
+	switch digestSel {
+	case "omit":
+		digest = ""
+	case "wrong":
+		digest = "0000000000000000000000000000000000000000000000000000000000000000"
+	case "":
+	default:
+		digest = digestSel
+	}
+	return path, digest
+}
+
+func TestDecide_Bash_SC15ReadAllowance(t *testing.T) {
+	v := testVerbs(t)
+	correctDigest := hex.EncodeToString(sha256Sum(sc15BinContent))
+
+	cases := []struct {
+		name          string
+		command       string
+		pathSel       string
+		digestSel     string
+		unreadableBin bool
+		wantDeny      bool
+	}{
+		{name: "bare-worktree-list-allowed", command: sc15Bin + " worktree list"},
+		{name: "repo-flag-does-not-void-read-allowed", command: sc15Bin + " worktree list --repo /other"},
+		{name: "glued-config-flag-does-not-void-read-allowed", command: sc15Bin + " worktree list --config=/other"},
+
+		{name: "wrong-digest-denies", command: sc15Bin + " worktree list", digestSel: "wrong", wantDeny: true},
+		{name: "empty-path-argv-denies", command: sc15Bin + " worktree list", pathSel: "omit", wantDeny: true},
+		{name: "empty-digest-argv-denies", command: sc15Bin + " worktree list", digestSel: "omit", wantDeny: true},
+		{name: "bare-name-denies", command: "git-tools worktree list", wantDeny: true},
+		{name: "relative-name-denies", command: "./git-tools worktree list", wantDeny: true},
+		{name: "unreadable-binary-denies", command: sc15Bin + " worktree list", unreadableBin: true, wantDeny: true},
+		{name: "output-redirect-into-primary-denies", command: sc15Bin + " worktree list > /repo/tracked.md", wantDeny: true},
+		{name: "input-redirect-voids-read-denies", command: sc15Bin + " worktree list < /repo/somefile", wantDeny: true},
+		{name: "here-document-voids-read-denies", command: sc15Bin + " worktree list <<EOF\nx\nEOF", wantDeny: true},
+		{name: "worktree-no-subverb-denies", command: sc15Bin + " worktree", wantDeny: true},
+		{name: "worktree-prune-not-read-denies", command: sc15Bin + " worktree prune", wantDeny: true},
+		{name: "scan-not-read-denies", command: sc15Bin + " scan", wantDeny: true},
+		{name: "resign-not-read-denies", command: sc15Bin + " resign --apply", wantDeny: true},
+		{name: "command-substituted-list-at-depth-not-zero-denies", command: sc15Bin + " worktree list $(" + sc15Bin + " worktree list)", wantDeny: true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			fs := newFakeFS().dir("/repo/.git").file("/repo/tracked.md", "x\n")
+			if c.unreadableBin {
+				fs.errAt(sc15Bin, errors.New("permission denied"))
+			} else {
+				fs.file(sc15Bin, sc15BinContent)
+			}
+			path, digest := sc15Argv(c.pathSel, c.digestSel, correctDigest)
+			d := Decide(fs.lstat, fs.readFile, v, nil, TrackingDocs{}, nil, Input{
+				ToolName: "Bash", CWD: "/repo", Command: c.command,
+				ProvisionedBinPath: path, ProvisionedBinDigest: digest,
+			})
+			if d.Deny != c.wantDeny {
+				t.Errorf("Decide(cmd=%q) deny=%v, want %v (reason=%q)", c.command, d.Deny, c.wantDeny, d.Reason)
+			}
+		})
+	}
+}
+
+// TestDecide_Bash_SC15WriteAllowance_Unchanged pins that splitting the identity
+// half out of sc15Exempt left the write allowance behaviorally identical: the
+// three landing verbs are still allowed from a primary checkout (worktree add
+// still waived from the named-path rule even naming a primary path), resign is
+// still not a landing verb, and all four retarget spellings still void it.
+func TestDecide_Bash_SC15WriteAllowance_Unchanged(t *testing.T) {
+	v := testVerbs(t)
+	correctDigest := hex.EncodeToString(sha256Sum(sc15BinContent))
+
+	cases := []struct {
+		name     string
+		command  string
+		wantDeny bool
+	}{
+		{name: "merge-allowed", command: sc15Bin + " merge main"},
+		{name: "push-allowed", command: sc15Bin + " push"},
+		{name: "worktree-add-names-primary-path-allowed", command: sc15Bin + " worktree add /repo/wt2 main"},
+		{name: "resign-not-landing-denies", command: sc15Bin + " resign --apply", wantDeny: true},
+		{name: "merge-repo-spaced-denies", command: sc15Bin + " merge --repo /other main", wantDeny: true},
+		{name: "merge-config-spaced-denies", command: sc15Bin + " merge --config /other main", wantDeny: true},
+		{name: "merge-repo-glued-denies", command: sc15Bin + " merge --repo=/other main", wantDeny: true},
+		{name: "merge-config-glued-denies", command: sc15Bin + " merge --config=/other main", wantDeny: true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			fs := newFakeFS().dir("/repo/.git").file(sc15Bin, sc15BinContent)
+			d := Decide(fs.lstat, fs.readFile, v, nil, TrackingDocs{}, nil, Input{
+				ToolName: "Bash", CWD: "/repo", Command: c.command,
+				ProvisionedBinPath: sc15Bin, ProvisionedBinDigest: correctDigest,
+			})
+			if d.Deny != c.wantDeny {
+				t.Errorf("Decide(cmd=%q) deny=%v, want %v (reason=%q)", c.command, d.Deny, c.wantDeny, d.Reason)
+			}
+		})
 	}
 }
