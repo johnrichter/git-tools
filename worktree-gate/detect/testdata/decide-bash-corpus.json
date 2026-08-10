@@ -415,6 +415,246 @@
       "cwd": "/repo/wt",
       "err_at": "/repo/wt/sub/.git",
       "want_deny": true
+    },
+    {
+      "name": "git-leading-dashC-read-classified-allowed-at-primary",
+      "command": "git -C /repo status",
+      "cwd": "/repo",
+      "want_deny": false
+    },
+    {
+      "name": "git-leading-dashC-write-classified-denied-at-primary",
+      "command": "git -C /repo commit -m x",
+      "cwd": "/repo",
+      "want_deny": true
+    },
+    {
+      "name": "git-merge-base-is-read-allowed-at-primary",
+      "command": "git merge-base main feature",
+      "cwd": "/repo",
+      "want_deny": false
+    },
+    {
+      "name": "git-merge-is-write-denied-at-primary",
+      "command": "git merge main",
+      "cwd": "/repo",
+      "want_deny": true
+    },
+    {
+      "name": "git-remote-bare-read-allowed",
+      "command": "git remote",
+      "cwd": "/repo",
+      "want_deny": false
+    },
+    {
+      "name": "git-remote-verbose-read-allowed",
+      "command": "git remote -v",
+      "cwd": "/repo",
+      "want_deny": false
+    },
+    {
+      "name": "git-remote-show-read-allowed",
+      "command": "git remote show origin",
+      "cwd": "/repo",
+      "want_deny": false
+    },
+    {
+      "name": "git-remote-add-write-denied",
+      "command": "git remote add origin https://example.com/x.git",
+      "cwd": "/repo",
+      "want_deny": true
+    },
+    {
+      "name": "git-branch-bare-read-allowed",
+      "command": "git branch",
+      "cwd": "/repo",
+      "want_deny": false
+    },
+    {
+      "name": "git-branch-all-read-allowed",
+      "command": "git branch -a",
+      "cwd": "/repo",
+      "want_deny": false
+    },
+    {
+      "name": "git-branch-remotes-read-allowed",
+      "command": "git branch -r",
+      "cwd": "/repo",
+      "want_deny": false
+    },
+    {
+      "name": "git-branch-verbose-read-allowed",
+      "command": "git branch -v",
+      "cwd": "/repo",
+      "want_deny": false
+    },
+    {
+      "name": "git-branch-list-read-allowed",
+      "command": "git branch --list",
+      "cwd": "/repo",
+      "want_deny": false
+    },
+    {
+      "name": "git-branch-show-current-read-allowed",
+      "command": "git branch --show-current",
+      "cwd": "/repo",
+      "want_deny": false
+    },
+    {
+      "name": "git-branch-contains-read-allowed",
+      "command": "git branch --contains HEAD",
+      "cwd": "/repo",
+      "want_deny": false
+    },
+    {
+      "name": "git-branch-force-delete-write-denied",
+      "command": "git branch -D feature",
+      "cwd": "/repo",
+      "want_deny": true
+    },
+    {
+      "name": "git-branch-delete-write-denied-fb4",
+      "command": "git branch -d feature",
+      "cwd": "/repo",
+      "want_deny": true
+    },
+    {
+      "name": "git-branch-create-operand-write-denied",
+      "command": "git branch feature",
+      "cwd": "/repo",
+      "want_deny": true
+    },
+    {
+      "name": "git-tag-bare-read-allowed",
+      "command": "git tag",
+      "cwd": "/repo",
+      "want_deny": false
+    },
+    {
+      "name": "git-tag-list-pattern-read-allowed",
+      "command": "git tag -l 'v*'",
+      "cwd": "/repo",
+      "want_deny": false
+    },
+    {
+      "name": "git-tag-annotations-read-allowed",
+      "command": "git tag -n",
+      "cwd": "/repo",
+      "want_deny": false
+    },
+    {
+      "name": "git-tag-verify-is-read-allowed",
+      "command": "git tag -v v1.0",
+      "cwd": "/repo",
+      "want_deny": false
+    },
+    {
+      "name": "git-tag-delete-write-denied",
+      "command": "git tag -d v1.0",
+      "cwd": "/repo",
+      "want_deny": true
+    },
+    {
+      "name": "git-tag-create-operand-write-denied",
+      "command": "git tag v1.0",
+      "cwd": "/repo",
+      "want_deny": true
+    },
+    {
+      "name": "git-worktree-list-read-allowed",
+      "command": "git worktree list",
+      "cwd": "/repo",
+      "want_deny": false
+    },
+    {
+      "name": "git-worktree-add-write-denied",
+      "command": "git worktree add wtnew main",
+      "cwd": "/repo",
+      "want_deny": true
+    },
+    {
+      "name": "git-worktree-remove-write-denied",
+      "command": "git worktree remove wt",
+      "cwd": "/repo",
+      "want_deny": true
+    },
+    {
+      "name": "git-worktree-prune-write-denied",
+      "command": "git worktree prune",
+      "cwd": "/repo",
+      "want_deny": true
+    },
+    {
+      "name": "git-config-get-read-allowed",
+      "command": "git config --get user.name",
+      "cwd": "/repo",
+      "want_deny": false
+    },
+    {
+      "name": "git-config-list-read-allowed",
+      "command": "git config --list",
+      "cwd": "/repo",
+      "want_deny": false
+    },
+    {
+      "name": "git-config-positional-set-write-denied",
+      "command": "git config user.name newvalue",
+      "cwd": "/repo",
+      "want_deny": true
+    },
+    {
+      "name": "git-config-unset-write-denied",
+      "command": "git config --unset user.name",
+      "cwd": "/repo",
+      "want_deny": true
+    },
+    {
+      "name": "git-config-add-write-denied",
+      "command": "git config --add remote.origin.url x",
+      "cwd": "/repo",
+      "want_deny": true
+    },
+    {
+      "name": "git-config-get-regexp-still-denied",
+      "command": "git config --get-regexp ^user",
+      "cwd": "/repo",
+      "want_deny": true
+    },
+    {
+      "name": "git-config-get-all-still-denied",
+      "command": "git config --get-all user.name",
+      "cwd": "/repo",
+      "want_deny": true
+    },
+    {
+      "name": "git-reflog-show-read-allowed",
+      "command": "git reflog show",
+      "cwd": "/repo",
+      "want_deny": false
+    },
+    {
+      "name": "git-reflog-expire-write-denied",
+      "command": "git reflog expire --all",
+      "cwd": "/repo",
+      "want_deny": true
+    },
+    {
+      "name": "git-stash-write-denied",
+      "command": "git stash",
+      "cwd": "/repo",
+      "want_deny": true
+    },
+    {
+      "name": "git-stash-list-still-write-denied",
+      "command": "git stash list",
+      "cwd": "/repo",
+      "want_deny": true
+    },
+    {
+      "name": "git-stash-pop-write-denied",
+      "command": "git stash pop",
+      "cwd": "/repo",
+      "want_deny": true
     }
   ]
 }

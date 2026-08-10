@@ -451,6 +451,235 @@ func gitSubcommand(args []string) (string, []string) {
 	return "", nil
 }
 
+// gitReadSubcommands and gitWriteSubcommands are the plain git verbs whose
+// class is fixed by the subcommand alone. Matching is on the exact subcommand
+// token gitSubcommand isolates -- not a loose prefix -- so merge-base is a read
+// even though merge is a write, and a leading global option never changes the
+// verdict. remote, branch, tag, worktree, config, reflog, and stash are not
+// here: each mixes read and write forms and is split on its own operands below.
+var gitReadSubcommands = map[string]bool{
+	"status": true, "diff": true, "log": true, "show": true, "fetch": true,
+	"blame": true, "describe": true, "rev-parse": true, "ls-files": true,
+	"ls-remote": true, "ls-tree": true, "cat-file": true, "grep": true,
+	"merge-base": true,
+}
+
+var gitWriteSubcommands = map[string]bool{
+	"commit": true, "add": true, "rm": true, "mv": true, "merge": true,
+	"rebase": true, "checkout": true, "switch": true, "reset": true,
+	"apply": true, "am": true, "cherry-pick": true, "revert": true,
+	"init": true, "clone": true, "push": true, "pull": true,
+	"submodule": true, "lfs": true,
+}
+
+// classifyGit classifies a `git …` invocation from the tokens after the `git`
+// word. It skips git's leading global options via gitSubcommand so a verb
+// classifies identically with or without one, matches the plain read/write
+// sets on the exact subcommand, and routes a verb that mixes read and write
+// forms to its own splitter. An unrecognized subcommand -- or an unrecognized
+// form of a split verb -- classifies write, the conservative default.
+func classifyGit(args []string) BashClass {
+	sub, rest := gitSubcommand(args)
+	sub = strings.ToLower(sub)
+	switch {
+	case gitReadSubcommands[sub]:
+		return ClassRead
+	case gitWriteSubcommands[sub]:
+		return ClassWrite
+	}
+	switch sub {
+	case "remote":
+		return classifyGitRemote(rest)
+	case "branch":
+		return classifyGitBranch(rest)
+	case "tag":
+		return classifyGitTag(rest)
+	case "worktree":
+		return classifyGitSubSelect(rest, gitWorktreeReadSubcommands)
+	case "reflog":
+		return classifyGitSubSelect(rest, gitReflogReadSubcommands)
+	case "config":
+		return classifyGitConfig(rest)
+	case "stash":
+		// Every stash form -- including bare `git stash`, `list`, and `show`
+		// -- is treated as a write and denied outside a worktree.
+		return ClassWrite
+	}
+	return ClassWrite
+}
+
+// classifyGitRemote reads bare `git remote`, its verbose listing, and the show
+// and get-url subcommands; every mutating subcommand (add, remove, rename,
+// set-*, prune, update) and any unrecognized form is a write.
+func classifyGitRemote(rest []string) BashClass {
+	if len(rest) == 0 {
+		return ClassRead
+	}
+	switch strings.ToLower(rest[0]) {
+	case "-v", "--verbose", "show", "get-url":
+		return ClassRead
+	}
+	return ClassWrite
+}
+
+// gitBranchListFlags and gitTagListFlags force git into list mode: with one
+// present a positional operand is a pattern or value, not a new ref, so the
+// verb reads even alongside an operand (`git branch --contains <commit>`,
+// `git tag -l '<pattern>'`, `git tag -v <tag>`). git's -a/-r reject an operand
+// outright, so they read too -- git refuses the create, nothing is written.
+var gitBranchListFlags = map[string]bool{
+	"-a": true, "--all": true, "-r": true, "--remotes": true,
+	"-l": true, "--list": true, "--show-current": true,
+	"--contains": true, "--no-contains": true,
+	"--merged": true, "--no-merged": true, "--points-at": true,
+}
+
+var gitTagListFlags = map[string]bool{
+	"-l": true, "--list": true, "--contains": true, "--no-contains": true,
+	"--points-at": true, "--merged": true, "--no-merged": true,
+	"-v": true, "--verify": true,
+}
+
+// gitBranchModifierFlags and gitTagModifierFlags tune a listing's output but do
+// NOT force list mode: `git branch -v` lists, yet `git branch -v <name>` still
+// CREATES <name> (verified against git; likewise --sort/--format/--column). So
+// a modifier flag reads on its own but never neutralizes an operand -- an
+// operand alongside only modifier flags is a create (write).
+var gitBranchModifierFlags = map[string]bool{
+	"-v": true, "-vv": true, "--verbose": true, "--format": true, "--sort": true,
+}
+
+var gitTagModifierFlags = map[string]bool{
+	"--sort": true, "--format": true, "--column": true,
+}
+
+// classifyGitBranch splits git branch, whose listing and mutating forms share a
+// verb; see classifyGitRefEditFn for the operand rule.
+func classifyGitBranch(rest []string) BashClass {
+	return classifyGitRefEditFn(rest,
+		func(tok string) bool { return gitBranchListFlags[gitFlagKey(tok)] },
+		func(tok string) bool { return gitBranchModifierFlags[gitFlagKey(tok)] },
+	)
+}
+
+// classifyGitTag splits git tag. It adds -n/-n<num> (show annotation lines,
+// which force list mode) to tag's list-forcing flags; -v verifies a signature
+// (a read that names an existing tag), never "verbose".
+func classifyGitTag(rest []string) BashClass {
+	isListForcing := func(tok string) bool {
+		if gitTagListFlags[gitFlagKey(tok)] {
+			return true
+		}
+		if strings.HasPrefix(tok, "-n") {
+			for _, c := range tok[2:] {
+				if c < '0' || c > '9' {
+					return false
+				}
+			}
+			return true
+		}
+		return false
+	}
+	return classifyGitRefEditFn(rest, isListForcing,
+		func(tok string) bool { return gitTagModifierFlags[gitFlagKey(tok)] })
+}
+
+// classifyGitRefEditFn classifies git branch / git tag from their operands. A
+// mutating or unrecognized flag (delete/move/copy/annotate/sign/config or an
+// unknown one) is a write and dominates. A positional operand creates a ref --
+// a write -- UNLESS a list-forcing flag is present, which turns the operand
+// into a pattern or value (a read). A modifier flag (-v/--sort/--format) reads
+// on its own but does not neutralize an operand. A bare invocation lists.
+func classifyGitRefEditFn(rest []string, isListForcing, isModifier func(string) bool) BashClass {
+	if len(rest) == 0 {
+		return ClassRead
+	}
+	sawListForcing, sawWriteFlag, sawOperand := false, false, false
+	for _, tok := range rest {
+		switch {
+		case tok == "--":
+			continue
+		case isFlagToken(tok):
+			switch {
+			case isListForcing(tok):
+				sawListForcing = true
+			case isModifier(tok):
+				// reads alone, but does not make an operand a listing
+			default:
+				sawWriteFlag = true // delete/move/copy/annotate/sign/unknown
+			}
+		default:
+			sawOperand = true // a positional operand
+		}
+	}
+	switch {
+	case sawWriteFlag:
+		// A mutating or unrecognized flag dominates any listing flag present.
+		return ClassWrite
+	case sawOperand && !sawListForcing:
+		// A create -- `git branch <name>`, `git branch -v <name>`, `git tag <t>`
+		// -- since no list-forcing flag turned the operand into a pattern/value.
+		return ClassWrite
+	default:
+		return ClassRead
+	}
+}
+
+var gitWorktreeReadSubcommands = map[string]bool{"list": true}
+var gitReflogReadSubcommands = map[string]bool{"show": true}
+
+// classifyGitSubSelect reads only the listed subcommands of a verb whose other
+// forms mutate (git worktree, git reflog); every other form, including bare,
+// is a write.
+func classifyGitSubSelect(rest []string, read map[string]bool) BashClass {
+	if read[strings.ToLower(firstOperand(rest))] {
+		return ClassRead
+	}
+	return ClassWrite
+}
+
+// classifyGitConfig reads only --get, --list, and -l (exact matches, so
+// --get-regexp and --get-all fall through to write); every other form --
+// setting, unsetting, adding, or a positional set -- is a write.
+func classifyGitConfig(rest []string) BashClass {
+	for _, tok := range rest {
+		switch gitFlagKey(tok) {
+		case "--get", "--list", "-l":
+			return ClassRead
+		}
+	}
+	return ClassWrite
+}
+
+// firstOperand returns the first non-flag token in args (skipping a bare "--"
+// separator), or "" when there is none.
+func firstOperand(args []string) string {
+	for _, a := range args {
+		if a == "--" || isFlagToken(a) {
+			continue
+		}
+		return a
+	}
+	return ""
+}
+
+// isFlagToken reports whether tok is an option flag (a leading "-", but not a
+// bare "-" stdin operand).
+func isFlagToken(tok string) bool {
+	return strings.HasPrefix(tok, "-") && tok != "-"
+}
+
+// gitFlagKey reduces a long option to its name by dropping a "=value" suffix
+// (`--sort=-committerdate` -> `--sort`); a short flag is returned unchanged.
+func gitFlagKey(tok string) string {
+	if strings.HasPrefix(tok, "--") {
+		if i := strings.IndexByte(tok, '='); i >= 0 {
+			return tok[:i]
+		}
+	}
+	return tok
+}
+
 // outputRedirectTargets recovers the file-writing redirect targets from a raw
 // segment, using the same longest-first operator predicate and fd-dup
 // exclusion the decomposition applies, so `echo x>&2` yields no target while
