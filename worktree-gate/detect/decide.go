@@ -831,17 +831,19 @@ func sc15Identity(readFile ReadFileFunc, verifiedPath, expectedDigest string, p 
 
 // sc15Exempt reports whether a top-level piece is SC15's sanctioned landing
 // WRITE invocation: it clears the shared identity check and its verb is one of
-// the three landing verbs (merge, push, worktree add) carrying no
-// repo-retargeting flag -- the sanctioned channel acts on the repo it is invoked
-// in, never one it is pointed at. An exempt piece is waived from both the class
-// tally and the named-path rule, so `worktree add <primary>/…` is not denied by
-// the very rule shipped alongside it.
+// the four landing verbs (merge, push, worktree add, worktree remove) carrying
+// neither a repo-retargeting flag nor a cleanup-forcing --force -- the
+// sanctioned channel acts on the repo it is invoked in, never one it is pointed
+// at, and never destroys unseen state on a forced cleanup it was not asked to
+// prove safe. An exempt piece is waived from both the class tally and the
+// named-path rule, so `worktree add <primary>/…` is not denied by the very rule
+// shipped alongside it.
 func sc15Exempt(readFile ReadFileFunc, verifiedPath, expectedDigest string, p piece) bool {
 	args, ok := sc15Identity(readFile, verifiedPath, expectedDigest, p)
 	if !ok {
 		return false
 	}
-	return sc15VerbAllowed(args) && !sc15Retargets(args)
+	return sc15VerbAllowed(args) && !sc15Retargets(args) && !sc15ForcesCleanup(args)
 }
 
 // sc15ReadAllowed reports whether a top-level piece is the digest-verified CLI's
@@ -868,7 +870,9 @@ func sc15ReadVerb(args []string) bool {
 }
 
 // sc15VerbAllowed reports whether the tokens after the binary name one of the
-// three landing verbs -- merge, push, or worktree add. resign is deliberately
+// four landing verbs -- merge, push, worktree add, or worktree remove. worktree
+// remove is the sanctioned standalone worktree cleanup from a primary checkout;
+// it runs its own no-work-loss guard inside the CLI. resign is deliberately
 // excluded.
 func sc15VerbAllowed(args []string) bool {
 	if len(args) == 0 {
@@ -878,10 +882,39 @@ func sc15VerbAllowed(args []string) bool {
 	case "merge", "push":
 		return true
 	case "worktree":
-		return len(args) >= 2 && args[1] == "add"
+		return len(args) >= 2 && (args[1] == "add" || args[1] == "remove")
 	default:
 		return false
 	}
+}
+
+// sc15ForcesCleanup reports whether args are a cleanup-capable landing call --
+// merge, or worktree remove -- carrying a --force flag. Such a call would drive
+// the CLI's worktree cleanup past its own no-work-loss guard, destroying state
+// on a tree the gate cannot see, so the gate declines to SANCTION it from a
+// primary checkout the same way it declines a repo-retargeting flag: a forced
+// cleanup must be run deliberately, not auto-sanctioned. This is the gate's
+// refusal meaning of --force, kept distinct from the CLI's own --force, which
+// only OVERRIDES a cleanup refusal where the gate already permits the call.
+// worktree add's --force (reuse a branch, overwrite a path) is a different
+// concern and stays sanctioned.
+func sc15ForcesCleanup(args []string) bool {
+	cleanup := false
+	switch {
+	case len(args) >= 1 && args[0] == "merge":
+		cleanup = true
+	case len(args) >= 2 && args[0] == "worktree" && args[1] == "remove":
+		cleanup = true
+	}
+	if !cleanup {
+		return false
+	}
+	for _, a := range args {
+		if a == "--force" || strings.HasPrefix(a, "--force=") {
+			return true
+		}
+	}
+	return false
 }
 
 // sc15Retargets reports whether any token is a repo-retargeting flag, which

@@ -265,6 +265,12 @@ func TestWorktree_AddListRemove(t *testing.T) {
 		t.Fatalf("worktree list count=%v, want 2: %+v", r.Data["count"], r.Data)
 	}
 
+	// worktree remove now proves the work is safely landed before removing.
+	// review was created at HEAD and never diverged, so pointing its upstream
+	// at main gives the no-work-loss guard a resolvable landing target it clears
+	// cleanly -- all from local refs, no network.
+	runGit(t, dir, "branch", "--set-upstream-to=main", "review")
+
 	r, exit = runCLI(t, bin, "--repo", dir, "worktree", "remove", wtPath)
 	if r.Status != "success" || exit != 0 {
 		t.Fatalf("worktree remove: status=%s exit=%d: %+v", r.Status, exit, r)
