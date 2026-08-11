@@ -2,10 +2,10 @@ package detect
 
 import "testing"
 
-// TestSC15VerbAllowed_WorktreeRemoveSanctioned pins that worktree remove joins
-// the sanctioned landing verbs, that a bare worktree (no subverb) and every
-// non-landing verb still fall through, so sanctioning the standalone cleanup
-// opened exactly one new verb and nothing else.
+// TestSC15VerbAllowed_WorktreeRemoveSanctioned pins that worktree remove and
+// resign join the sanctioned landing verbs, that a bare worktree (no subverb)
+// and every non-landing verb still fall through, so sanctioning these two
+// standalone verbs opened exactly them and nothing else.
 func TestSC15VerbAllowed_WorktreeRemoveSanctioned(t *testing.T) {
 	cases := []struct {
 		name string
@@ -19,7 +19,7 @@ func TestSC15VerbAllowed_WorktreeRemoveSanctioned(t *testing.T) {
 		{"worktree-bare", []string{"worktree"}, false},
 		{"worktree-list-not-a-landing-verb", []string{"worktree", "list"}, false},
 		{"worktree-prune-not-sanctioned", []string{"worktree", "prune"}, false},
-		{"resign-excluded", []string{"resign", "main"}, false},
+		{"resign-sanctioned", []string{"resign", "main"}, true},
 		{"empty", nil, false},
 	}
 	for _, c := range cases {

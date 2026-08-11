@@ -831,8 +831,8 @@ func sc15Identity(readFile ReadFileFunc, verifiedPath, expectedDigest string, p 
 
 // sc15Exempt reports whether a top-level piece is SC15's sanctioned landing
 // WRITE invocation: it clears the shared identity check and its verb is one of
-// the four landing verbs (merge, push, worktree add, worktree remove) carrying
-// neither a repo-retargeting flag nor a cleanup-forcing --force -- the
+// the five landing verbs (merge, push, resign, worktree add, worktree remove)
+// carrying neither a repo-retargeting flag nor a cleanup-forcing --force -- the
 // sanctioned channel acts on the repo it is invoked in, never one it is pointed
 // at, and never destroys unseen state on a forced cleanup it was not asked to
 // prove safe. An exempt piece is waived from both the class tally and the
@@ -870,16 +870,17 @@ func sc15ReadVerb(args []string) bool {
 }
 
 // sc15VerbAllowed reports whether the tokens after the binary name one of the
-// four landing verbs -- merge, push, worktree add, or worktree remove. worktree
-// remove is the sanctioned standalone worktree cleanup from a primary checkout;
-// it runs its own no-work-loss guard inside the CLI. resign is deliberately
-// excluded.
+// five landing verbs -- merge, push, resign, worktree add, or worktree remove.
+// worktree remove is the sanctioned standalone worktree cleanup from a primary
+// checkout; it runs its own no-work-loss guard inside the CLI. resign is the
+// pre-landing re-signing step, and landing itself happens from the primary
+// checkout by design, so the sanctioned channel must be able to call it too.
 func sc15VerbAllowed(args []string) bool {
 	if len(args) == 0 {
 		return false
 	}
 	switch args[0] {
-	case "merge", "push":
+	case "merge", "push", "resign":
 		return true
 	case "worktree":
 		return len(args) >= 2 && (args[1] == "add" || args[1] == "remove")

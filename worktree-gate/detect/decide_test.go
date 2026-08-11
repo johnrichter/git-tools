@@ -247,7 +247,7 @@ func TestDecide_Bash_SC15ReadAllowance(t *testing.T) {
 		{name: "worktree-no-subverb-denies", command: sc15Bin + " worktree", wantDeny: true},
 		{name: "worktree-prune-not-read-denies", command: sc15Bin + " worktree prune", wantDeny: true},
 		{name: "scan-not-read-denies", command: sc15Bin + " scan", wantDeny: true},
-		{name: "resign-not-read-denies", command: sc15Bin + " resign --apply", wantDeny: true},
+		{name: "resign-not-read-but-write-allowed", command: sc15Bin + " resign --apply"},
 		{name: "command-substituted-list-at-depth-not-zero-denies", command: sc15Bin + " worktree list $(" + sc15Bin + " worktree list)", wantDeny: true},
 	}
 	for _, c := range cases {
@@ -272,9 +272,9 @@ func TestDecide_Bash_SC15ReadAllowance(t *testing.T) {
 
 // TestDecide_Bash_SC15WriteAllowance_Unchanged pins that splitting the identity
 // half out of sc15Exempt left the write allowance behaviorally identical: the
-// three landing verbs are still allowed from a primary checkout (worktree add
-// still waived from the named-path rule even naming a primary path), resign is
-// still not a landing verb, and all four retarget spellings still void it.
+// landing verbs are still allowed from a primary checkout (worktree add still
+// waived from the named-path rule even naming a primary path), resign joins
+// them as a landing verb, and all four retarget spellings still void it.
 func TestDecide_Bash_SC15WriteAllowance_Unchanged(t *testing.T) {
 	v := testVerbs(t)
 	correctDigest := hex.EncodeToString(sha256Sum(sc15BinContent))
@@ -287,7 +287,7 @@ func TestDecide_Bash_SC15WriteAllowance_Unchanged(t *testing.T) {
 		{name: "merge-allowed", command: sc15Bin + " merge main"},
 		{name: "push-allowed", command: sc15Bin + " push"},
 		{name: "worktree-add-names-primary-path-allowed", command: sc15Bin + " worktree add /repo/wt2 main"},
-		{name: "resign-not-landing-denies", command: sc15Bin + " resign --apply", wantDeny: true},
+		{name: "resign-landing-allowed", command: sc15Bin + " resign --apply"},
 		{name: "merge-repo-spaced-denies", command: sc15Bin + " merge --repo /other main", wantDeny: true},
 		{name: "merge-config-spaced-denies", command: sc15Bin + " merge --config /other main", wantDeny: true},
 		{name: "merge-repo-glued-denies", command: sc15Bin + " merge --repo=/other main", wantDeny: true},
