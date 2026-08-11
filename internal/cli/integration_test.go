@@ -69,7 +69,9 @@ func runGit(t *testing.T, dir string, args ...string) string {
 }
 
 // initRepo creates a scratch repo with one committed file on branch main,
-// signing disabled so tests run without a configured GPG/SSH signing key.
+// signing disabled so tests run without a configured GPG/SSH signing key. A
+// test of the merge verb uses signingRepo instead, which layers a real
+// ephemeral signing key over this — merge signs what it lands.
 func initRepo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -306,9 +308,12 @@ func TestWorktreeAdd_RelativePathIsCwdIndependent(t *testing.T) {
 	}
 }
 
+// The merge verb runs the signing gate on every merge, so its tests use the
+// signing fixture (see signingRepo): the gate finds every commit in range
+// already signed and leaves the branch tips these assertions name intact.
 func TestMerge_FastForward(t *testing.T) {
 	bin := buildCLI(t)
-	dir := initRepo(t)
+	dir := signingRepo(t)
 	runGit(t, dir, "branch", "feature")
 	runGit(t, dir, "checkout", "-q", "feature")
 	tip := commitFile(t, dir, "feature.txt", "feature\n", "feature work")
@@ -325,7 +330,7 @@ func TestMerge_FastForward(t *testing.T) {
 
 func TestMerge_ConflictingContent_IsConflict(t *testing.T) {
 	bin := buildCLI(t)
-	dir := initRepo(t)
+	dir := signingRepo(t)
 	runGit(t, dir, "branch", "feature")
 	commitFile(t, dir, "base.txt", "main change\n", "main changes base")
 	runGit(t, dir, "checkout", "-q", "feature")
