@@ -68,6 +68,31 @@ jobs:
           go build -trimpath -ldflags='-s -w' -o /dev/null ./cmd/git-tools
           go build -trimpath -ldflags='-s -w' -o /dev/null ./worktree-gate/detect/cmd/worktree-gate
 
+      # The merge verb's signing gate is only meaningful against real
+      # signatures, so this step proves the runner can make them and that the
+      # gate's tests actually ran. It fails rather than skips: a skipped
+      # signing test would silently drop the gate's coverage. The fixture signs
+      # with git's ssh format over a per-test ephemeral key, so the only
+      # provisioning a runner needs is ssh-keygen -- no keyring, no network,
+      # and no repository secret.
+      #
+      # -count=1 is load-bearing for the "can make them" half: setup-go
+      # restores the Go build cache, which holds test results too, so without
+      # it a green result from an earlier runner is replayed verbatim and the
+      # fixture never signs anything on this one.
+      - name: Commit-signing fixture runs (merge signing gate)
+        run: |
+          command -v ssh-keygen
+          if ! out="$(go test ./internal/cli -run TestMerge -count=1 -v 2>&1)"; then
+            printf '%s\n' "$out"
+            exit 1
+          fi
+          printf '%s\n' "$out"
+          if printf '%s\n' "$out" | grep -q -- '--- SKIP'; then
+            echo "a merge signing test skipped; the signing fixture must run in CI" >&2
+            exit 1
+          fi
+
       - name: go test
         run: go test ./...
 

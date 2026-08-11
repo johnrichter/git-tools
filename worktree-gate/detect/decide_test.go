@@ -3,6 +3,7 @@ package detect
 import (
 	"encoding/hex"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -104,6 +105,112 @@ func TestDecide_Bash_DegradedClassifierInPrimaryCheckout_DeniedFailClosed(t *tes
 	d := Decide(fs.lstat, fs.readFile, Verbs{}, verbsErr, TrackingDocs{}, nil, Input{ToolName: "Bash", CWD: "/repo", Command: "git commit -m x"})
 	if !d.Deny {
 		t.Fatal("expected deny: a degraded classifier artifact in a primary checkout could be masking a real write (fail closed, not fail open)")
+	}
+}
+
+// -- denial remedies (L1.22): every denial names a remedy this gate itself
+// permits from where the caller stands. The two literal pins below break
+// together in one edit, so they are spelled out rather than derived: the
+// working-directory leg keeps the worktree advice, while the named-target leg
+// must NOT repeat it -- creating a worktree of the caller's own repository does
+// nothing for a write aimed into a different one.
+
+const worktreeAdvice = "create one and retry"
+
+func TestDecide_Bash_WorkingDirectoryDenial_KeepsWorktreeAdvice(t *testing.T) {
+	fs := primaryFS()
+	v := testVerbs(t)
+	d := Decide(fs.lstat, fs.readFile, v, nil, TrackingDocs{}, nil, Input{ToolName: "Bash", CWD: "/repo", Command: "git commit -m x"})
+	if !d.Deny {
+		t.Fatal("expected deny for a write-classified Bash command in the primary checkout")
+	}
+	if !strings.Contains(d.Reason, worktreeAdvice) {
+		t.Errorf("working-directory denial %q must still name the worktree remedy %q", d.Reason, worktreeAdvice)
+	}
+}
+
+func TestDecide_Bash_NamedTargetDenial_DropsWorktreeAdvice(t *testing.T) {
+	fs := newFakeFS().dir("/repo/.git").dir("/other/.git")
+	v := testVerbs(t)
+	d := Decide(fs.lstat, fs.readFile, v, nil, TrackingDocs{}, nil, Input{ToolName: "Bash", CWD: "/repo", Command: "cp x /other/f"})
+	if !d.Deny {
+		t.Fatal("expected deny for a write naming a path inside another repository's primary checkout")
+	}
+	if strings.Contains(d.Reason, worktreeAdvice) {
+		t.Errorf("named-target denial %q must not name a remedy about the caller's own repository (%q)", d.Reason, worktreeAdvice)
+	}
+	if !strings.Contains(d.Reason, "worktree list") {
+		t.Errorf("named-target denial %q names no way to find a worktree of the containing repository", d.Reason)
+	}
+}
+
+// TestDecide_Bash_EveryCorpusDenial_NamesARemedy asserts what the corpus format
+// itself cannot: each denying case carries a non-empty remedy, that remedy also
+// closes the human-facing Reason, and no case offers the generic worktree advice
+// as its whole remedy -- it must come with a spelling the caller can run to find
+// a worktree. The remedy is read from Decision.Remedy rather than split back out
+// of Reason: Reason's situation half echoes the caller's command, which can
+// itself contain the " -- " separator, so any split of Reason is unreliable.
+func TestDecide_Bash_EveryCorpusDenial_NamesARemedy(t *testing.T) {
+	v := testVerbs(t)
+	correctDigest := hex.EncodeToString(sha256Sum(corpusBinContent))
+
+	for _, c := range loadDecideBashCorpus(t) {
+		if !c.WantDeny {
+			continue
+		}
+		t.Run(c.Name, func(t *testing.T) {
+			d := runDecideBashCase(t, v, correctDigest, c)
+			if strings.TrimSpace(d.Remedy) == "" {
+				t.Fatalf("Decide(cwd=%q, cmd=%q) denial %q carries no remedy", c.CWD, c.Command, d.Reason)
+			}
+			if !strings.HasSuffix(d.Reason, " -- "+d.Remedy) {
+				t.Errorf("Decide(cwd=%q, cmd=%q) Reason %q does not close with its remedy %q", c.CWD, c.Command, d.Reason, d.Remedy)
+			}
+			if strings.Contains(d.Remedy, worktreeAdvice) && !strings.Contains(d.Remedy, "worktree list") {
+				t.Errorf("Decide(cwd=%q, cmd=%q) remedy %q offers the generic worktree advice alone", c.CWD, c.Command, d.Remedy)
+			}
+		})
+	}
+}
+
+// TestRemedyConstants_AreRunnableAsSpelled pins the two properties a remedy's
+// TEXT must hold, which no per-case assertion covers because they are about how
+// the advice is spelled rather than which advice a leg picks:
+//
+//   - no remedy contains deny()'s " -- " join token, so Reason always closes
+//     with exactly the remedy;
+//   - no remedy offers a bare `git-tools <verb>` invocation. Both SC15
+//     allowances key on binary identity, so a bare command word fails
+//     sc15Identity and is denied from a primary checkout (corpus case
+//     sc15-worktree-list-bare-word-denies) -- advice this gate then denies is
+//     worse than no advice. A remedy naming the CLI must say to run it by its
+//     absolute provisioned path.
+//
+// The list is spelled out rather than derived: a new remedy constant must be
+// added here deliberately, which is the point.
+func TestRemedyConstants_AreRunnableAsSpelled(t *testing.T) {
+	remedies := map[string]string{
+		"remedyTargetRepoWorktree": remedyTargetRepoWorktree,
+		"remedyThisRepoWorktree":   remedyThisRepoWorktree,
+		"remedyRewordAsRead":       remedyRewordAsRead,
+		"remedyLiteralTarget":      remedyLiteralTarget,
+		"remedyStaticCWD":          remedyStaticCWD,
+		"remedyReportCWD":          remedyReportCWD,
+		"remedyReadablePath":       remedyReadablePath,
+		"remedyProveMembership":    remedyProveMembership,
+		"remedyRestoreVerbData":    remedyRestoreVerbData,
+		"remedyRestoreDocData":     remedyRestoreDocData,
+	}
+	for name, r := range remedies {
+		t.Run(name, func(t *testing.T) {
+			if strings.Contains(r, " -- ") {
+				t.Errorf("remedy %q contains deny()'s join token, so Reason no longer closes with exactly the remedy", r)
+			}
+			if strings.Contains(r, "`git-tools ") {
+				t.Errorf("remedy %q offers a bare `git-tools <verb>` spelling, which fails SC15's identity check and is denied from a primary checkout; name the absolute provisioned path instead", r)
+			}
+		})
 	}
 }
 

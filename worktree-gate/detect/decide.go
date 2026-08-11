@@ -41,6 +41,13 @@ type Decision struct {
 	// Deny blocks the call. Reason is the operator-facing explanation.
 	Deny   bool
 	Reason string
+	// Remedy is the machine-recoverable remedy clause carried on its own,
+	// not parsed back out of Reason. Reason still ends with this same text
+	// after a " -- " separator for human display, but that separator can also
+	// appear inside the caller-controlled command text Reason echoes (the
+	// POSIX "--" end-of-options marker), so no consumer can split Reason to
+	// recover the remedy reliably. Non-empty on every denial built by deny().
+	Remedy string
 	// Degraded is non-empty when a data-artifact defect was detected but
 	// didn't change this Decision -- the call was already resolved on its
 	// own merits (e.g. confirmed inside a worktree) without needing the
@@ -50,6 +57,44 @@ type Decision struct {
 	// defect that could have changed the verdict denies instead (fail
 	// closed), it never fails open.
 	Degraded string
+}
+
+// The remedy clauses every denial ends with. A remedy names only what this gate
+// itself permits from where the caller stands: the listing verbs are allowed
+// from a primary checkout (plain `git worktree list` by classification, the
+// provisioned CLI's `worktree list` by its read allowance, which a --repo flag
+// does not void), and the provisioned CLI's `worktree add` is sanctioned from a
+// primary checkout of the repository it creates the worktree in. So a creation
+// verb is offered only for the repository the caller already stands in --
+// pointing the sanctioned channel at another repository takes a --repo flag,
+// which voids the allowance and would leave the caller following advice this
+// gate then denies. Both CLI allowances are keyed on binary identity, so a
+// remedy that names the CLI must also say to run it by its absolute provisioned
+// path: a bare `git-tools worktree list` fails sc15Identity and is denied from a
+// primary checkout, which is the same trap spelled a different way.
+//
+// A remedy must not contain the " -- " token deny() joins on, so Reason's
+// closing clause stays exactly the remedy.
+const (
+	remedyTargetRepoWorktree = "write to a path inside a worktree of the repository that contains this target instead; the provisioned `git-tools`, run by its absolute provisioned path, lists that repository's worktrees with `worktree list --repo <dir>`"
+	remedyThisRepoWorktree   = "run it from a worktree of this repository: `git worktree list` shows the ones that already exist, and the provisioned `git-tools`, run by its absolute provisioned path, may `worktree add <path> <branch>` from here, so create one and retry"
+	remedyRewordAsRead       = "if it only reads, reword it as a command this gate recognizes as a read; if it does write, run it from a worktree"
+	remedyLiteralTarget      = "respell the target as a literal path, with no variable, glob, or `~` for the shell to expand, so the gate can resolve where the write lands"
+	remedyStaticCWD          = "prefix the command with a literal `cd <worktree> &&`, with no variable or glob in that path, so the gate can see where it runs"
+	remedyReportCWD          = "rerun it with a working directory reported, or prefix it with a literal `cd <worktree> &&` naming the worktree to run in"
+	remedyReadablePath       = "clear the filesystem error that path reports, or name a path inside a worktree instead"
+	remedyProveMembership    = "clear whatever leaves that `.git` entry unreadable, or work in a worktree the gate can confirm as one"
+	remedyRestoreVerbData    = "reinstall the gate's plugin data to restore classification, or run the command from a worktree, which is allowed whatever state the classifier is in"
+	remedyRestoreDocData     = "reinstall the gate's plugin data to restore the tracking-doc set, or make this edit inside a worktree of the repository that contains the file"
+)
+
+// deny builds a denial whose Reason states what the gate found and then, after
+// the " -- " separator, names a remedy. Every deny site in this package goes
+// through it, so no denial can ship without one. The remedy is also carried on
+// Decision.Remedy so a consumer never has to recover it by splitting Reason,
+// whose situation half can echo the same " -- " token from caller input.
+func deny(situation, remedy string) Decision {
+	return Decision{Deny: true, Reason: "worktree-gate: " + situation + " -- " + remedy, Remedy: remedy}
 }
 
 // Decide evaluates one PreToolUse call against the worktree-isolation
@@ -83,8 +128,9 @@ func decideFileWrite(lstat LstatFunc, readFile ReadFileFunc, trackingDocs Tracki
 			// Can't verify tracking-doc membership without the data
 			// artifact -- deny rather than risk allowing an unisolated
 			// write on a packaging defect.
-			return Decision{Deny: true, Reason: fmt.Sprintf(
-				"worktree-gate: cannot verify the tracking-doc exemption for %q (%v); denying rather than risk an unisolated write", filePath, trackingDocsErr)}
+			return deny(fmt.Sprintf(
+				"cannot verify the tracking-doc exemption for %q, so the gate cannot tell an exempt tracking doc from repository content (%v)",
+				filePath, trackingDocsErr), remedyRestoreDocData)
 		}
 		if trackingDocs.has(filepath.Base(filePath)) {
 			return Decision{}
@@ -93,8 +139,8 @@ func decideFileWrite(lstat LstatFunc, readFile ReadFileFunc, trackingDocs Tracki
 
 	root, gitEntry, found, err := FindRepoRoot(lstat, filepath.Dir(filePath))
 	if err != nil {
-		return Decision{Deny: true, Reason: fmt.Sprintf(
-			"worktree-gate: cannot determine whether %q is inside a git repository (%v); denying rather than risk an unisolated write", filePath, err)}
+		return deny(fmt.Sprintf(
+			"cannot determine whether %q is inside a git repository (%v)", filePath, err), remedyReadablePath)
 	}
 	if !found {
 		return Decision{} // confidently outside any repo: out of scope
@@ -104,11 +150,11 @@ func decideFileWrite(lstat LstatFunc, readFile ReadFileFunc, trackingDocs Tracki
 	case KindWorktree:
 		return Decision{}
 	case KindPrimary:
-		return Decision{Deny: true, Reason: fmt.Sprintf(
-			"worktree-gate: %q writes into the primary checkout of %q, not a worktree; create one and retry", filePath, root)}
+		return deny(fmt.Sprintf(
+			"%q writes into the primary checkout of %q, not a worktree", filePath, root), remedyTargetRepoWorktree)
 	default:
-		return Decision{Deny: true, Reason: fmt.Sprintf(
-			"worktree-gate: cannot determine worktree membership of %q; denying rather than risk an unisolated write", root)}
+		return deny(fmt.Sprintf(
+			"cannot determine whether %q is a worktree, so the gate cannot confirm a write to %q is isolated", root, filePath), remedyProveMembership)
 	}
 }
 
@@ -142,25 +188,28 @@ func decideBash(lstat LstatFunc, readFile ReadFileFunc, verbs Verbs, verbsErr er
 	// classification is skipped and the fail-closed cwd leg governs alone.
 	var class BashClass
 	if verbsErr == nil {
-		var deny *Decision
-		class, deny = scanBash(lstat, readFile, verbs, in.ProvisionedBinPath, in.ProvisionedBinDigest, in.Command, cwd, cwdUnresolvable, 0)
-		if deny != nil {
-			return *deny
+		// Not named `deny`: that is the package's denial constructor, and
+		// shadowing it here would make any future deny() call added inside this
+		// block fail to compile.
+		var scanDenial *Decision
+		class, scanDenial = scanBash(lstat, readFile, verbs, in.ProvisionedBinPath, in.ProvisionedBinDigest, in.Command, cwd, cwdUnresolvable, 0)
+		if scanDenial != nil {
+			return *scanDenial
 		}
 	}
 
 	if cwdUnresolvable {
-		return Decision{Deny: true, Reason: fmt.Sprintf(
-			"worktree-gate: %q resolves to a working directory this gate cannot determine statically; denying rather than risk an unisolated write", in.Command)}
+		return deny(fmt.Sprintf(
+			"%q resolves to a working directory this gate cannot determine statically", in.Command), remedyStaticCWD)
 	}
 	if cwd == "" {
-		return Decision{Deny: true, Reason: "worktree-gate: no working directory reported for this Bash call; denying rather than risk an unisolated write"}
+		return deny("no working directory was reported for this Bash call, so the gate cannot tell where it would run", remedyReportCWD)
 	}
 
 	root, gitEntry, found, err := FindRepoRoot(lstat, cwd)
 	if err != nil {
-		return Decision{Deny: true, Reason: fmt.Sprintf(
-			"worktree-gate: cannot determine whether %q is inside a git repository (%v); denying rather than risk an unisolated write", cwd, err)}
+		return deny(fmt.Sprintf(
+			"cannot determine whether the working directory %q is inside a git repository (%v)", cwd, err), remedyReadablePath)
 	}
 	if !found {
 		// Confidently outside any repo: out of scope. A write-class piece
@@ -181,20 +230,27 @@ func decideBash(lstat LstatFunc, readFile ReadFileFunc, verbs Verbs, verbsErr er
 		// The classifier itself is broken and this location isn't already
 		// independently safe: the defect could be masking a real write, so
 		// deny rather than fail open on it.
-		return Decision{Deny: true, Reason: fmt.Sprintf(
-			"worktree-gate: cannot classify %q (%v); denying rather than risk an unisolated write", in.Command, verbsErr)}
+		return deny(fmt.Sprintf(
+			"cannot classify %q as a read or a write (%v)", in.Command, verbsErr), remedyRestoreVerbData)
 	}
 
-	switch class {
-	case ClassRead:
+	switch {
+	case class == ClassRead:
 		return Decision{}
-	default: // ClassWrite or ClassUncertain: the conservative over-approximation
-		if kind == KindPrimary {
-			return Decision{Deny: true, Reason: fmt.Sprintf(
-				"worktree-gate: %q may modify %q outside a worktree; create one and retry", in.Command, root)}
-		}
-		return Decision{Deny: true, Reason: fmt.Sprintf(
-			"worktree-gate: cannot determine worktree membership of %q for %q; denying rather than risk an unisolated write", root, in.Command)}
+	case kind != KindPrimary:
+		// Membership unresolved and the pieces may write: fail closed, whether
+		// the class is a confirmed write or merely unclassifiable.
+		return deny(fmt.Sprintf(
+			"cannot determine whether the working directory's repository %q is a worktree, and %q may modify it", root, in.Command), remedyProveMembership)
+	case class == ClassUncertain:
+		// Unclassifiable, not known to write: the caller may be holding a read
+		// the gate simply doesn't recognize, so the remedy leads with rewording
+		// rather than with relocating a write that may not exist.
+		return deny(fmt.Sprintf(
+			"cannot classify %q, so the gate cannot rule out a write into the primary checkout of %q", in.Command, root), remedyRewordAsRead)
+	default: // ClassWrite in a primary checkout
+		return deny(fmt.Sprintf(
+			"%q may modify %q outside a worktree", in.Command, root), remedyThisRepoWorktree)
 	}
 }
 
@@ -281,8 +337,9 @@ func namedPathDenial(lstat LstatFunc, readFile ReadFileFunc, p piece, cwd string
 			continue
 		}
 		if isUnexpandable(t) {
-			return &Decision{Deny: true, Reason: fmt.Sprintf(
-				"worktree-gate: %q names a write target this gate cannot resolve statically; denying rather than risk a write into a primary checkout", t)}
+			d := deny(fmt.Sprintf(
+				"%q names a write target this gate cannot resolve statically, so it cannot rule out a primary checkout", t), remedyLiteralTarget)
+			return &d
 		}
 		var abs string
 		switch {
@@ -295,8 +352,9 @@ func namedPathDenial(lstat LstatFunc, readFile ReadFileFunc, p piece, cwd string
 		}
 		kind, root, found, err := namedPathKind(lstat, readFile, abs)
 		if err != nil {
-			return &Decision{Deny: true, Reason: fmt.Sprintf(
-				"worktree-gate: cannot determine whether the write target %q is inside a git repository (%v); denying rather than risk an unisolated write", abs, err)}
+			d := deny(fmt.Sprintf(
+				"cannot determine whether the write target %q is inside a git repository (%v)", abs, err), remedyReadablePath)
+			return &d
 		}
 		if !found {
 			continue // confidently outside any repo
@@ -308,11 +366,13 @@ func namedPathDenial(lstat LstatFunc, readFile ReadFileFunc, p piece, cwd string
 			if isWorktreeHomeScratch(root, abs) {
 				continue // FB7: gate-managed scratch under the worktree home, not repository content
 			}
-			return &Decision{Deny: true, Reason: fmt.Sprintf(
-				"worktree-gate: this command writes into the primary checkout via %q, not a worktree; create one and retry", abs)}
+			d := deny(fmt.Sprintf(
+				"this command writes into the primary checkout of %q via %q, not a worktree", root, abs), remedyTargetRepoWorktree)
+			return &d
 		default:
-			return &Decision{Deny: true, Reason: fmt.Sprintf(
-				"worktree-gate: cannot determine worktree membership of the write target %q; denying rather than risk an unisolated write", abs)}
+			d := deny(fmt.Sprintf(
+				"cannot determine whether the write target %q sits in a worktree of %q", abs, root), remedyProveMembership)
+			return &d
 		}
 	}
 	return nil
