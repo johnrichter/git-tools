@@ -270,7 +270,10 @@ func scanBash(lstat LstatFunc, readFile ReadFileFunc, verbs Verbs, sc15Path, sc1
 // ~-prefix) is denied outright on SC5's precedent, since the gate cannot rule
 // out a primary checkout. A target confidently outside any repo, or inside a
 // worktree, is not this rule's concern; an indeterminate one fails closed. A
-// relative target with no static cwd is left to the caller's cwd leg.
+// relative target with no static cwd is left to the caller's cwd leg. A
+// target that resolves into a primary checkout but sits under its worktree
+// home (FB7) is exempted as gate-managed scratch rather than denied -- see
+// isWorktreeHomeScratch.
 func namedPathDenial(lstat LstatFunc, readFile ReadFileFunc, p piece, cwd string, cwdUnresolvable bool) *Decision {
 	for _, raw := range namedPaths(p) {
 		t := stripQuotes(raw)
@@ -290,7 +293,7 @@ func namedPathDenial(lstat LstatFunc, readFile ReadFileFunc, p piece, cwd string
 		default:
 			abs = filepath.Join(cwd, t)
 		}
-		kind, found, err := namedPathKind(lstat, readFile, abs)
+		kind, root, found, err := namedPathKind(lstat, readFile, abs)
 		if err != nil {
 			return &Decision{Deny: true, Reason: fmt.Sprintf(
 				"worktree-gate: cannot determine whether the write target %q is inside a git repository (%v); denying rather than risk an unisolated write", abs, err)}
@@ -302,6 +305,9 @@ func namedPathDenial(lstat LstatFunc, readFile ReadFileFunc, p piece, cwd string
 		case KindWorktree:
 			continue // writing into a worktree is already isolated
 		case KindPrimary:
+			if isWorktreeHomeScratch(root, abs) {
+				continue // FB7: gate-managed scratch under the worktree home, not repository content
+			}
 			return &Decision{Deny: true, Reason: fmt.Sprintf(
 				"worktree-gate: this command writes into the primary checkout via %q, not a worktree; create one and retry", abs)}
 		default:
@@ -310,6 +316,29 @@ func namedPathDenial(lstat LstatFunc, readFile ReadFileFunc, p piece, cwd string
 		}
 	}
 	return nil
+}
+
+// worktreeHomeName is the directory, relative to a primary checkout's root,
+// where this project's tooling stages linked worktrees. A named target under
+// it is the gate's own scratch state, not tracked repository content.
+const worktreeHomeName = ".claude/worktrees"
+
+// isWorktreeHomeScratch reports whether absPath is a descendant of root's
+// worktree home. It is called only once namedPathDenial has already
+// classified absPath KindPrimary, which means the walk-up from absPath never
+// crossed a live worktree's own .git redirect first -- so a target under the
+// home reaching here is leftover scratch (a dangling symlink, an orphaned
+// checkout directory), never a live worktree itself; that case already
+// returned via KindWorktree. FB7's reproduction was exactly this: a dangling
+// symlink at <primary>/.claude/worktrees/<name>, denied identically from
+// every cwd because the rule runs ahead of the cwd short-circuits.
+func isWorktreeHomeScratch(root, absPath string) bool {
+	home := filepath.Join(root, filepath.FromSlash(worktreeHomeName))
+	rel, err := filepath.Rel(home, absPath)
+	if err != nil {
+		return false
+	}
+	return rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 // namedPaths returns the paths a write-class piece actually writes to: its

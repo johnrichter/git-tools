@@ -111,11 +111,13 @@ func ClassifyGitEntry(lstat LstatFunc, readFile ReadFileFunc, gitEntryPath strin
 // so a target that IS a repository root (rm -rf <primary>) classifies as well
 // as one under it. found is false when the path sits confidently outside any
 // repository; a non-nil error means membership could not be determined and the
-// caller must fail closed.
-func namedPathKind(lstat LstatFunc, readFile ReadFileFunc, absPath string) (kind GitEntryKind, found bool, err error) {
-	_, gitEntry, found, err := FindRepoRoot(lstat, absPath)
+// caller must fail closed. root is the resolved repository root, valid only
+// when found is true -- callers use it to test a KindPrimary target against
+// the FB7 worktree-home exemption.
+func namedPathKind(lstat LstatFunc, readFile ReadFileFunc, absPath string) (kind GitEntryKind, root string, found bool, err error) {
+	root, gitEntry, found, err := FindRepoRoot(lstat, absPath)
 	if err != nil || !found {
-		return KindIndeterminate, found, err
+		return KindIndeterminate, "", found, err
 	}
-	return ClassifyGitEntry(lstat, readFile, gitEntry), true, nil
+	return ClassifyGitEntry(lstat, readFile, gitEntry), root, true, nil
 }
