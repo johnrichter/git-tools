@@ -1,12 +1,15 @@
 package cli
 
 import (
+	"context"
 	"fmt"
+	"strings"
 
 	"github.com/spf13/cobra"
 
 	"github.com/johnrichter/claude-shared-tooling/go/clikit"
 	"github.com/johnrichter/claude-shared-tooling/go/git"
+	"github.com/johnrichter/git-tools/internal/gitexec"
 	gitresult "github.com/johnrichter/git-tools/internal/result"
 	"github.com/johnrichter/git-tools/internal/worktreeclean"
 )
@@ -14,10 +17,11 @@ import (
 func newBranchCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "branch",
-		Short: "Create and delete branches",
+		Short: "Create, delete, and list branches",
 	}
 	cmd.AddCommand(newBranchCreateCmd())
 	cmd.AddCommand(newBranchDeleteCmd())
+	cmd.AddCommand(newBranchListCmd())
 	return cmd
 }
 
@@ -191,4 +195,73 @@ Exit codes:
 	cmd.Flags().Bool("dry-run", false, "confirm the compare-and-swap without deleting the branch")
 	cmd.Flags().String("landing-target", "", "ref name's work must already be reachable from (default: name's upstream, else the remote's recorded default)")
 	return cmd
+}
+
+// branchEntry renders one local branch's for-each-ref row with the
+// snake_case field names clikit's own conventions use.
+type branchEntry struct {
+	Name    string `json:"name"`
+	Head    string `json:"head"`
+	Current bool   `json:"current,omitempty"`
+}
+
+func newBranchListCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:     "list",
+		Short:   "List every local branch, with its head commit and whether it's checked out",
+		Args:    cobra.NoArgs,
+		Example: "  git-tools branch list",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := loadConfig(cmd.Flags())
+			if err != nil {
+				return finishErr(cmd, "internal.config.load_failed", "load configuration", err)
+			}
+			repo, repoErr := requireRepo(cmd, cfg)
+			if repo == nil {
+				return repoErr
+			}
+
+			entries, err := listLocalBranches(cmd.Context(), repo.Dir)
+			if err != nil {
+				return finishErr(cmd, "internal.git.branch_list_failed", "list branches", err)
+			}
+
+			data := map[string]any{"count": len(entries)}
+			if len(entries) > 0 {
+				data["branches"] = entries
+			}
+			result, buildErr := clikitSuccess(cmd, data)
+			if buildErr != nil {
+				return finishErr(cmd, "internal.result.build_failed", "build result", buildErr)
+			}
+			return finish(cmd, result)
+		},
+	}
+	return cmd
+}
+
+// listLocalBranches reads every local branch under refs/heads with
+// for-each-ref -- a read-only ref walk, not git branch's own listing mode --
+// so the verb's read-only contract holds independent of how git branch
+// itself happens to classify a bare invocation.
+func listLocalBranches(ctx context.Context, dir string) ([]branchEntry, error) {
+	args := []string{"for-each-ref", "--format=%(refname:short)%09%(objectname)%09%(HEAD)", "refs/heads"}
+	res, err := gitexec.RunGit(ctx, dir, args...)
+	if err != nil {
+		return nil, err
+	}
+	if res.ExitCode != 0 {
+		return nil, &git.CommandError{Args: args, ExitCode: res.ExitCode, Stderr: strings.TrimSpace(string(res.Stderr))}
+	}
+	out := strings.TrimSpace(string(res.Stdout))
+	if out == "" {
+		return nil, nil
+	}
+	lines := strings.Split(out, "\n")
+	entries := make([]branchEntry, len(lines))
+	for i, line := range lines {
+		fields := strings.SplitN(line, "\t", 3)
+		entries[i] = branchEntry{Name: fields[0], Head: fields[1], Current: fields[2] == "*"}
+	}
+	return entries, nil
 }

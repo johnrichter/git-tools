@@ -115,7 +115,7 @@ func TestHelp_EverySubcommandHasHelp(t *testing.T) {
 	for _, args := range [][]string{
 		{"sign", "--help"}, {"resign", "--help"},
 		{"worktree", "--help"}, {"worktree", "add", "--help"}, {"worktree", "remove", "--help"}, {"worktree", "list", "--help"},
-		{"branch", "--help"}, {"branch", "create", "--help"}, {"branch", "delete", "--help"},
+		{"branch", "--help"}, {"branch", "create", "--help"}, {"branch", "delete", "--help"}, {"branch", "list", "--help"},
 		{"merge", "--help"}, {"rebase", "--help"},
 		{"scan", "--help"}, {"scan", "secrets", "--help"}, {"scan", "lfs", "--help"}, {"scan", "privacy", "--help"}, {"scan", "all", "--help"},
 		{"hooks", "--help"}, {"hooks", "install", "--help"},
@@ -235,6 +235,32 @@ func TestBranch_CreateAndDelete(t *testing.T) {
 	}
 	if err := exec.Command("git", "-C", dir, "show-ref", "--verify", "refs/heads/feature/x").Run(); err == nil {
 		t.Fatal("branch still exists after delete")
+	}
+}
+
+func TestBranch_List(t *testing.T) {
+	bin := buildCLI(t)
+	dir := initRepo(t)
+	head := runGit(t, dir, "rev-parse", "HEAD")
+	runGit(t, dir, "branch", "feature/x")
+
+	r, exit := runCLI(t, bin, "--repo", dir, "branch", "list")
+	if r.Status != "success" || exit != 0 {
+		t.Fatalf("branch list: status=%s exit=%d: %+v", r.Status, exit, r)
+	}
+	if count, _ := r.Data["count"].(float64); count != 2 {
+		t.Fatalf("count=%v, want 2: %+v", r.Data["count"], r.Data)
+	}
+	names := map[string]bool{}
+	for _, e := range r.Data["branches"].([]any) {
+		m := e.(map[string]any)
+		names[m["name"].(string)] = true
+		if got, _ := m["head"].(string); got != head {
+			t.Fatalf("branch %v head=%q, want %q", m["name"], got, head)
+		}
+	}
+	if !names["main"] || !names["feature/x"] {
+		t.Fatalf("branch list did not report both branches: %+v", r.Data["branches"])
 	}
 }
 

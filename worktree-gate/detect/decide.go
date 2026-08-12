@@ -263,7 +263,8 @@ func decideBash(lstat LstatFunc, readFile ReadFileFunc, verbs Verbs, verbsErr er
 // the very rule shipped alongside it). The read allowance (sc15ReadAllowed) is
 // applied instead only where a piece would otherwise be ClassUncertain -- after
 // classifyPiece has resolved any file-opening redirect to write -- reclassifying
-// the CLI's one read verb (worktree list) as read rather than waiving any rule.
+// the CLI's read verbs (worktree list, branch list) as read rather than
+// waiving any rule.
 // SC20's named-path rule then denies a write-class piece that names a path
 // resolving into a primary checkout, however that path is spelled. It returns
 // the strictest class over the non-exempt pieces and the first named-path denial
@@ -286,13 +287,14 @@ func scanBash(lstat LstatFunc, readFile ReadFileFunc, verbs Verbs, sc15Path, sc1
 			pc := classifyPiece(verbs, p)
 			if pc == ClassUncertain && depth == 0 &&
 				sc15ReadAllowed(readFile, sc15Path, sc15Digest, p) {
-				// SC15's read allowance: the digest-verified CLI's one read verb
-				// (worktree list) writes nothing, so a piece that would otherwise
-				// fail closed as ClassUncertain reads instead. Evaluated only
-				// here, after classifyPiece has already resolved a file-opening
-				// output redirect to ClassWrite, so `worktree list > <primary>/f`
-				// is caught by the class tally and the named-path rule below
-				// rather than read away into a primary checkout.
+				// SC15's read allowance: the digest-verified CLI's read verbs
+				// (worktree list, branch list) write nothing, so a piece that
+				// would otherwise fail closed as ClassUncertain reads instead.
+				// Evaluated only here, after classifyPiece has already resolved
+				// a file-opening output redirect to ClassWrite, so
+				// `worktree list > <primary>/f` is caught by the class tally
+				// and the named-path rule below rather than read away into a
+				// primary checkout.
 				pc = ClassRead
 			}
 			if pc == ClassWrite {
@@ -891,13 +893,16 @@ func sc15Identity(readFile ReadFileFunc, verifiedPath, expectedDigest string, p 
 
 // sc15Exempt reports whether a top-level piece is SC15's sanctioned landing
 // WRITE invocation: it clears the shared identity check and its verb is one of
-// the five landing verbs (merge, push, resign, worktree add, worktree remove)
-// carrying neither a repo-retargeting flag nor a cleanup-forcing --force -- the
-// sanctioned channel acts on the repo it is invoked in, never one it is pointed
-// at, and never destroys unseen state on a forced cleanup it was not asked to
-// prove safe. An exempt piece is waived from both the class tally and the
-// named-path rule, so `worktree add <primary>/…` is not denied by the very rule
-// shipped alongside it.
+// the six landing verbs (merge, push, resign, worktree add, worktree remove,
+// branch delete) carrying neither a repo-retargeting flag nor a
+// cleanup-forcing --force -- the sanctioned channel acts on the repo it is
+// invoked in, never one it is pointed at, and never destroys unseen state on a
+// forced cleanup it was not asked to prove safe. branch delete carries no
+// --force of its own to void: its no-work-loss guard runs unconditionally,
+// ahead of the ref touch, with no flag that skips it, so admitting it here
+// opens no path around that guard. An exempt piece is waived from both the
+// class tally and the named-path rule, so `worktree add <primary>/…` is not
+// denied by the very rule shipped alongside it.
 func sc15Exempt(readFile ReadFileFunc, verifiedPath, expectedDigest string, p piece) bool {
 	args, ok := sc15Identity(readFile, verifiedPath, expectedDigest, p)
 	if !ok {
@@ -906,13 +911,14 @@ func sc15Exempt(readFile ReadFileFunc, verifiedPath, expectedDigest string, p pi
 	return sc15VerbAllowed(args) && !sc15Retargets(args) && !sc15ForcesCleanup(args)
 }
 
-// sc15ReadAllowed reports whether a top-level piece is the digest-verified CLI's
-// one READ verb, worktree list. It shares sc15Identity with the write allowance
-// but not its verb policy: a read verb writes nothing and names no repo it could
-// be retargeted onto, so a --repo/--config flag does not void it (retargeting is
-// only the write channel's concern). Unlike the write allowance it waives no
-// rule -- the caller applies it only where a piece would otherwise be
-// ClassUncertain, reclassifying it read.
+// sc15ReadAllowed reports whether a top-level piece is one of the
+// digest-verified CLI's two READ verbs, worktree list or branch list. It
+// shares sc15Identity with the write allowance but not its verb policy: a
+// read verb writes nothing and names no repo it could be retargeted onto, so
+// a --repo/--config flag does not void it (retargeting is only the write
+// channel's concern). Unlike the write allowance it waives no rule -- the
+// caller applies it only where a piece would otherwise be ClassUncertain,
+// reclassifying it read.
 func sc15ReadAllowed(readFile ReadFileFunc, verifiedPath, expectedDigest string, p piece) bool {
 	args, ok := sc15Identity(readFile, verifiedPath, expectedDigest, p)
 	if !ok {
@@ -921,20 +927,35 @@ func sc15ReadAllowed(readFile ReadFileFunc, verifiedPath, expectedDigest string,
 	return sc15ReadVerb(args)
 }
 
-// sc15ReadVerb reports whether the tokens after the binary name the CLI's one
-// read verb, `worktree list`. A bare `worktree`, any other worktree subcommand,
-// and every other verb are not reads. Trailing flags and operands do not
-// matter: the verb writes nothing however it is spelled.
+// sc15ReadVerb reports whether the tokens after the binary name one of the
+// CLI's two read verbs, `worktree list` or `branch list`. A bare `worktree` or
+// `branch`, any other subcommand of either, and every other verb are not
+// reads. Trailing flags and operands do not matter: a read verb writes
+// nothing however it is spelled.
 func sc15ReadVerb(args []string) bool {
-	return len(args) >= 2 && args[0] == "worktree" && args[1] == "list"
+	if len(args) < 2 {
+		return false
+	}
+	switch args[0] {
+	case "worktree":
+		return args[1] == "list"
+	case "branch":
+		return args[1] == "list"
+	default:
+		return false
+	}
 }
 
 // sc15VerbAllowed reports whether the tokens after the binary name one of the
-// five landing verbs -- merge, push, resign, worktree add, or worktree remove.
-// worktree remove is the sanctioned standalone worktree cleanup from a primary
-// checkout; it runs its own no-work-loss guard inside the CLI. resign is the
-// pre-landing re-signing step, and landing itself happens from the primary
-// checkout by design, so the sanctioned channel must be able to call it too.
+// six landing verbs -- merge, push, resign, worktree add, worktree remove, or
+// branch delete. worktree remove is the sanctioned standalone worktree
+// cleanup from a primary checkout; it runs its own no-work-loss guard inside
+// the CLI. resign is the pre-landing re-signing step, and landing itself
+// happens from the primary checkout by design, so the sanctioned channel must
+// be able to call it too. branch delete joins them on the same footing as
+// worktree remove: it runs its own no-work-loss guard -- refusing an unmerged
+// branch -- before it ever touches the ref, and that guard has no flag that
+// skips it, so sanctioning the call here opens no path around the refusal.
 func sc15VerbAllowed(args []string) bool {
 	if len(args) == 0 {
 		return false
@@ -944,6 +965,8 @@ func sc15VerbAllowed(args []string) bool {
 		return true
 	case "worktree":
 		return len(args) >= 2 && (args[1] == "add" || args[1] == "remove")
+	case "branch":
+		return len(args) >= 2 && args[1] == "delete"
 	default:
 		return false
 	}

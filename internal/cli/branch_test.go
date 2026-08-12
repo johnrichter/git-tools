@@ -270,6 +270,52 @@ func TestBranchCreate_NoForce_ExistingBranch_RefusesLikeToday(t *testing.T) {
 	}
 }
 
+func TestBranchList_ReportsCurrentFlagPerBranch(t *testing.T) {
+	bin := buildCLI(t)
+	dir := initRepo(t)
+	runGit(t, dir, "branch", "feature")
+
+	r, exit := runCLI(t, bin, "--repo", dir, "branch", "list")
+	if r.Status != "success" || exit != 0 {
+		t.Fatalf("status=%s exit=%d, want success/0: %+v", r.Status, exit, r)
+	}
+	current := map[string]bool{}
+	for _, e := range r.Data["branches"].([]any) {
+		m := e.(map[string]any)
+		b, _ := m["current"].(bool)
+		current[m["name"].(string)] = b
+	}
+	if !current["main"] {
+		t.Fatalf("main (the checked-out branch) not reported current: %+v", r.Data["branches"])
+	}
+	if current["feature"] {
+		t.Fatalf("feature (not checked out) reported current: %+v", r.Data["branches"])
+	}
+}
+
+// TestBranchList_WritesNothing pins AC1: whatever list reports, HEAD, the
+// branch set, and the working tree must be byte-identical before and after.
+func TestBranchList_WritesNothing(t *testing.T) {
+	bin := buildCLI(t)
+	dir := initRepo(t)
+	beforeHead := runGit(t, dir, "rev-parse", "HEAD")
+	beforeBranches := runGit(t, dir, "for-each-ref", "refs/heads")
+
+	r, exit := runCLI(t, bin, "--repo", dir, "branch", "list")
+	if r.Status != "success" || exit != 0 {
+		t.Fatalf("status=%s exit=%d, want success/0: %+v", r.Status, exit, r)
+	}
+	if got := runGit(t, dir, "rev-parse", "HEAD"); got != beforeHead {
+		t.Fatalf("branch list moved HEAD: before=%s after=%s", beforeHead, got)
+	}
+	if got := runGit(t, dir, "for-each-ref", "refs/heads"); got != beforeBranches {
+		t.Fatalf("branch list changed the branch set:\nbefore=%q\nafter=%q", beforeBranches, got)
+	}
+	if got := runGit(t, dir, "status", "--porcelain"); got != "" {
+		t.Fatalf("branch list left the working tree dirty: %q", got)
+	}
+}
+
 func TestBranchCreate_Force_DryRun_ReachableMove_SucceedsWithoutMoving(t *testing.T) {
 	bin := buildCLI(t)
 	dir := initRepo(t)
