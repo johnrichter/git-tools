@@ -120,7 +120,7 @@ func Cleanup(ctx context.Context, repo *git.Repo, target string, opts Options) (
 		return nil, err
 	}
 	if landingOK {
-		unmerged, err := countUnmerged(ctx, repo, subtreeBranches, landing.sha)
+		unmerged, err := CountUnmerged(ctx, repo, subtreeBranches, landing.sha)
 		if err != nil {
 			return nil, err
 		}
@@ -195,15 +195,15 @@ func resolveLandingTarget(ctx context.Context, repo *git.Repo, entry *git.Worktr
 		if branch == "" {
 			return landingRef{}, false, nil
 		}
-		sha, ok, err := revParseLocal(ctx, repo.Dir, "refs/heads/"+branch)
+		sha, ok, err := RevParseLocal(ctx, repo.Dir, "refs/heads/"+branch)
 		return landingRef{name: branch, sha: sha}, ok, err
 	}
 	if opts.LandingTarget != "" {
-		sha, ok, err := revParseLocal(ctx, repo.Dir, opts.LandingTarget)
+		sha, ok, err := RevParseLocal(ctx, repo.Dir, opts.LandingTarget)
 		return landingRef{name: opts.LandingTarget, sha: sha}, ok, err
 	}
 	branch := shortRef(entry.Branch)
-	if sha, ok, err := revParseLocal(ctx, repo.Dir, branch+"@{upstream}"); err != nil {
+	if sha, ok, err := RevParseLocal(ctx, repo.Dir, branch+"@{upstream}"); err != nil {
 		return landingRef{}, false, err
 	} else if ok {
 		return landingRef{name: branch + "@{upstream}", sha: sha}, true, nil
@@ -212,7 +212,7 @@ func resolveLandingTarget(ctx context.Context, repo *git.Repo, entry *git.Worktr
 	if remote == "" {
 		remote = "origin"
 	}
-	if sha, ok, err := revParseLocal(ctx, repo.Dir, "refs/remotes/"+remote+"/HEAD"); err != nil {
+	if sha, ok, err := RevParseLocal(ctx, repo.Dir, "refs/remotes/"+remote+"/HEAD"); err != nil {
 		return landingRef{}, false, err
 	} else if ok {
 		return landingRef{name: remote + "/HEAD", sha: sha}, true, nil
@@ -220,9 +220,36 @@ func resolveLandingTarget(ctx context.Context, repo *git.Repo, entry *git.Worktr
 	return landingRef{}, false, nil
 }
 
-// countUnmerged sums, across branches, the commits reachable from each branch
+// ReachableFrom is the branch-shaped counterpart to Cleanup's own no-work-loss
+// check: it resolves the landing target for branch -- a ref that need not be
+// checked out in any worktree -- and reports how many of its commits are
+// unreachable from it. resolveLandingTarget takes a *git.WorktreeInfo, which a
+// branch with no checkout doesn't have, so this builds the minimal one it
+// actually reads (the branch name) instead of adding a second landing-target
+// resolution chain or reachability predicate: the fallback order
+// (explicitTarget, else branch's upstream, else remote's recorded default)
+// and CountUnmerged stay the one implementation both entry points share.
+//
+// ok is false when the landing target does not resolve from local refs -- a
+// refusal, not an error; landing and unmerged are only meaningful when ok is
+// true.
+func ReachableFrom(ctx context.Context, repo *git.Repo, branch, explicitTarget, remote string) (landing string, unmerged int, ok bool, err error) {
+	short := shortRef(branch)
+	entry := &git.WorktreeInfo{Branch: "refs/heads/" + short}
+	target, ok, err := resolveLandingTarget(ctx, repo, entry, Options{LandingTarget: explicitTarget, Remote: remote})
+	if err != nil || !ok {
+		return "", 0, ok, err
+	}
+	unmerged, err = CountUnmerged(ctx, repo, []string{short}, target.sha)
+	if err != nil {
+		return "", 0, false, err
+	}
+	return target.name, unmerged, true, nil
+}
+
+// CountUnmerged sums, across branches, the commits reachable from each branch
 // but not from landingSHA -- the work that removing the worktree would lose.
-func countUnmerged(ctx context.Context, repo *git.Repo, branches []string, landingSHA string) (int, error) {
+func CountUnmerged(ctx context.Context, repo *git.Repo, branches []string, landingSHA string) (int, error) {
 	total := 0
 	for _, b := range branches {
 		res, err := gitexec.RunGit(ctx, repo.Dir, "rev-list", "--count", landingSHA+".."+b)
@@ -265,10 +292,10 @@ func subtreeState(list []git.WorktreeInfo, base, targetResolved string) (branche
 	return branches, nested
 }
 
-// revParseLocal resolves ref to a SHA using only local refs (it never touches
+// RevParseLocal resolves ref to a SHA using only local refs (it never touches
 // the network), reporting ok=false when ref does not resolve rather than
 // erroring, so an absent upstream or remote-default record is a clean "no".
-func revParseLocal(ctx context.Context, dir, ref string) (sha string, ok bool, err error) {
+func RevParseLocal(ctx context.Context, dir, ref string) (sha string, ok bool, err error) {
 	res, runErr := gitexec.RunGit(ctx, dir, "rev-parse", "--verify", "-q", ref)
 	if runErr != nil {
 		return "", false, runErr

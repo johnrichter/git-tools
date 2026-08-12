@@ -226,7 +226,10 @@ func TestBranch_CreateAndDelete(t *testing.T) {
 	}
 	runGit(t, dir, "show-ref", "--verify", "refs/heads/feature/x")
 
-	r, exit = runCLI(t, bin, "--repo", dir, "branch", "delete", "feature/x", head)
+	// feature/x carries no commit beyond main, so --landing-target main lets
+	// the reachability guard resolve and pass -- the delete itself is what
+	// this test exercises.
+	r, exit = runCLI(t, bin, "--repo", dir, "branch", "delete", "feature/x", head, "--landing-target", "main")
 	if r.Status != "success" || exit != 0 {
 		t.Fatalf("branch delete: status=%s exit=%d: %+v", r.Status, exit, r)
 	}
@@ -240,7 +243,9 @@ func TestBranch_DeleteStaleExpectedHead_IsConflict(t *testing.T) {
 	dir := initRepo(t)
 	runGit(t, dir, "branch", "feature/x")
 
-	r, exit := runCLI(t, bin, "--repo", dir, "branch", "delete", "feature/x", "0000000000000000000000000000000000000000")
+	// feature/x carries no commit beyond main, so the reachability guard
+	// passes and the stale expected-head is what fails the compare-and-swap.
+	r, exit := runCLI(t, bin, "--repo", dir, "branch", "delete", "feature/x", "0000000000000000000000000000000000000000", "--landing-target", "main")
 	if r.Status != "conflict" || exit != 41 {
 		t.Fatalf("status=%s exit=%d, want conflict/41: %+v", r.Status, exit, r)
 	}
