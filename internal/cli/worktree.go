@@ -11,6 +11,7 @@ import (
 
 	"github.com/johnrichter/claude-shared-tooling/go/clikit"
 	"github.com/johnrichter/claude-shared-tooling/go/git"
+	"github.com/johnrichter/git-tools/internal/gitexec"
 )
 
 // worktreeRegisteredAt reports whether list contains an entry at path,
@@ -359,7 +360,7 @@ type landingRef struct {
 // resolves -- a refusal, not an error.
 func resolveLandingTarget(ctx context.Context, repo *git.Repo, entry *git.WorktreeInfo, opts cleanupOptions) (landingRef, bool, error) {
 	if opts.MergedBranches != nil {
-		branch, err := currentBranch(ctx, repo.Dir)
+		branch, err := gitexec.CurrentBranch(ctx, repo.Dir)
 		if err != nil {
 			return landingRef{}, false, err
 		}
@@ -396,7 +397,7 @@ func resolveLandingTarget(ctx context.Context, repo *git.Repo, entry *git.Worktr
 func countUnmerged(ctx context.Context, repo *git.Repo, branches []string, landingSHA string) (int, error) {
 	total := 0
 	for _, b := range branches {
-		res, err := runGit(ctx, repo.Dir, "rev-list", "--count", landingSHA+".."+b)
+		res, err := gitexec.RunGit(ctx, repo.Dir, "rev-list", "--count", landingSHA+".."+b)
 		if err != nil {
 			return 0, err
 		}
@@ -440,7 +441,7 @@ func subtreeState(list []git.WorktreeInfo, base, targetResolved string) (branche
 // the network), reporting ok=false when ref does not resolve rather than
 // erroring, so an absent upstream or remote-default record is a clean "no".
 func revParseLocal(ctx context.Context, dir, ref string) (sha string, ok bool, err error) {
-	res, runErr := runGit(ctx, dir, "rev-parse", "--verify", "-q", ref)
+	res, runErr := gitexec.RunGit(ctx, dir, "rev-parse", "--verify", "-q", ref)
 	if runErr != nil {
 		return "", false, runErr
 	}

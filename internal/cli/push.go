@@ -9,7 +9,7 @@ import (
 
 	"github.com/johnrichter/claude-shared-tooling/go/clikit"
 	"github.com/johnrichter/claude-shared-tooling/go/git"
-	"github.com/johnrichter/claude-shared-tooling/go/sysops"
+	"github.com/johnrichter/git-tools/internal/gitexec"
 )
 
 // newPushCmd builds the "push" verb — the sanctioned replacement for a raw
@@ -76,7 +76,7 @@ Exit codes:
 
 			ctx := cmd.Context()
 
-			dirty, err := treeDirty(ctx, ".")
+			dirty, err := gitexec.TreeDirty(ctx, ".")
 			if err != nil {
 				return finishErr(cmd, "internal.git.diff_check_failed", "check working tree state", err)
 			}
@@ -86,13 +86,13 @@ Exit codes:
 					clikit.Manual("commit or stash the pending changes, then re-run"), nil)
 			}
 
-			isBranch, err := refExists(ctx, ".", "heads", ref)
+			isBranch, err := gitexec.RefExists(ctx, ".", "heads", ref)
 			if err != nil {
 				return finishErr(cmd, "internal.git.show_ref_failed", fmt.Sprintf("check whether %s is a local branch", ref), err)
 			}
 			refKind := "branch"
 			if !isBranch {
-				isTag, err := refExists(ctx, ".", "tags", ref)
+				isTag, err := gitexec.RefExists(ctx, ".", "tags", ref)
 				if err != nil {
 					return finishErr(cmd, "internal.git.show_ref_failed", fmt.Sprintf("check whether %s is a local tag", ref), err)
 				}
@@ -110,7 +110,7 @@ Exit codes:
 			}
 
 			if refKind == "branch" {
-				head, err := currentBranch(ctx, ".")
+				head, err := gitexec.CurrentBranch(ctx, ".")
 				if err != nil {
 					return finishErr(cmd, "internal.git.head_check_failed", "resolve the current branch", err)
 				}
@@ -155,7 +155,7 @@ Exit codes:
 				return finish(cmd, clikitResult)
 			}
 
-			res, err := runGit(ctx, ".", "push", cfg.Remote, refspec)
+			res, err := gitexec.RunGit(ctx, ".", "push", cfg.Remote, refspec)
 			if err != nil {
 				return finishErr(cmd, "internal.git.push_failed", fmt.Sprintf("push %s to %s", fullRef, cfg.Remote), err)
 			}
@@ -193,75 +193,12 @@ func openHere(cmd *cobra.Command) error {
 	return nil
 }
 
-// runGit runs a git subcommand rooted at dir and returns its result for the
-// caller to interpret. Only a spawn failure becomes a Go error here — a
-// non-zero exit is git's ordinary way of answering a yes/no or reporting a
-// real failure, and each caller knows which exit codes mean what for the
-// subcommand it ran.
-func runGit(ctx context.Context, dir string, args ...string) (*sysops.Result, error) {
-	res, err := sysops.Run(ctx, "git", args, sysops.Options{Dir: dir})
-	if err != nil {
-		return nil, fmt.Errorf("exec git %s: %w", strings.Join(args, " "), err)
-	}
-	return res, nil
-}
-
-// treeDirty reports whether the working tree has tracked modifications or
-// staged changes relative to HEAD. `git diff` never considers untracked or
-// ignored paths, so neither counts as dirtiness here.
-func treeDirty(ctx context.Context, dir string) (bool, error) {
-	args := []string{"diff", "--quiet", "HEAD"}
-	res, err := runGit(ctx, dir, args...)
-	if err != nil {
-		return false, err
-	}
-	switch res.ExitCode {
-	case 0:
-		return false, nil
-	case 1:
-		return true, nil
-	default:
-		return false, &git.CommandError{Args: args, ExitCode: res.ExitCode, Stderr: strings.TrimSpace(string(res.Stderr))}
-	}
-}
-
-// currentBranch returns the short name of the branch HEAD is on, or "" for
-// a detached HEAD.
-func currentBranch(ctx context.Context, dir string) (string, error) {
-	res, err := runGit(ctx, dir, "symbolic-ref", "--short", "-q", "HEAD")
-	if err != nil {
-		return "", err
-	}
-	if res.ExitCode != 0 {
-		return "", nil
-	}
-	return strings.TrimSpace(string(res.Stdout)), nil
-}
-
-// refExists reports whether refs/<namespace>/<ref> (namespace "heads" or
-// "tags") exists locally.
-func refExists(ctx context.Context, dir, namespace, ref string) (bool, error) {
-	args := []string{"show-ref", "--verify", "--quiet", "refs/" + namespace + "/" + ref}
-	res, err := runGit(ctx, dir, args...)
-	if err != nil {
-		return false, err
-	}
-	switch res.ExitCode {
-	case 0:
-		return true, nil
-	case 1:
-		return false, nil
-	default:
-		return false, &git.CommandError{Args: args, ExitCode: res.ExitCode, Stderr: strings.TrimSpace(string(res.Stderr))}
-	}
-}
-
 // localRefSHA resolves fullRef (e.g. "refs/heads/main") to the object id it
 // currently names, unpeeled — an annotated tag resolves to its tag object,
 // matching what remoteRefSHA reports for the same ref.
 func localRefSHA(ctx context.Context, dir, fullRef string) (string, error) {
 	args := []string{"rev-parse", "--verify", fullRef}
-	res, err := runGit(ctx, dir, args...)
+	res, err := gitexec.RunGit(ctx, dir, args...)
 	if err != nil {
 		return "", err
 	}
@@ -275,7 +212,7 @@ func localRefSHA(ctx context.Context, dir, fullRef string) (string, error) {
 // false when the remote has no such ref (distinct from a lookup failure).
 func remoteRefSHA(ctx context.Context, dir, remote, fullRef string) (sha string, ok bool, err error) {
 	args := []string{"ls-remote", "--exit-code", remote, fullRef}
-	res, runErr := runGit(ctx, dir, args...)
+	res, runErr := gitexec.RunGit(ctx, dir, args...)
 	if runErr != nil {
 		return "", false, runErr
 	}
