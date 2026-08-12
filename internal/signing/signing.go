@@ -90,11 +90,10 @@ func (r *Refusal) Context() map[string]any {
 // applied. A source that carries unsigned commits and cannot be signed is
 // refused — the merge verb never lands unsigned incoming commits.
 //
-// The merge commit itself is outside this gate: git.MergeOptions exposes no
-// signing option, so `git merge` signs the commit it mints only when
-// commit.gpgsign is set in the repository's own configuration. A non-fast-
-// forward merge can therefore leave an unsigned tip on the target branch even
-// though every commit this gate saw was signed.
+// The merge commit itself is outside this gate: it covers only the incoming
+// commits each source carries. Whether the merge mints a commit of its own,
+// and whether that commit is signed, is the caller's concern — WillMintCommit
+// answers the first, and the shared prober proves signing for the second.
 //
 // dryRun mirrors the merge's own --dry-run: the gate reports the rewrite it
 // would apply and moves no ref, so a dry-run merge stays free of side effects.
@@ -103,14 +102,16 @@ func (r *Refusal) Context() map[string]any {
 // disturb it: Resign preserves each commit's tree object exactly, so that
 // worktree's files and index still match the branch's new tip.
 //
+// The caller supplies the prober so the gate's availability check shares one
+// probe with the caller's own — a run probes signing at most once.
+//
 // It returns the per-source signing_gate report, or a *Refusal that stops the
 // merge. Refusal messages are raw here; the caller sanitizes them when it emits
 // them.
-func Gate(ctx context.Context, repo *git.Repo, target string, sources []string, dryRun bool) ([]map[string]any, *Refusal) {
+func Gate(ctx context.Context, repo *git.Repo, target string, sources []string, dryRun bool, prober *Prober) ([]map[string]any, *Refusal) {
 	var (
 		gated     []map[string]any
 		rewritten []map[string]any
-		signable  bool // whether signing has already been proven available here
 	)
 	refuse := func(source, code, message string, advice clikit.Triage) *Refusal {
 		return &Refusal{code: code, message: message, advice: advice, source: source, rewritten: rewritten}
@@ -166,19 +167,16 @@ func Gate(ctx context.Context, repo *git.Repo, target string, sources []string, 
 			continue
 		}
 
-		if !signable {
-			available, detail, err := signingAvailable(ctx, repo.Dir)
-			if err != nil {
-				return nil, refuse(source, "precondition_unmet.git.signing_gate_failed",
-					fmt.Sprintf("could not test whether git can sign in %s: %v", repo.Dir, err),
-					clikit.Manual("nothing was merged; resolve the underlying git failure and re-run"))
-			}
-			if !available {
-				return nil, refuse(source, "precondition_unmet.git.signing_key_unresolved",
-					fmt.Sprintf("no key resolved for commit signing, so merging %s would land unsigned commits: %s", source, detail),
-					clikit.Manual("configure a signing key (gpg.format plus user.signingkey, or this environment's signing setup) and re-run; nothing was merged"))
-			}
-			signable = true
+		available, detail, err := prober.Available(ctx)
+		if err != nil {
+			return nil, refuse(source, "precondition_unmet.git.signing_gate_failed",
+				fmt.Sprintf("could not test whether git can sign in %s: %v", repo.Dir, err),
+				clikit.Manual("nothing was merged; resolve the underlying git failure and re-run"))
+		}
+		if !available {
+			return nil, refuse(source, "precondition_unmet.git.signing_key_unresolved",
+				fmt.Sprintf("no key resolved for commit signing, so merging %s would land unsigned commits: %s", source, detail),
+				clikit.Manual("configure a signing key (gpg.format plus user.signingkey, or this environment's signing setup) and re-run; nothing was merged"))
 		}
 
 		plan, err := repo.Resign(ctx, ref, git.ResignOptions{Base: base, DryRun: true})
@@ -210,6 +208,61 @@ func Gate(ctx context.Context, repo *git.Repo, target string, sources []string, 
 	return gated, nil
 }
 
+// WillMintCommit reports whether merging sources into target will mint a commit
+// of its own — the merge commit, which git signs only when asked. It mints one
+// whenever fast-forward is forbidden, whenever there are two or more sources
+// (an octopus always commits), or whenever the single source is not a
+// fast-forward of target (target is not already its ancestor). A single source
+// target already contains fast-forwards instead and mints nothing.
+//
+// It reads refs as they stand and is meant to run before the merge, so the
+// caller can require and pass a signing key exactly when a commit will be
+// minted, and never issue `git merge -S` in a repository that cannot sign.
+func WillMintCommit(ctx context.Context, repo *git.Repo, target string, sources []string, ff git.FastForward) (bool, error) {
+	if ff == git.FastForwardNever || len(sources) >= 2 {
+		return true, nil
+	}
+	if len(sources) == 0 {
+		return false, nil
+	}
+	ancestor, err := isAncestor(ctx, repo.Dir, target, sources[0])
+	if err != nil {
+		return false, err
+	}
+	return !ancestor, nil
+}
+
+// Prober answers "can git actually sign a commit in this repository?" and
+// memoizes the answer so a single merge run probes at most once. The probe
+// signs a throwaway commit object — the definitive test — and commit-tree
+// always writes, so it leaves one unreferenced commit object behind for a
+// future git gc; memoizing keeps that at most one such object per repository
+// per run no matter how many callers ask. The gate (before it re-signs a
+// range) and the merge verb (before it mints a signed merge commit) share one
+// Prober, so their two needs never cost a second probe.
+type Prober struct {
+	dir       string
+	probed    bool
+	available bool
+	detail    string
+	err       error
+}
+
+// NewProber returns a Prober for repo that has not probed yet.
+func NewProber(repo *git.Repo) *Prober { return &Prober{dir: repo.Dir} }
+
+// Available reports whether git can produce a signature in the repository,
+// running the underlying probe on the first call and returning the cached
+// answer on every later one. detail carries git's own reason when signing is
+// unavailable; err is set only when the probe could not be run at all.
+func (p *Prober) Available(ctx context.Context) (available bool, detail string, err error) {
+	if !p.probed {
+		p.available, p.detail, p.err = probeSigning(ctx, p.dir)
+		p.probed = true
+	}
+	return p.available, p.detail, p.err
+}
+
 // mergeBase computes the fork point of two committish arguments. ok is false
 // when they share no common ancestor (merge-base's exit code 1), which is a
 // real answer rather than a failure.
@@ -226,6 +279,25 @@ func mergeBase(ctx context.Context, dir, a, b string) (sha string, ok bool, err 
 		return "", false, nil
 	default:
 		return "", false, &git.CommandError{Args: args, ExitCode: res.ExitCode, Stderr: strings.TrimSpace(string(res.Stderr))}
+	}
+}
+
+// isAncestor reports whether commit a is an ancestor of commit b in dir, via
+// `git merge-base --is-ancestor`: exit 0 is yes, exit 1 is no, anything else a
+// real failure. A yes means a merge of b into a can fast-forward.
+func isAncestor(ctx context.Context, dir, a, b string) (bool, error) {
+	args := []string{"merge-base", "--is-ancestor", a, b}
+	res, err := gitexec.RunGit(ctx, dir, args...)
+	if err != nil {
+		return false, err
+	}
+	switch res.ExitCode {
+	case 0:
+		return true, nil
+	case 1:
+		return false, nil
+	default:
+		return false, &git.CommandError{Args: args, ExitCode: res.ExitCode, Stderr: strings.TrimSpace(string(res.Stderr))}
 	}
 }
 
@@ -262,14 +334,14 @@ func allVerify(codes []string) bool {
 	return true
 }
 
-// signingAvailable reports whether git can actually produce a signature in
-// dir, by signing a throwaway commit object with the same machinery the
-// rewrite uses — a definitive answer, where reading configuration would only
-// be a guess at whether a named key resolves. commit-tree always writes, so
-// the probe leaves one unreferenced commit object behind for a future git gc,
-// exactly as a dry-run re-sign does. detail carries git's own reason when
-// signing is unavailable.
-func signingAvailable(ctx context.Context, dir string) (available bool, detail string, err error) {
+// probeSigning reports whether git can actually produce a signature in dir, by
+// signing a throwaway commit object with the same machinery the rewrite uses —
+// a definitive answer, where reading configuration would only guess whether a
+// named key resolves. commit-tree always writes, so each probe leaves one
+// unreferenced commit object behind for a future git gc; Prober memoizes this
+// so a single run probes at most once, leaving at most one such object. detail
+// carries git's own reason when signing is unavailable.
+func probeSigning(ctx context.Context, dir string) (available bool, detail string, err error) {
 	tree, err := gitexec.RunGit(ctx, dir, "rev-parse", "--verify", "HEAD^{tree}")
 	if err != nil {
 		return false, "", err

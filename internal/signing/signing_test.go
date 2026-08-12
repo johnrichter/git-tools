@@ -63,7 +63,7 @@ func open(t *testing.T, dir string) *git.Repo {
 
 func TestGate_SourceNotBranch(t *testing.T) {
 	repo := open(t, scratchRepo(t))
-	_, refusal := Gate(context.Background(), repo, "main", []string{"ghost"}, false)
+	_, refusal := Gate(context.Background(), repo, "main", []string{"ghost"}, false, NewProber(repo))
 	if refusal == nil {
 		t.Fatal("merging a non-branch was not refused")
 	}
@@ -84,7 +84,8 @@ func TestGate_NoForkPoint(t *testing.T) {
 	commit(t, dir, "beta.txt", "beta\n", "beta work")
 	gitCmd(t, dir, "checkout", "-q", "main")
 
-	_, refusal := Gate(context.Background(), open(t, dir), "main", []string{"beta"}, false)
+	repo := open(t, dir)
+	_, refusal := Gate(context.Background(), repo, "main", []string{"beta"}, false, NewProber(repo))
 	if refusal == nil {
 		t.Fatal("merging unrelated history was not refused")
 	}
@@ -113,7 +114,8 @@ func TestGate_SigningKeyUnresolved(t *testing.T) {
 	commit(t, dir, "feature.txt", "feature\n", "feature work") // unsigned
 	gitCmd(t, dir, "checkout", "-q", "main")
 
-	_, refusal := Gate(context.Background(), open(t, dir), "main", []string{"feature"}, false)
+	repo := open(t, dir)
+	_, refusal := Gate(context.Background(), repo, "main", []string{"feature"}, false, NewProber(repo))
 	if refusal == nil {
 		t.Fatal("an unsigned source with no resolvable key was not refused")
 	}
@@ -132,7 +134,8 @@ func TestGate_EmptyRangeIsSkippedNotRefused(t *testing.T) {
 	dir := scratchRepo(t)
 	gitCmd(t, dir, "branch", "feature") // points at main; no commits ahead
 
-	gated, refusal := Gate(context.Background(), open(t, dir), "main", []string{"feature"}, false)
+	repo := open(t, dir)
+	gated, refusal := Gate(context.Background(), repo, "main", []string{"feature"}, false, NewProber(repo))
 	if refusal != nil {
 		t.Fatalf("a source already contained in the target was refused: %v", refusal)
 	}

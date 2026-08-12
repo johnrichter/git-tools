@@ -32,15 +32,17 @@ unsigned. A source that is not a local branch, or that shares no history with
 the branch being merged into, is refused rather than merged: neither gives the
 gate a range it can re-sign.
 
-The gate covers the incoming commits, not the merge commit. A merge that does
-not fast-forward mints a merge commit of its own, and git signs that one only
-when commit.gpgsign is set — which this verb neither sets nor checks. Enable
-it wherever an unsigned merge commit on the target branch is unacceptable.
+The gate covers the incoming commits, and the merge commit is covered too. A
+merge that will mint a commit of its own — a forbidden fast-forward, an octopus
+of two or more sources, or a single source the target cannot fast-forward to —
+is proven signable first and then merged with signing on, so the minted commit
+is signed regardless of commit.gpgsign. If git cannot sign, the merge refuses
+before touching the target branch rather than landing an unsigned tip.
 
 Exit codes:
   0  success              the sources merged (with any re-signing reported)
   10 caveats              the merge landed, but an opted-in cleanup did not complete
-  30 precondition_unmet   the signing gate refused; nothing was merged
+  30 precondition_unmet   signing could not be satisfied; nothing was merged
   40 not_found            --repo is not a git working tree
   41 conflict             the merge would conflict; it was aborted
   50 usage                a flag value is not valid
@@ -76,12 +78,50 @@ Exit codes:
 			if target == "" {
 				target = "HEAD"
 			}
-			gated, refusal := signing.Gate(cmd.Context(), repo, target, args, dryRun)
+
+			// One prober serves both the gate, which re-signs incoming ranges,
+			// and the merge-commit check below, so a run probes signing at most
+			// once.
+			prober := signing.NewProber(repo)
+			gated, refusal := signing.Gate(cmd.Context(), repo, target, args, dryRun, prober)
 			if refusal != nil {
 				return finishDiagnostic(cmd, clikit.NewPreconditionUnmet, refusal.Code(), refusal.Message(), refusal.Advice(), refusal.Context())
 			}
 
-			result, err := repo.Merge(cmd.Context(), args, git.MergeOptions{Message: message, FastForward: ff, DryRun: dryRun})
+			// Decide before the merge whether it will mint a merge commit of its
+			// own. That commit must be signed too, so its signability is a
+			// precondition to settle up front — not something to stumble into
+			// mid-merge, where a failing `git merge -S` looks like an internal
+			// fault rather than an unresolved key. This runs after the gate so a
+			// non-branch or unrelated source is caught by the gate's precondition
+			// refusal rather than by a raw merge-base failure here; the gate's
+			// re-signing preserves each source's fast-forward relation to the
+			// target, so the minting decision is unaffected by its order.
+			willMint, err := signing.WillMintCommit(cmd.Context(), repo, target, args, ff)
+			if err != nil {
+				return finishErr(cmd, "internal.git.merge_shape_check_failed", "determine whether the merge will mint a commit", err)
+			}
+
+			// A real merge that mints a commit signs it: prove git can sign
+			// first, so a keyless repository refuses here (exit 30) rather than
+			// letting `git merge -S` fail and surface as an internal error. A dry
+			// run mints nothing, so it needs neither the proof nor the signature.
+			sign := willMint && !dryRun
+			if sign {
+				available, detail, probeErr := prober.Available(cmd.Context())
+				if probeErr != nil {
+					return finishErr(cmd, "internal.git.signing_probe_failed", "test whether git can sign the merge commit", probeErr)
+				}
+				if !available {
+					return finishDiagnostic(cmd, clikit.NewPreconditionUnmet,
+						"precondition_unmet.git.signing_key_unresolved",
+						fmt.Sprintf("no key resolved for commit signing, so the merge commit for %s would be unsigned: %s", strings.Join(args, " "), detail),
+						clikit.Manual("configure a signing key (gpg.format plus user.signingkey, or this environment's signing setup) and re-run; nothing was merged"),
+						map[string]any{"sources": args})
+				}
+			}
+
+			result, err := repo.Merge(cmd.Context(), args, git.MergeOptions{Message: message, FastForward: ff, DryRun: dryRun, Sign: sign})
 			if err != nil {
 				return handleGitError(cmd, err, "internal.git.merge_failed", fmt.Sprintf("merge %s", strings.Join(args, " ")))
 			}
