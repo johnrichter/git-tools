@@ -232,26 +232,6 @@ func TestCleanupWorktree_DetachedHead_Refuses(t *testing.T) {
 	}
 }
 
-func TestCleanupWorktree_Force_OverridesAndReports(t *testing.T) {
-	dir, repo := cleanupFixture(t)
-	wt := addWorktreeBranch(t, dir, "feature", "main")
-	commitIn(t, wt, "feature.txt", "feature work")
-
-	out, err := worktreeclean.Cleanup(context.Background(), repo, wt, worktreeclean.Options{LandingTarget: "main", Force: true})
-	if err != nil {
-		t.Fatalf("cleanupWorktree: %v", err)
-	}
-	if !out.Removed || !out.Forced {
-		t.Fatalf("force: want removed and forced, got removed=%v forced=%v refusal=%q", out.Removed, out.Forced, out.Refusal)
-	}
-	if out.Unmerged != 1 {
-		t.Fatalf("force: want the overridden unmerged count (1) reported, got %d", out.Unmerged)
-	}
-	if _, statErr := os.Stat(wt); !os.IsNotExist(statErr) {
-		t.Fatalf("force: worktree %s still present", wt)
-	}
-}
-
 func TestCleanupWorktree_DryRun_ReportsWithoutRemoving(t *testing.T) {
 	dir, repo := cleanupFixture(t)
 	wt := addWorktreeBranch(t, dir, "feature", "main")
@@ -268,6 +248,31 @@ func TestCleanupWorktree_DryRun_ReportsWithoutRemoving(t *testing.T) {
 	}
 }
 
+// TestCleanupWorktree_DirtyTree_RefusedAndStaysPresent covers the refusal
+// SC-C2 says must stay reachable with no override once Force is removed: a
+// worktree whose checked-out branch is fully reachable from its landing
+// target (no unmerged-work refusal fires) but whose tree carries an
+// uncommitted change. Cleanup's own rule set has nothing to say about
+// dirtiness -- it is git itself that refuses `worktree remove` on a dirty
+// tree -- and since removeTarget always calls WorktreeRemove with an empty
+// git.WorktreeRemoveOptions{} (Force is never threaded through), that refusal
+// is unconditional: no flag anywhere in this call chain can override it.
+func TestCleanupWorktree_DirtyTree_RefusedAndStaysPresent(t *testing.T) {
+	dir, repo := cleanupFixture(t)
+	wt := addWorktreeBranch(t, dir, "feature", "main") // no commits beyond main
+	if err := os.WriteFile(filepath.Join(wt, "dirty.txt"), []byte("uncommitted\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := worktreeclean.Cleanup(context.Background(), repo, wt, worktreeclean.Options{LandingTarget: "main"})
+	if err == nil {
+		t.Fatalf("want an error from git's own dirty-tree refusal, got result=%+v", out)
+	}
+	if _, statErr := os.Stat(wt); statErr != nil {
+		t.Fatalf("worktree %s was removed despite being dirty: %v", wt, statErr)
+	}
+}
+
 func TestCleanupWorktree_UnregisteredPath_Refuses(t *testing.T) {
 	_, repo := cleanupFixture(t)
 	out, err := worktreeclean.Cleanup(context.Background(), repo, filepath.Join(t.TempDir(), "nope"), worktreeclean.Options{LandingTarget: "main"})
@@ -277,4 +282,86 @@ func TestCleanupWorktree_UnregisteredPath_Refuses(t *testing.T) {
 	if out.RefusalKind != worktreeclean.RefusalNotRegistered || out.Removed {
 		t.Fatalf("want not-registered refusal, got kind=%d removed=%v", out.RefusalKind, out.Removed)
 	}
+}
+
+// --- Force-removal regression guard ------------------------------------------
+//
+// SC-C1 requires that no git-tools path pass Force: true to WorktreeRemove --
+// scoped, per this task's file surface, to the merge/worktree-remove CLI
+// path: internal/cli and internal/worktreeclean. (worktree-gate/lifecycle is
+// a distinct pool-management tool with its own, unrelated Force option --
+// out of this task's scope, not touched here.) This is a static, adversarial
+// guard against the plumbing being re-threaded by a later change: it parses
+// every WorktreeRemove(...) call in that source (balancing parens itself,
+// since a simple substring/line-based grep would miss a call whose Force
+// field sits on a different line than "WorktreeRemove(") and fails if any
+// call's argument text mentions Force at all -- true, false, or a variable --
+// since Options no longer has a Force field for any of those to name.
+func TestNoWorktreeRemoveCallSitePassesForce(t *testing.T) {
+	repoRoot, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	scanRoots := []string{
+		filepath.Join(repoRoot, "internal", "cli"),
+		filepath.Join(repoRoot, "internal", "worktreeclean"),
+	}
+	var calls []string
+	for _, root := range scanRoots {
+		walkErr := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return err
+			}
+			if info.IsDir() {
+				return nil
+			}
+			if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+				return nil
+			}
+			src, readErr := os.ReadFile(path)
+			if readErr != nil {
+				return readErr
+			}
+			calls = append(calls, extractCalls(string(src), "WorktreeRemove(")...)
+			return nil
+		})
+		if walkErr != nil {
+			t.Fatal(walkErr)
+		}
+	}
+	if len(calls) == 0 {
+		t.Fatal("found no WorktreeRemove call site to check -- the guard itself is broken")
+	}
+	for _, call := range calls {
+		if strings.Contains(call, "Force") {
+			t.Fatalf("a WorktreeRemove call site still mentions Force: %s", call)
+		}
+	}
+}
+
+// extractCalls returns, for every occurrence of marker in src, the balanced-
+// paren argument text that follows it (marker's own trailing "(" already
+// opens depth 1).
+func extractCalls(src, marker string) []string {
+	var out []string
+	for i := 0; ; {
+		idx := strings.Index(src[i:], marker)
+		if idx < 0 {
+			break
+		}
+		start := i + idx + len(marker)
+		depth := 1
+		j := start
+		for ; j < len(src) && depth > 0; j++ {
+			switch src[j] {
+			case '(':
+				depth++
+			case ')':
+				depth--
+			}
+		}
+		out = append(out, src[start:j])
+		i = j
+	}
+	return out
 }

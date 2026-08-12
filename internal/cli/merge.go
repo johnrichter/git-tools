@@ -61,7 +61,6 @@ Exit codes:
 			ffMode, _ := cmd.Flags().GetString("fast-forward")
 			dryRun, _ := cmd.Flags().GetBool("dry-run")
 			cleanup, _ := cmd.Flags().GetBool("cleanup")
-			force, _ := cmd.Flags().GetBool("force")
 
 			ff, err := parseFastForward(ffMode)
 			if err != nil {
@@ -100,7 +99,7 @@ Exit codes:
 			// cleanup that refuses or fails never unwinds the merge that already
 			// landed: it is reported as a caveat on the success.
 			if cleanup && !result.DryRun {
-				cleaned, unremoved := cleanupMergedWorktrees(cmd.Context(), repo, args, cfg.Remote, force)
+				cleaned, unremoved := cleanupMergedWorktrees(cmd.Context(), repo, args, cfg.Remote)
 				if len(cleaned) > 0 {
 					data["cleaned_worktrees"] = cleaned
 				}
@@ -109,7 +108,7 @@ Exit codes:
 					reason, _ := unremoved[0]["reason"].(string)
 					return finishCaveat(cmd, data, "caveats.git.worktree_cleanup_incomplete",
 						fmt.Sprintf("the merge landed, but %d worktree(s) were not removed: %s", len(unremoved), reason),
-						clikit.Manual("remove the named worktree(s) manually, or re-run with --force to discard the named work"),
+						clikit.Manual("remove the named worktree(s) manually"),
 						map[string]any{"unremoved": len(unremoved)})
 				}
 			}
@@ -125,7 +124,6 @@ Exit codes:
 	cmd.Flags().String("fast-forward", "allow", "fast-forward behavior: allow, never, or only")
 	cmd.Flags().Bool("dry-run", false, "merge into the index and report clean-mergeability, always aborting afterward")
 	cmd.Flags().Bool("cleanup", false, "after a successful merge, remove each merged branch's worktree once its work has safely landed")
-	cmd.Flags().Bool("force", false, "with --cleanup, override the no-work-loss and cardinality refusals, discarding the named work")
 	return cmd
 }
 
@@ -135,7 +133,7 @@ Exit codes:
 // into the unremoved list for the caller to report as a caveat rather than
 // unwound. cleaned holds the paths removed; each unremoved entry names a path
 // (when known) and the reason it stayed.
-func cleanupMergedWorktrees(ctx context.Context, repo *git.Repo, mergedBranches []string, remote string, force bool) (cleaned []string, unremoved []map[string]any) {
+func cleanupMergedWorktrees(ctx context.Context, repo *git.Repo, mergedBranches []string, remote string) (cleaned []string, unremoved []map[string]any) {
 	list, err := repo.WorktreeList(ctx)
 	if err != nil {
 		return nil, []map[string]any{{"reason": sanitizeMessage(fmt.Sprintf("list worktrees: %v", err))}}
@@ -147,7 +145,6 @@ func cleanupMergedWorktrees(ctx context.Context, repo *git.Repo, mergedBranches 
 		out, err := worktreeclean.Cleanup(ctx, repo, wt.Path, worktreeclean.Options{
 			MergedBranches: mergedBranches,
 			Remote:         remote,
-			Force:          force,
 		})
 		switch {
 		case err != nil:
