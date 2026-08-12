@@ -600,6 +600,105 @@ func TestHooksInstall_WritesScriptAndSetsHooksPath(t *testing.T) {
 	}
 }
 
+// TestAbandonmentRoute_MergedBranch_SucceedsInTwoActs and
+// TestAbandonmentRoute_UnmergedBranch_RefusedAtBothActs are R10's evidence:
+// cluster C (SC-C6, this abandonment route) lands only because SC-C7 shipped
+// branch delete alongside it, so the route these two acts complete now
+// exists. D3 keeps it a two-act, no-single-call route: worktree remove and
+// branch delete are separate deliberate invocations, and neither carries a
+// flag that discards work the other's guard would refuse.
+//
+// The two acts run worktree remove before branch delete, in that order: once
+// a linked worktree's branch ref is gone, `git worktree list` still reports
+// the worktree as checked out on the deleted ref (the worktree
+// administrative files cache the branch name), so a later worktree remove's
+// own reachability check fails trying to resolve a ref that no longer
+// exists. Removing the worktree first, while the branch ref still resolves,
+// avoids that dead end -- the only order in which both acts land cleanly.
+func TestAbandonmentRoute_MergedBranch_SucceedsInTwoActs(t *testing.T) {
+	bin := buildCLI(t)
+	dir := initRepo(t)
+	wtPath := filepath.Join(t.TempDir(), "feature")
+	runGit(t, dir, "worktree", "add", "-b", "feature", wtPath, "main")
+	head := runGit(t, dir, "rev-parse", "feature")
+
+	// Act 1: remove the worktree. feature carries no commit beyond main, so
+	// the no-work-loss guard clears and the worktree goes.
+	r, exit := runCLI(t, bin, "--repo", dir, "worktree", "remove", wtPath, "--landing-target", "main")
+	if r.Status != "success" || exit != 0 {
+		t.Fatalf("act 1 (worktree remove): status=%s exit=%d: %+v", r.Status, exit, r)
+	}
+	if _, err := os.Stat(wtPath); !os.IsNotExist(err) {
+		t.Fatalf("act 1 left the worktree behind: %s", wtPath)
+	}
+
+	// Act 2: delete the now-unchecked-out branch. Its own compare-and-swap
+	// guard runs the identical no-work-loss check.
+	r, exit = runCLI(t, bin, "--repo", dir, "branch", "delete", "feature", head, "--landing-target", "main")
+	if r.Status != "success" || exit != 0 {
+		t.Fatalf("act 2 (branch delete): status=%s exit=%d: %+v", r.Status, exit, r)
+	}
+	if err := exec.Command("git", "-C", dir, "show-ref", "--verify", "refs/heads/feature").Run(); err == nil {
+		t.Fatal("act 2 left the branch ref behind")
+	}
+
+	// The backup tag from act 2 makes the abandonment recoverable (SC-C6): it
+	// must exist and still resolve to the deleted branch's old head.
+	backupTag, _ := r.Data["backup_tag"].(string)
+	if backupTag == "" {
+		t.Fatalf("branch delete result carries no backup_tag: %+v", r.Data)
+	}
+	if got := runGit(t, dir, "rev-parse", backupTag); got != head {
+		t.Fatalf("backup tag %s resolves to %s, want the deleted branch's old head %s", backupTag, got, head)
+	}
+}
+
+// TestAbandonmentRoute_UnmergedBranch_RefusedAtBothActs proves D3 holds for
+// the abandonment route itself: a branch that still carries committed work
+// unreachable from its landing target cannot be abandoned through either
+// act. Order does not matter here -- unlike the merged route, neither act
+// depends on the other succeeding first -- so both are exercised, and each
+// leaves its target exactly as it found it. Together with the merged-route
+// test above, this enumerates every verb that could discard the worktree or
+// the branch (worktree remove, branch delete) and confirms each still
+// refuses, and that neither advertises a flag that would let it.
+func TestAbandonmentRoute_UnmergedBranch_RefusedAtBothActs(t *testing.T) {
+	bin := buildCLI(t)
+	dir := initRepo(t)
+	wtPath := filepath.Join(t.TempDir(), "feature")
+	runGit(t, dir, "worktree", "add", "-b", "feature", wtPath, "main")
+	commitFile(t, wtPath, "feature.txt", "feature\n", "feature work")
+	head := runGit(t, dir, "rev-parse", "feature")
+
+	for _, help := range [][]string{{"branch", "delete", "--help"}, {"worktree", "remove", "--help"}} {
+		out, err := exec.Command(bin, help...).CombinedOutput()
+		if err != nil {
+			t.Fatalf("%v exited non-zero: %v\n%s", help, err, out)
+		}
+		if strings.Contains(string(out), "--force") {
+			t.Fatalf("%v still advertises a --force override: no verb may bypass the abandonment refusal", help)
+		}
+	}
+
+	// branch delete: refused, ref unmoved.
+	r, exit := runCLI(t, bin, "--repo", dir, "branch", "delete", "feature", head, "--landing-target", "main")
+	if r.Status != "precondition_unmet" || exit != 30 {
+		t.Fatalf("branch delete: status=%s exit=%d, want precondition_unmet/30: %+v", r.Status, exit, r)
+	}
+	if got := runGit(t, dir, "rev-parse", "feature"); got != head {
+		t.Fatalf("a refused branch delete moved the ref: got %s want %s", got, head)
+	}
+
+	// worktree remove: refused, worktree present.
+	r, exit = runCLI(t, bin, "--repo", dir, "worktree", "remove", wtPath, "--landing-target", "main")
+	if r.Status != "precondition_unmet" || exit != 30 {
+		t.Fatalf("worktree remove: status=%s exit=%d, want precondition_unmet/30: %+v", r.Status, exit, r)
+	}
+	if _, err := os.Stat(wtPath); err != nil {
+		t.Fatalf("a refused worktree remove disturbed the worktree: %v", err)
+	}
+}
+
 func TestHooksInstall_ExistingScriptWithoutForce_IsConflict(t *testing.T) {
 	bin := buildCLI(t)
 	dir := initRepo(t)
