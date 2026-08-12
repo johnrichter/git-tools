@@ -12,6 +12,13 @@
 # tag push fires both workflows independently, and neither GitHub Actions run gates the other,
 # so a malformed tag rejected by ci.yml would otherwise still reach `gh release create` here
 # undisturbed.
+#
+# All build output is written under $RUNNER_TEMP, never inside the checkout. Go's build info
+# reports vcs.modified=true whenever `git status --porcelain` is non-empty at build time, and an
+# untracked directory of freshly built archives inside the checkout is exactly the kind of change
+# that flags. Writing artifacts to $RUNNER_TEMP instead keeps the checkout byte-for-byte what was
+# fetched, so every published binary's runtime/debug.ReadBuildInfo() reports vcs.modified=false
+# against the tagged commit. Do not reintroduce an in-checkout artifact directory here.
 
 name: SC-DISTRIBUTION release
 
@@ -33,6 +40,11 @@ jobs:
   build-and-publish:
     name: build-and-publish
     runs-on: ubuntu-latest
+    env:
+      # Pins the exact toolchain patch for this job's builds, overriding whatever
+      # setup-go's go-version-file input would otherwise resolve from go.mod's
+      # unpinned "go 1.26" directive (go.mod itself carries no toolchain line).
+      GOTOOLCHAIN: go1.26.5
     defaults:
       run:
         working-directory: git-tools
@@ -40,6 +52,15 @@ jobs:
       - uses: actions/checkout@v5
         with:
           path: git-tools
+
+      # Resolves the artifacts dir under $RUNNER_TEMP -- outside the checkout (git-tools/)
+      # so no build step's output can dirty `git status --porcelain` and flip the published
+      # binaries' vcs.modified stamp. Set via $GITHUB_ENV because the runner context is not
+      # available to jobs.<id>.env; $RUNNER_TEMP is exported into every run step's shell.
+      - name: Resolve artifacts directory
+        run: |
+          set -euo pipefail
+          echo "ARTIFACTS_DIR=${RUNNER_TEMP}/release-artifacts" >> "$GITHUB_ENV"
 
       - name: Tag conforms to SC-VERSIONING
         if: ${{ github.event_name == 'push' }}
@@ -76,7 +97,7 @@ jobs:
         run: |
           set -euo pipefail
           version="${{ steps.version.outputs.version }}"
-          mkdir -p dist
+          mkdir -p "$ARTIFACTS_DIR"
           binary_checksums="$(mktemp)"
           for entry in "git-tools:./cmd/git-tools" "worktree-gate:./worktree-gate/detect/cmd/worktree-gate"; do
             bin="${entry%%:*}"
@@ -88,15 +109,28 @@ jobs:
               GOOS="$os" GOARCH="$arch" CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o "${workdir}/${bin}" "${pkg}"
               key="${bin}_${version}_${os}_${arch}"
               sha256sum "${workdir}/${bin}" | awk -v key="${key}" '{ print $1, key }' OFS='  ' >> "${binary_checksums}"
-              archive="dist/${bin}_${version}_${os}_${arch}.tar.gz"
+              archive="${ARTIFACTS_DIR}/${bin}_${version}_${os}_${arch}.tar.gz"
               tar -czf "${archive}" -C "${workdir}" "${bin}"
               rm -rf "${workdir}"
             done
           done
-          sort -k2 "${binary_checksums}" > dist/binary-checksums.txt
+          sort -k2 "${binary_checksums}" > "${ARTIFACTS_DIR}/binary-checksums.txt"
           rm -f "${binary_checksums}"
-          ( cd dist && sha256sum ./*.tar.gz | sed 's#\./##' | sort -k2 > checksums.txt )
-          ls -la dist
+          ( cd "${ARTIFACTS_DIR}" && sha256sum ./*.tar.gz | sed 's#\./##' | sort -k2 > checksums.txt )
+          ls -la "${ARTIFACTS_DIR}"
+
+      # Confirms the build step above never wrote into the checkout: an untracked
+      # leftover here would flip vcs.modified on every binary built from this point
+      # on, so this fails the job outright rather than letting the stamp lie.
+      - name: Checkout still clean after cross-compile
+        run: |
+          set -euo pipefail
+          status="$(git status --porcelain)"
+          if [ -n "$status" ]; then
+            echo "cross-compile step wrote into the checkout; artifacts must land under \$RUNNER_TEMP" >&2
+            printf '%s\n' "$status"
+            exit 1
+          fi
 
       # The canonical sha256 of each SC-CONTRACT-DIGESTS artifact, so a consumer can verify
       # the exact contract data this release's worktree-gate binary was built against without
@@ -104,23 +138,42 @@ jobs:
       - name: Canonical sha256 of the SC-CONTRACT-DIGESTS artifacts
         run: |
           set -euo pipefail
-          mkdir -p dist
+          mkdir -p "$ARTIFACTS_DIR"
           ( cd worktree-gate/detect && sha256sum \
               testdata/cwd-corpus.json \
               trackingdocs.json \
               contracts/connectors.json \
               contracts/banned-names.json \
-            | sort -k2 ) > dist/contract-digests.txt
-          cat dist/contract-digests.txt
+            | sort -k2 ) > "${ARTIFACTS_DIR}/contract-digests.txt"
+          cat "${ARTIFACTS_DIR}/contract-digests.txt"
+
+      # Same guard as after the cross-compile step, repeated because this step also
+      # writes an artifact and could just as easily dirty the checkout on its own.
+      - name: Checkout still clean after contract-digest step
+        run: |
+          set -euo pipefail
+          status="$(git status --porcelain)"
+          if [ -n "$status" ]; then
+            echo "contract-digest step wrote into the checkout; artifacts must land under \$RUNNER_TEMP" >&2
+            printf '%s\n' "$status"
+            exit 1
+          fi
 
       - name: Publish the official release (per-OS/arch archives + checksums)
         if: ${{ github.event_name == 'push' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release create "${{ steps.version.outputs.tag }}" --title "${{ steps.version.outputs.tag }}" --generate-notes dist/*.tar.gz dist/checksums.txt dist/binary-checksums.txt dist/contract-digests.txt
+        run: |
+          set -euo pipefail
+          gh release create "${{ steps.version.outputs.tag }}" --title "${{ steps.version.outputs.tag }}" --generate-notes \
+            "${ARTIFACTS_DIR}"/*.tar.gz \
+            "${ARTIFACTS_DIR}/checksums.txt" \
+            "${ARTIFACTS_DIR}/binary-checksums.txt" \
+            "${ARTIFACTS_DIR}/contract-digests.txt"
 
       - name: Dry-run summary
         if: ${{ github.event_name != 'push' }}
         run: |
+          set -euo pipefail
           echo "dry-run: built archives + checksums for ${{ steps.version.outputs.tag }} - publish skipped"
-          ls -la dist
+          ls -la "${ARTIFACTS_DIR}"
