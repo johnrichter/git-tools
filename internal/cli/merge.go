@@ -11,6 +11,7 @@ import (
 	"github.com/johnrichter/claude-shared-tooling/go/git"
 	"github.com/johnrichter/git-tools/internal/gitexec"
 	"github.com/johnrichter/git-tools/internal/signing"
+	"github.com/johnrichter/git-tools/internal/worktreeclean"
 )
 
 func newMergeCmd() *cobra.Command {
@@ -129,7 +130,7 @@ Exit codes:
 }
 
 // cleanupMergedWorktrees removes the worktree of each just-merged branch,
-// through the shared cleanupWorktree rule set. It never returns an error: a
+// through the shared worktreeclean.Cleanup rule set. It never returns an error: a
 // merge has already landed, so a refusal or an infrastructure failure is folded
 // into the unremoved list for the caller to report as a caveat rather than
 // unwound. cleaned holds the paths removed; each unremoved entry names a path
@@ -140,10 +141,10 @@ func cleanupMergedWorktrees(ctx context.Context, repo *git.Repo, mergedBranches 
 		return nil, []map[string]any{{"reason": sanitizeMessage(fmt.Sprintf("list worktrees: %v", err))}}
 	}
 	for _, wt := range list {
-		if wt.Branch == "" || !branchAmong(wt.Branch, mergedBranches) {
+		if wt.Branch == "" || !worktreeclean.BranchAmong(wt.Branch, mergedBranches) {
 			continue
 		}
-		out, err := cleanupWorktree(ctx, repo, wt.Path, cleanupOptions{
+		out, err := worktreeclean.Cleanup(ctx, repo, wt.Path, worktreeclean.Options{
 			MergedBranches: mergedBranches,
 			Remote:         remote,
 			Force:          force,

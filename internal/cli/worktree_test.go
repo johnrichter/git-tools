@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/johnrichter/claude-shared-tooling/go/git"
+	"github.com/johnrichter/git-tools/internal/worktreeclean"
 )
 
 func TestWorktreeRegisteredAt_MatchesByResolvedPath(t *testing.T) {
@@ -131,7 +132,7 @@ func TestCleanupWorktree_HappyPath_RemovesWhenLanded(t *testing.T) {
 	dir, repo := cleanupFixture(t)
 	wt := addWorktreeBranch(t, dir, "feature", "main")
 
-	out, err := cleanupWorktree(context.Background(), repo, wt, cleanupOptions{LandingTarget: "main"})
+	out, err := worktreeclean.Cleanup(context.Background(), repo, wt, worktreeclean.Options{LandingTarget: "main"})
 	if err != nil {
 		t.Fatalf("cleanupWorktree: %v", err)
 	}
@@ -150,11 +151,11 @@ func TestCleanupWorktree_UnmergedCommits_RefusesThroughBothPaths(t *testing.T) {
 
 	// Standalone path: landing target is main, feature carries an unreachable
 	// commit -> refuse, nothing removed.
-	standalone, err := cleanupWorktree(context.Background(), repo, wt, cleanupOptions{LandingTarget: "main"})
+	standalone, err := worktreeclean.Cleanup(context.Background(), repo, wt, worktreeclean.Options{LandingTarget: "main"})
 	if err != nil {
 		t.Fatalf("standalone cleanupWorktree: %v", err)
 	}
-	if standalone.RefusalKind != refusalUnmergedWork || standalone.Removed {
+	if standalone.RefusalKind != worktreeclean.RefusalUnmergedWork || standalone.Removed {
 		t.Fatalf("standalone: want unmerged-work refusal and nothing removed, got kind=%d removed=%v refusal=%q", standalone.RefusalKind, standalone.Removed, standalone.Refusal)
 	}
 	if standalone.Unmerged != 1 {
@@ -164,11 +165,11 @@ func TestCleanupWorktree_UnmergedCommits_RefusesThroughBothPaths(t *testing.T) {
 	// Merge path: same fixture, landing is the branch merged onto (main, checked
 	// out in repo.Dir). The very same rule must refuse -- proving both entry
 	// points share one rule set that cannot diverge.
-	merge, err := cleanupWorktree(context.Background(), repo, wt, cleanupOptions{MergedBranches: []string{"feature"}})
+	merge, err := worktreeclean.Cleanup(context.Background(), repo, wt, worktreeclean.Options{MergedBranches: []string{"feature"}})
 	if err != nil {
 		t.Fatalf("merge cleanupWorktree: %v", err)
 	}
-	if merge.RefusalKind != refusalUnmergedWork || merge.Removed {
+	if merge.RefusalKind != worktreeclean.RefusalUnmergedWork || merge.Removed {
 		t.Fatalf("merge: want unmerged-work refusal and nothing removed, got kind=%d removed=%v refusal=%q", merge.RefusalKind, merge.Removed, merge.Refusal)
 	}
 	if _, statErr := os.Stat(wt); statErr != nil {
@@ -180,11 +181,11 @@ func TestCleanupWorktree_LandingUnresolved_Refuses(t *testing.T) {
 	dir, repo := cleanupFixture(t)
 	wt := addWorktreeBranch(t, dir, "feature", "main") // no upstream, no origin/HEAD
 
-	out, err := cleanupWorktree(context.Background(), repo, wt, cleanupOptions{})
+	out, err := worktreeclean.Cleanup(context.Background(), repo, wt, worktreeclean.Options{})
 	if err != nil {
 		t.Fatalf("cleanupWorktree: %v", err)
 	}
-	if out.RefusalKind != refusalLandingUnresolved || out.Removed {
+	if out.RefusalKind != worktreeclean.RefusalLandingUnresolved || out.Removed {
 		t.Fatalf("want landing-unresolved refusal, got kind=%d removed=%v refusal=%q", out.RefusalKind, out.Removed, out.Refusal)
 	}
 }
@@ -195,11 +196,11 @@ func TestCleanupWorktree_NestedSubWorktree_Refuses(t *testing.T) {
 	nested := filepath.Join(slug, "task")
 	cgit(t, dir, "worktree", "add", "-q", "-b", "task", nested, "main")
 
-	out, err := cleanupWorktree(context.Background(), repo, slug, cleanupOptions{LandingTarget: "main"})
+	out, err := worktreeclean.Cleanup(context.Background(), repo, slug, worktreeclean.Options{LandingTarget: "main"})
 	if err != nil {
 		t.Fatalf("cleanupWorktree: %v", err)
 	}
-	if out.RefusalKind != refusalLiveSubWorktree || out.Removed {
+	if out.RefusalKind != worktreeclean.RefusalLiveSubWorktree || out.Removed {
 		t.Fatalf("want live-sub-worktree refusal, got kind=%d removed=%v refusal=%q", out.RefusalKind, out.Removed, out.Refusal)
 	}
 }
@@ -208,11 +209,11 @@ func TestCleanupWorktree_SwitchedBranch_MergePathRefuses(t *testing.T) {
 	dir, repo := cleanupFixture(t)
 	wt := addWorktreeBranch(t, dir, "other", "main") // on a branch we did not merge
 
-	out, err := cleanupWorktree(context.Background(), repo, wt, cleanupOptions{MergedBranches: []string{"feature"}})
+	out, err := worktreeclean.Cleanup(context.Background(), repo, wt, worktreeclean.Options{MergedBranches: []string{"feature"}})
 	if err != nil {
 		t.Fatalf("cleanupWorktree: %v", err)
 	}
-	if out.RefusalKind != refusalBranchNotMerged || out.Removed {
+	if out.RefusalKind != worktreeclean.RefusalBranchNotMerged || out.Removed {
 		t.Fatalf("want branch-not-merged refusal, got kind=%d removed=%v refusal=%q", out.RefusalKind, out.Removed, out.Refusal)
 	}
 }
@@ -222,11 +223,11 @@ func TestCleanupWorktree_DetachedHead_Refuses(t *testing.T) {
 	wt := filepath.Join(t.TempDir(), "detached")
 	cgit(t, dir, "worktree", "add", "-q", "--detach", wt, "main")
 
-	out, err := cleanupWorktree(context.Background(), repo, wt, cleanupOptions{LandingTarget: "main"})
+	out, err := worktreeclean.Cleanup(context.Background(), repo, wt, worktreeclean.Options{LandingTarget: "main"})
 	if err != nil {
 		t.Fatalf("cleanupWorktree: %v", err)
 	}
-	if out.RefusalKind != refusalDetachedHead || out.Removed {
+	if out.RefusalKind != worktreeclean.RefusalDetachedHead || out.Removed {
 		t.Fatalf("want detached-head refusal, got kind=%d removed=%v refusal=%q", out.RefusalKind, out.Removed, out.Refusal)
 	}
 }
@@ -236,7 +237,7 @@ func TestCleanupWorktree_Force_OverridesAndReports(t *testing.T) {
 	wt := addWorktreeBranch(t, dir, "feature", "main")
 	commitIn(t, wt, "feature.txt", "feature work")
 
-	out, err := cleanupWorktree(context.Background(), repo, wt, cleanupOptions{LandingTarget: "main", Force: true})
+	out, err := worktreeclean.Cleanup(context.Background(), repo, wt, worktreeclean.Options{LandingTarget: "main", Force: true})
 	if err != nil {
 		t.Fatalf("cleanupWorktree: %v", err)
 	}
@@ -255,7 +256,7 @@ func TestCleanupWorktree_DryRun_ReportsWithoutRemoving(t *testing.T) {
 	dir, repo := cleanupFixture(t)
 	wt := addWorktreeBranch(t, dir, "feature", "main")
 
-	out, err := cleanupWorktree(context.Background(), repo, wt, cleanupOptions{LandingTarget: "main", DryRun: true})
+	out, err := worktreeclean.Cleanup(context.Background(), repo, wt, worktreeclean.Options{LandingTarget: "main", DryRun: true})
 	if err != nil {
 		t.Fatalf("cleanupWorktree: %v", err)
 	}
@@ -269,11 +270,11 @@ func TestCleanupWorktree_DryRun_ReportsWithoutRemoving(t *testing.T) {
 
 func TestCleanupWorktree_UnregisteredPath_Refuses(t *testing.T) {
 	_, repo := cleanupFixture(t)
-	out, err := cleanupWorktree(context.Background(), repo, filepath.Join(t.TempDir(), "nope"), cleanupOptions{LandingTarget: "main"})
+	out, err := worktreeclean.Cleanup(context.Background(), repo, filepath.Join(t.TempDir(), "nope"), worktreeclean.Options{LandingTarget: "main"})
 	if err != nil {
 		t.Fatalf("cleanupWorktree: %v", err)
 	}
-	if out.RefusalKind != refusalNotRegistered || out.Removed {
+	if out.RefusalKind != worktreeclean.RefusalNotRegistered || out.Removed {
 		t.Fatalf("want not-registered refusal, got kind=%d removed=%v", out.RefusalKind, out.Removed)
 	}
 }
