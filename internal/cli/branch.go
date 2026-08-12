@@ -23,8 +23,16 @@ func newBranchCmd() *cobra.Command {
 
 func newBranchCreateCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:     "create <name> <start-point>",
-		Short:   "Create name pointing at start-point",
+		Use:   "create <name> <start-point>",
+		Short: "Create name pointing at start-point",
+		Long: `create makes name point at start-point. Without --force, name must not
+already exist.
+
+--force lets name already exist, but moves it only when the old tip stays
+reachable from start-point -- the move loses no commit. When it would orphan
+commits, create refuses instead: name is left byte-equal to its pre-run
+value. There is no override; point start-point at a ref that already
+contains the branch's current tip, or drop --force.`,
 		Args:    cobra.ExactArgs(2),
 		Example: "  git-tools branch create feature/x origin/main",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -41,6 +49,40 @@ func newBranchCreateCmd() *cobra.Command {
 			force, _ := cmd.Flags().GetBool("force")
 			dryRun, _ := cmd.Flags().GetBool("dry-run")
 
+			if force {
+				// The one no-work-loss guard on a forced move, and the only one: it
+				// must run -- and refuse -- before CreateBranch ever touches the ref,
+				// so a refusal leaves name byte-equal to its pre-run value. It counts
+				// reachability with the same predicate the branch-delete guard uses
+				// (commits reachable from one commit but not another), not a second
+				// one, and only applies when name already exists: plain creation, and
+				// --force naming a branch that does not exist, are untouched by it.
+				oldTip, exists, resolveErr := worktreeclean.RevParseLocal(cmd.Context(), repo.Dir, "refs/heads/"+name)
+				if resolveErr != nil {
+					return finishErr(cmd, "internal.git.branch_head_resolve_failed", fmt.Sprintf("resolve %s's current head", name), resolveErr)
+				}
+				if exists {
+					newTip, resolved, resolveErr := worktreeclean.RevParseLocal(cmd.Context(), repo.Dir, startPoint)
+					if resolveErr != nil {
+						return finishErr(cmd, "internal.git.branch_start_point_resolve_failed", fmt.Sprintf("resolve start point %s", startPoint), resolveErr)
+					}
+					// An unresolvable start-point is left to CreateBranch below, which
+					// fails with git's own message -- unchanged from today.
+					if resolved {
+						orphaned, countErr := worktreeclean.CountUnmerged(cmd.Context(), repo, []string{oldTip}, newTip)
+						if countErr != nil {
+							return finishErr(cmd, "internal.git.branch_reachability_check_failed", fmt.Sprintf("check %s's reachability from %s", name, startPoint), countErr)
+						}
+						if orphaned > 0 {
+							return finishDiagnostic(cmd, clikit.NewPreconditionUnmet, "precondition_unmet.git.branch_move_orphans_commits",
+								fmt.Sprintf("moving %s from %s to %s would orphan %d commit(s) not reachable from the new start point", name, oldTip, startPoint, orphaned),
+								clikit.Manual("point start-point at a ref that already contains the branch's current tip, or drop --force"),
+								map[string]any{"branch": name, "current_tip": oldTip, "start_point": startPoint, "orphaned_commits": orphaned})
+						}
+					}
+				}
+			}
+
 			if err := repo.CreateBranch(cmd.Context(), name, startPoint, git.BranchOptions{Force: force, DryRun: dryRun}); err != nil {
 				return finishErr(cmd, "internal.git.branch_create_failed", fmt.Sprintf("create branch %s at %s", name, startPoint), err)
 			}
@@ -52,8 +94,8 @@ func newBranchCreateCmd() *cobra.Command {
 			return finish(cmd, result)
 		},
 	}
-	cmd.Flags().Bool("force", false, "move an existing branch of the same name instead of refusing")
-	cmd.Flags().Bool("dry-run", false, "validate that start-point resolves without creating the branch")
+	cmd.Flags().Bool("force", false, "move an existing branch of the same name instead of refusing, but only when the old tip stays reachable from start-point")
+	cmd.Flags().Bool("dry-run", false, "validate that start-point resolves (and, with --force, that the move is reachable) without creating or moving the branch")
 	return cmd
 }
 
