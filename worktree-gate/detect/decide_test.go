@@ -174,6 +174,27 @@ func TestDecide_Bash_EveryCorpusDenial_NamesARemedy(t *testing.T) {
 	}
 }
 
+// TestDecide_Bash_WriteInPrimaryCheckout_RemedyNamesBranchDeleteConstraint pins
+// that remedyThisRepoWorktree no longer offers "create a worktree and retry" as
+// the whole answer for a branch delete: git refuses to delete a branch checked
+// out in the worktree the delete runs from, so that route cannot work for this
+// verb. The remedy must instead name the working route (the provisioned CLI's
+// `branch delete`, run from the primary checkout itself) and state why.
+func TestDecide_Bash_WriteInPrimaryCheckout_RemedyNamesBranchDeleteConstraint(t *testing.T) {
+	fs := primaryFS()
+	v := testVerbs(t)
+	d := Decide(fs.lstat, fs.readFile, v, nil, TrackingDocs{}, nil, Input{ToolName: "Bash", CWD: "/repo", Command: "git commit -m x"})
+	if !d.Deny {
+		t.Fatal("expected deny for a write-classified Bash command in the primary checkout")
+	}
+	if !strings.Contains(d.Remedy, "checked-out branch") {
+		t.Errorf("remedy %q does not state the constraint that a worktree cannot delete its own checked-out branch", d.Remedy)
+	}
+	if !strings.Contains(d.Remedy, "`branch delete <branch>`") {
+		t.Errorf("remedy %q does not name the sanctioned direct route for a branch delete", d.Remedy)
+	}
+}
+
 // TestRemedyConstants_AreRunnableAsSpelled pins the two properties a remedy's
 // TEXT must hold, which no per-case assertion covers because they are about how
 // the advice is spelled rather than which advice a leg picks:
