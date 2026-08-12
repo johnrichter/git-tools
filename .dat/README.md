@@ -4,7 +4,7 @@ description: "In-repo home for plan-with-team / build-with-team plans and builds
 id: "doc:git-tools:dat-convention"
 tags: [type:doc, topic:process, status:complete, privacy:public, owner:public]
 links: [doc:git-tools:anoikis-convention]
-updated: 2026-07-19T00:00:00Z
+updated: 2026-08-12T00:00:00Z
 ---
 
 # .dat — plan/build-with-team
@@ -12,7 +12,8 @@ updated: 2026-07-19T00:00:00Z
 Home for `delivery-agent-team` **plan-with-team** and **build-with-team** work — one directory per effort (`.dat/<slug>/`).
 
 - **Tracked in git.** Plans and builds are committed so the harness can plan, build, resume, and hand off across sessions.
-- **Short-lived.** Complete the work, cut a release (git tag / GitHub artifact / plugin version), consume it downstream, then prune the effort directory.
+- **Short-lived.** Complete the work, cut a release (git tag / GitHub artifact / plugin version), consume it downstream, then archive the effort directory under `.dat/archive/<slug>/`.
 - **Scope.** Everything an effort needs (design, plan, notes, scratch) lives under its slug directory — not scattered across the repo root.
+- **Archive.** `.dat/archive/<slug>/` holds a completed effort's full doc set as a record that the work landed. Any script or tool reading a project directory resolves `.dat/<slug>` first, then `.dat/archive/<slug>`.
 
 > **Transitional.** `.dat/` will be retired in favor of `.anoikis/` (reserved now) once anoikis-based planning and builds take over. New efforts will move there.
