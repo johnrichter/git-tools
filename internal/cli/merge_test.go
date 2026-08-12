@@ -427,3 +427,143 @@ func TestMerge_OctopusTwoUnsignedSources_BothResignedThenMerged(t *testing.T) {
 		runGit(t, dir, "merge-base", "--is-ancestor", newTip, "HEAD")
 	}
 }
+
+// A single non-existent source is a user precondition (a typo'd or absent
+// branch), not an internal fault: the gate must catch it as a precondition
+// refusal (exit 30) before the pre-merge minting check runs merge-base against
+// the unresolvable ref, which would otherwise surface as internal exit 90.
+func TestMerge_NonexistentSingleSource_RefusesNotInternal(t *testing.T) {
+	bin := buildCLI(t)
+	dir := signingRepo(t)
+
+	r, exit := runCLI(t, bin, "--repo", dir, "merge", "ghost-branch")
+	if exit == 90 {
+		t.Fatalf("a typo'd branch regressed to internal-error exit 90: %+v", r)
+	}
+	if r.Status != "precondition_unmet" || exit != 30 {
+		t.Fatalf("status=%s exit=%d, want precondition_unmet/30: %+v", r.Status, exit, r)
+	}
+	if code, _ := r.Errors[0]["code"].(string); code != "precondition_unmet.git.merge_source_not_branch" {
+		t.Fatalf("refusal code=%q, want precondition_unmet.git.merge_source_not_branch: %+v", code, r.Errors[0])
+	}
+}
+
+// signedBranch creates branch off main carrying one signed, already-verifying
+// commit — the signingRepo fixture signs by default — and returns its tip.
+func signedBranch(t *testing.T, dir, branch string) string {
+	t.Helper()
+	runGit(t, dir, "checkout", "-q", "-b", branch, "main")
+	tip := commitFile(t, dir, branch+".txt", branch+"\n", branch+" work")
+	runGit(t, dir, "checkout", "-q", "main")
+	return tip
+}
+
+// breakSigningKey points user.signingkey at a key that does not exist. Being
+// repository-local it overrides the host's git config, so the repository can no
+// longer sign a new commit — verification of existing signatures, which reads
+// the untouched allowed-signers file, still works.
+func breakSigningKey(t *testing.T, dir string) {
+	t.Helper()
+	runGit(t, dir, "config", "user.signingkey", filepath.Join(t.TempDir(), "absent-key.pub"))
+}
+
+// SC-B1: a merge that mints a commit signs that commit even when commit.gpgsign
+// is unset. The source already verifies, so the gate skips it without probing;
+// only the verb's own -S can make the minted merge commit verify.
+func TestMerge_ForcedMergeCommit_IsSignedThoughGpgsignUnset(t *testing.T) {
+	bin := buildCLI(t)
+	dir := signingRepo(t)
+	signedBranch(t, dir, "feature")
+	runGit(t, dir, "config", "--unset", "commit.gpgsign")
+
+	r, exit := runCLI(t, bin, "--repo", dir, "merge", "feature", "--fast-forward", "never")
+	if r.Status != "success" || exit != 0 {
+		t.Fatalf("status=%s exit=%d, want success/0: %+v", r.Status, exit, r)
+	}
+	if record := gateRecord(t, r, "feature"); record["action"] != "already_signed" {
+		t.Fatalf("gate action=%v, want already_signed (the merge-commit probe, not the gate, is under test): %+v", record["action"], record)
+	}
+	if state := runGit(t, dir, "log", "-1", "--format=%G?", "HEAD"); state != "G" && state != "U" {
+		t.Fatalf("minted merge commit signature state=%q, want G or U", state)
+	}
+	// A forbidden fast-forward mints a real two-parent merge commit, not a
+	// fast-forward that would carry no new signature at all.
+	if parents := runGit(t, dir, "rev-list", "--parents", "-1", "HEAD"); len(strings.Fields(parents)) != 3 {
+		t.Fatalf("HEAD is not a two-parent merge commit: %q", parents)
+	}
+}
+
+// SC-B2: an already-verifying source in a repository that can verify but no
+// longer sign, merged where no fast-forward is possible, refuses at the
+// merge-commit signing check — exit 30 with the unresolved-key code, NOT the
+// pre-fix internal-error 90 a bare `git merge -S` would surface as — and leaves
+// the target ref exactly where it was.
+func TestMerge_MintedCommitUnsignable_Refuses30NotInternal(t *testing.T) {
+	bin := buildCLI(t)
+	dir := signingRepo(t)
+	signedBranch(t, dir, "feature")
+	commitFile(t, dir, "main.txt", "main\n", "diverge main") // main is no longer an ancestor of feature
+	breakSigningKey(t, dir)
+	head := runGit(t, dir, "rev-parse", "HEAD")
+
+	r, exit := runCLI(t, bin, "--repo", dir, "merge", "feature")
+	if exit == 90 {
+		t.Fatalf("the merge-commit signing check regressed to internal-error exit 90 (a bare `git merge -S` failing): %+v", r)
+	}
+	if r.Status != "precondition_unmet" || exit != 30 {
+		t.Fatalf("status=%s exit=%d, want precondition_unmet/30: %+v", r.Status, exit, r)
+	}
+	if code, _ := r.Errors[0]["code"].(string); code != "precondition_unmet.git.signing_key_unresolved" {
+		t.Fatalf("refusal code=%q, want precondition_unmet.git.signing_key_unresolved: %+v", code, r.Errors[0])
+	}
+	if got := runGit(t, dir, "rev-parse", "HEAD"); got != head {
+		t.Fatalf("the target ref moved despite the refusal: HEAD=%s want %s", got, head)
+	}
+}
+
+// An octopus (two or more sources) always mints a merge commit, so the signing
+// probe must run even when every source's range already verifies and the gate
+// itself never probes. Both sources verify here but the repository cannot sign:
+// the merge still refuses at the merge-commit check.
+func TestMerge_OctopusBothVerifyUnsignable_ProbesAndRefuses(t *testing.T) {
+	bin := buildCLI(t)
+	dir := signingRepo(t)
+	signedBranch(t, dir, "alpha")
+	signedBranch(t, dir, "beta")
+	breakSigningKey(t, dir)
+	head := runGit(t, dir, "rev-parse", "HEAD")
+
+	r, exit := runCLI(t, bin, "--repo", dir, "merge", "alpha", "beta", "--message", "merge alpha beta")
+	if r.Status != "precondition_unmet" || exit != 30 {
+		t.Fatalf("status=%s exit=%d, want precondition_unmet/30: %+v", r.Status, exit, r)
+	}
+	if code, _ := r.Errors[0]["code"].(string); code != "precondition_unmet.git.signing_key_unresolved" {
+		t.Fatalf("refusal code=%q, want precondition_unmet.git.signing_key_unresolved: %+v", code, r.Errors[0])
+	}
+	if got := runGit(t, dir, "rev-parse", "HEAD"); got != head {
+		t.Fatalf("the target ref moved despite the refusal: HEAD=%s want %s", got, head)
+	}
+}
+
+// A dry run mints no commit, so the merge-commit signing check must not run: a
+// dry run of a merge that WOULD mint a commit still reports would_merge at exit
+// 0 and moves no ref, even in a repository that cannot sign.
+func TestMerge_DryRunMintedCommitUnsignable_StillReportsWouldMerge(t *testing.T) {
+	bin := buildCLI(t)
+	dir := signingRepo(t)
+	signedBranch(t, dir, "feature")
+	commitFile(t, dir, "main.txt", "main\n", "diverge main") // would mint a merge commit
+	breakSigningKey(t, dir)
+	head := runGit(t, dir, "rev-parse", "HEAD")
+
+	r, exit := runCLI(t, bin, "--repo", dir, "merge", "feature", "--dry-run")
+	if r.Status != "success" || exit != 0 {
+		t.Fatalf("status=%s exit=%d, want success/0: %+v", r.Status, exit, r)
+	}
+	if r.Data["would_merge"] != true {
+		t.Fatalf("dry run did not report would_merge: %+v", r.Data)
+	}
+	if got := runGit(t, dir, "rev-parse", "HEAD"); got != head {
+		t.Fatalf("a dry run moved the target ref: HEAD=%s want %s", got, head)
+	}
+}
