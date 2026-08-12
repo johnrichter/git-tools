@@ -116,10 +116,7 @@ carries commits unreachable from its landing target, when that target cannot be
 resolved from local refs, when a live sub-worktree nests under it, or when its
 HEAD is detached. The landing target is --landing-target if given, else the
 branch's upstream, else the local record of the remote's default branch; every
-step is answered from local refs, never the network.
-
---force is the one override: it names the branches and unmerged-commit count,
-then removes anyway.`,
+step is answered from local refs, never the network.`,
 		Args:    cobra.ExactArgs(1),
 		Example: "  git-tools worktree remove ../review --landing-target main",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -133,14 +130,12 @@ then removes anyway.`,
 				return repoErr
 			}
 
-			force, _ := cmd.Flags().GetBool("force")
 			dryRun, _ := cmd.Flags().GetBool("dry-run")
 			landing, _ := cmd.Flags().GetString("landing-target")
 
 			out, err := worktreeclean.Cleanup(cmd.Context(), repo, path, worktreeclean.Options{
 				LandingTarget: landing,
 				Remote:        cfg.Remote,
-				Force:         force,
 				DryRun:        dryRun,
 			})
 			if err != nil {
@@ -151,13 +146,13 @@ then removes anyway.`,
 			if out.Refusal != "" {
 				// The standalone path treats a refusal as a hard error: nothing
 				// was removed, and the operator must resolve the named condition
-				// (or force past it) before the worktree can go.
+				// before the worktree can go.
 				if out.RefusalKind == worktreeclean.RefusalNotRegistered {
 					return finishDiagnostic(cmd, clikit.NewNotFound, "not_found.git.worktree_not_registered",
 						out.Refusal, clikit.RunTool("git-tools", "worktree", "list"), data)
 				}
 				return finishDiagnostic(cmd, clikit.NewPreconditionUnmet, cleanupRefusalCode(out.RefusalKind),
-					out.Refusal, clikit.Manual("resolve the named condition, or re-run with --force to discard the named work"), data)
+					out.Refusal, clikit.Manual("resolve the named condition"), data)
 			}
 
 			result, buildErr := clikitSuccess(cmd, data)
@@ -167,7 +162,6 @@ then removes anyway.`,
 			return finish(cmd, result)
 		},
 	}
-	cmd.Flags().Bool("force", false, "override the no-work-loss and cardinality refusals (and git's own dirty-tree refusal), discarding the named work")
 	cmd.Flags().Bool("dry-run", false, "run every rule and report the verdict without removing anything")
 	cmd.Flags().String("landing-target", "", "ref the worktree's work must already be reachable from (default: the branch's upstream, else the remote's recorded default)")
 	return cmd
@@ -182,9 +176,6 @@ func cleanupData(out *worktreeclean.Result, dryRun bool) map[string]any {
 	}
 	if out.Unmerged > 0 {
 		data["unmerged_commits"] = out.Unmerged
-	}
-	if out.Forced {
-		data["forced"] = true
 	}
 	return data
 }

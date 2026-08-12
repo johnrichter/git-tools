@@ -1,9 +1,9 @@
 // Package worktreeclean holds the one rule set that decides whether a linked
 // worktree may be removed. Both cleanup paths -- the standalone `worktree
 // remove` verb and `merge --cleanup` -- call Cleanup, so the no-work-loss,
-// cardinality, wrong-branch, detached-head, force, and partial-failure rules
-// cannot diverge between them: there is a single choke point, not two copies
-// that drift.
+// cardinality, wrong-branch, detached-head, and partial-failure rules cannot
+// diverge between them: there is a single choke point, not two copies that
+// drift.
 //
 // Every reachability question is answered from LOCAL refs alone -- the landing
 // target and the count of unreachable commits are resolved before anything is
@@ -38,9 +38,6 @@ type Options struct {
 	// the target's checked-out branch is among them, and the landing target is
 	// the branch the merge landed onto (the branch checked out in repo.Dir).
 	MergedBranches []string
-	// Force overrides every refusal -- the one override -- and still reports the
-	// branches weighed and the unmerged-commit count it proceeded past.
-	Force bool
 	// DryRun runs every rule and reports the verdict without removing anything.
 	DryRun bool
 }
@@ -65,9 +62,8 @@ const (
 type Result struct {
 	Path     string   // resolved target path
 	Branches []string // short names of the branches whose reachability was weighed
-	Unmerged int      // commits that would be lost (0 unless an unmerged-work refusal, or a forced override past one)
+	Unmerged int      // commits that would be lost (0 unless an unmerged-work refusal)
 	Removed  bool     // the worktree was removed (false on a dry run or a refusal)
-	Forced   bool     // a refusal was overridden by Force
 	// Refusal, when non-empty, is the named reason cleanup removed nothing. A
 	// caller renders it as a hard error (standalone path) or a caveat on an
 	// already successful merge (merge path); the reason string is the same
@@ -77,14 +73,13 @@ type Result struct {
 }
 
 // Cleanup is the single choke point both worktree-cleanup paths call, so the
-// no-work-loss, cardinality, wrong-branch, detached-head, force, and
+// no-work-loss, cardinality, wrong-branch, detached-head, and
 // partial-failure rules cannot diverge between them. It removes the linked
 // worktree at target only once it has proven, from LOCAL refs alone, that no
-// commit checked out anywhere inside target would be lost -- or once Force
-// waives that proof. A returned error is an infrastructure failure (a git
-// command that could not run); a refusal is carried on the result, never as an
-// error, so the merge path can report it as a caveat without unwinding a merge
-// that already landed.
+// commit checked out anywhere inside target would be lost. A returned error
+// is an infrastructure failure (a git command that could not run); a refusal
+// is carried on the result, never as an error, so the merge path can report
+// it as a caveat without unwinding a merge that already landed.
 func Cleanup(ctx context.Context, repo *git.Repo, target string, opts Options) (*Result, error) {
 	list, err := repo.WorktreeList(ctx)
 	if err != nil {
@@ -113,8 +108,7 @@ func Cleanup(ctx context.Context, repo *git.Repo, target string, opts Options) (
 
 	// No-work-loss is resolved up front, from local refs only, so the check
 	// stays hermetic: the landing target and the count of unreachable commits
-	// are computed before anything is removed and regardless of Force (which
-	// still reports the count it overrode).
+	// are computed before anything is removed.
 	landing, landingOK, err := resolveLandingTarget(ctx, repo, entry, opts)
 	if err != nil {
 		return nil, err
@@ -125,14 +119,6 @@ func Cleanup(ctx context.Context, repo *git.Repo, target string, opts Options) (
 			return nil, err
 		}
 		res.Unmerged = unmerged
-	}
-
-	// Force is the one override: it has already weighed and recorded the
-	// branches and the unmerged-commit count above, and now proceeds past every
-	// refusal.
-	if opts.Force {
-		res.Forced = true
-		return removeTarget(ctx, repo, target, opts, res)
 	}
 
 	switch {
@@ -166,7 +152,7 @@ func removeTarget(ctx context.Context, repo *git.Repo, target string, opts Optio
 	if opts.DryRun {
 		return res, nil
 	}
-	if err := repo.WorktreeRemove(ctx, target, git.WorktreeRemoveOptions{Force: opts.Force}); err != nil {
+	if err := repo.WorktreeRemove(ctx, target, git.WorktreeRemoveOptions{}); err != nil {
 		return nil, err
 	}
 	res.Removed = true

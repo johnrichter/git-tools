@@ -226,23 +226,6 @@ func TestCleanup_HappyPath_RemovesWhenLanded(t *testing.T) {
 	}
 }
 
-func TestCleanup_Force_OverridesAndReports(t *testing.T) {
-	dir, repo := cleanupFixture(t)
-	wt := addWorktreeBranch(t, dir, "feature", "main")
-	commitIn(t, wt, "feature.txt", "feature work")
-
-	out, err := Cleanup(context.Background(), repo, wt, Options{LandingTarget: "main", Force: true})
-	if err != nil {
-		t.Fatalf("Cleanup: %v", err)
-	}
-	if !out.Removed || !out.Forced {
-		t.Fatalf("force: want removed and forced, got removed=%v forced=%v refusal=%q", out.Removed, out.Forced, out.Refusal)
-	}
-	if out.Unmerged != 1 {
-		t.Fatalf("force: want the overridden unmerged count (1) reported, got %d", out.Unmerged)
-	}
-}
-
 func TestCleanup_DryRun_ReportsWithoutRemoving(t *testing.T) {
 	dir, repo := cleanupFixture(t)
 	wt := addWorktreeBranch(t, dir, "feature", "main")

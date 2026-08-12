@@ -287,6 +287,90 @@ func TestWorktree_AddListRemove(t *testing.T) {
 	}
 }
 
+// worktree remove no longer declares --force (SC-C1/D3): the flag is
+// unknown to cobra now, so it must fail as a usage error before Cleanup
+// runs at all, and the worktree it would have targeted stays untouched.
+func TestWorktreeRemove_ForceFlag_IsUsageError(t *testing.T) {
+	bin := buildCLI(t)
+	dir := initRepo(t)
+	wtPath := filepath.Join(t.TempDir(), "review")
+
+	r, exit := runCLI(t, bin, "--repo", dir, "worktree", "add", wtPath, "HEAD", "--branch", "review")
+	if r.Status != "success" || exit != 0 {
+		t.Fatalf("worktree add: status=%s exit=%d: %+v", r.Status, exit, r)
+	}
+
+	r, exit = runCLI(t, bin, "--repo", dir, "worktree", "remove", wtPath, "--force")
+	if r.Status != "usage" || exit != 50 {
+		t.Fatalf("worktree remove --force: status=%s exit=%d, want usage/50: %+v", r.Status, exit, r)
+	}
+	if _, err := os.Stat(wtPath); err != nil {
+		t.Fatalf("an unknown --force flag disturbed the worktree %s: %v", wtPath, err)
+	}
+}
+
+// TestWorktreeRemove_UnmergedWork_RefusedWithExit30 exercises the
+// unmerged-work refusal at the CLI boundary: a worktree carrying a commit
+// unreachable from the resolved landing target is refused with the stable
+// precondition_unmet exit code, and the worktree is never touched. No flag
+// exists anymore that could override this (SC-C2).
+func TestWorktreeRemove_UnmergedWork_RefusedWithExit30(t *testing.T) {
+	bin := buildCLI(t)
+	dir := initRepo(t)
+	wtPath := filepath.Join(t.TempDir(), "feature")
+	runGit(t, dir, "worktree", "add", "-b", "feature", wtPath, "main")
+	commitFile(t, wtPath, "feature.txt", "feature\n", "feature work")
+	runGit(t, dir, "branch", "--set-upstream-to=main", "feature")
+
+	r, exit := runCLI(t, bin, "--repo", dir, "worktree", "remove", wtPath)
+	if r.Status != "precondition_unmet" || exit != 30 {
+		t.Fatalf("status=%s exit=%d, want precondition_unmet/30: %+v", r.Status, exit, r)
+	}
+	if _, err := os.Stat(wtPath); err != nil {
+		t.Fatalf("a refused removal disturbed the worktree %s: %v", wtPath, err)
+	}
+	if len(r.Errors) == 0 {
+		t.Fatal("precondition_unmet result carries no errors for the unmerged commit")
+	}
+}
+
+// TestWorktreeRemove_DirtyTree_RefusedAndStaysPresent covers the second half
+// of SC-C2: a worktree whose branch is fully landed but whose tree carries
+// an uncommitted change is refused (by git itself, since Force is never
+// passed through) and stays present.
+func TestWorktreeRemove_DirtyTree_RefusedAndStaysPresent(t *testing.T) {
+	bin := buildCLI(t)
+	dir := initRepo(t)
+	wtPath := filepath.Join(t.TempDir(), "review")
+	runGit(t, dir, "worktree", "add", "-b", "review", wtPath, "main")
+	runGit(t, dir, "branch", "--set-upstream-to=main", "review")
+	if err := os.WriteFile(filepath.Join(wtPath, "dirty.txt"), []byte("uncommitted\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	r, exit := runCLI(t, bin, "--repo", dir, "worktree", "remove", wtPath)
+	if r.Status == "success" || exit == 0 {
+		t.Fatalf("a dirty worktree must not be removed: status=%s exit=%d: %+v", r.Status, exit, r)
+	}
+	if _, err := os.Stat(wtPath); err != nil {
+		t.Fatalf("a refused removal disturbed the worktree %s: %v", wtPath, err)
+	}
+}
+
+// TestWorktreeRemove_HelpDoesNotMentionForce guards the advice text: once
+// --force is removed, nothing in the verb's own help should still reference
+// it as an available override.
+func TestWorktreeRemove_HelpDoesNotMentionForce(t *testing.T) {
+	bin := buildCLI(t)
+	out, err := exec.Command(bin, "worktree", "remove", "--help").CombinedOutput()
+	if err != nil {
+		t.Fatalf("worktree remove --help exited non-zero: %v\n%s", err, out)
+	}
+	if strings.Contains(string(out), "--force") {
+		t.Fatalf("worktree remove --help still mentions --force:\n%s", out)
+	}
+}
+
 // TestWorktreeAdd_RelativePathIsCwdIndependent covers the case where the
 // process's current directory differs from the --repo working tree: the
 // <path> argument is git's concept of "relative to the repository", so

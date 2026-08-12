@@ -328,6 +328,77 @@ func TestMerge_AlreadySignedSource_IsSkippedWithoutRewriting(t *testing.T) {
 	}
 }
 
+// merge no longer declares --force: SC-C1/D3 removed the Force plumbing
+// end to end, so both spellings of the flag are now unknown to cobra and
+// must fail as a usage error before anything is merged.
+func TestMerge_ForceFlag_IsUsageError(t *testing.T) {
+	bin := buildCLI(t)
+	dir := signingRepo(t)
+	runGit(t, dir, "branch", "feature")
+
+	before := runGit(t, dir, "rev-parse", "HEAD")
+	r, exit := runCLI(t, bin, "--repo", dir, "merge", "feature", "--force")
+	if r.Status != "usage" || exit != 50 {
+		t.Fatalf("--force: status=%s exit=%d, want usage/50: %+v", r.Status, exit, r)
+	}
+	if got := runGit(t, dir, "rev-parse", "HEAD"); got != before {
+		t.Fatalf("an unknown --force flag must not have moved HEAD: got %s want %s", got, before)
+	}
+}
+
+func TestMerge_CleanupForceFlag_IsUsageError(t *testing.T) {
+	bin := buildCLI(t)
+	dir := signingRepo(t)
+	wt, tip := featureWorktree(t, dir, "feature")
+
+	r, exit := runCLI(t, bin, "--repo", dir, "merge", "feature", "--cleanup", "--force")
+	if r.Status != "usage" || exit != 50 {
+		t.Fatalf("--cleanup --force: status=%s exit=%d, want usage/50: %+v", r.Status, exit, r)
+	}
+	// Nothing was attempted: the merge itself never ran, and the worktree the
+	// merge would have targeted for cleanup is untouched.
+	if got := runGit(t, dir, "rev-parse", "HEAD"); got == tip {
+		t.Fatalf("an unknown flag must not have let the merge land")
+	}
+	if _, err := os.Stat(wt); err != nil {
+		t.Fatalf("worktree %s disturbed by a usage error: %v", wt, err)
+	}
+}
+
+// A cleanup that cannot remove its target because the worktree is dirty
+// (uncommitted changes) must behave exactly like any other cleanup refusal:
+// the merge still lands, and the caveat's advice never names a --force flag,
+// because no flag can override this refusal anymore (SC-C2).
+func TestMerge_CleanupDirtyWorktree_ReportsCaveatAndKeepsMerge(t *testing.T) {
+	bin := buildCLI(t)
+	dir := signingRepo(t)
+	wt, tip := featureWorktree(t, dir, "feature")
+	if err := os.WriteFile(filepath.Join(wt, "feature.txt"), []byte("dirtied after landing\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	r, exit := runCLI(t, bin, "--repo", dir, "merge", "feature", "--cleanup")
+	if r.Status != "caveats" || exit != 10 {
+		t.Fatalf("status=%s exit=%d, want caveats/10: %+v", r.Status, exit, r)
+	}
+	if got := runGit(t, dir, "rev-parse", "HEAD"); got != tip {
+		t.Fatalf("the merge was rolled back after a cleanup refusal: HEAD=%s want %s", got, tip)
+	}
+	if r.Data["unremoved_worktrees"] == nil {
+		t.Fatalf("caveat result names no unremoved worktree: %+v", r.Data)
+	}
+	if _, err := os.Stat(wt); err != nil {
+		t.Fatalf("a refusing cleanup still removed the dirty worktree %s: %v", wt, err)
+	}
+	for _, c := range r.Caveats {
+		triage, _ := c["triage"].(map[string]any)
+		instruction, _ := triage["instruction"].(string)
+		if strings.Contains(instruction, "--force") {
+			t.Fatalf("caveat triage names a removed flag: %+v", c)
+		}
+	}
+}
+
 // The octopus shape the build process actually produces: several task branches
 // landing at once, each carrying unsigned work. Every source is re-signed and
 // then all of them merge in one commit.
