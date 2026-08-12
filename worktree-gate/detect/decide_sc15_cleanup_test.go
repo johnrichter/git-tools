@@ -35,6 +35,10 @@ func TestSC15VerbAllowed_WorktreeRemoveSanctioned(t *testing.T) {
 // --force: it voids the sanction only for the two cleanup paths (merge and
 // worktree remove), in both the bare and glued spellings, and leaves worktree
 // add's own --force sanctioned. A cleanup verb without --force is not voided.
+// Neither cleanup verb's current CLI declares a --force flag at all; this
+// predicate defends against an older provisioned binary whose merge and
+// worktree remove once accepted one (see sc15ForcesCleanup), so a case here
+// stays pinned even though today's binary can never produce it.
 func TestSC15ForcesCleanup_OnlyCleanupVerbs(t *testing.T) {
 	cases := []struct {
 		name string

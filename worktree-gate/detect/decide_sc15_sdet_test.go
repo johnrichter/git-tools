@@ -37,7 +37,7 @@ func TestSC15_SDET_AdversarialProbe(t *testing.T) {
 			name:     "worktree-list-read-verb-allows",
 			command:  bin + " worktree list",
 			wantDeny: false,
-			note:     "worktree list is the CLI's one read verb; identity-verified, it reads rather than falling to the fail-closed default",
+			note:     "worktree list is one of the CLI's two read verbs (with branch list); identity-verified, it reads rather than falling to the fail-closed default",
 		},
 		{
 			name:     "leading-var-assignment-prefix-denies",

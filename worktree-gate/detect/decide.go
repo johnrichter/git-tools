@@ -980,15 +980,22 @@ func sc15VerbAllowed(args []string) bool {
 }
 
 // sc15ForcesCleanup reports whether args are a cleanup-capable landing call --
-// merge, or worktree remove -- carrying a --force flag. Such a call would drive
-// the CLI's worktree cleanup past its own no-work-loss guard, destroying state
-// on a tree the gate cannot see, so the gate declines to SANCTION it from a
-// primary checkout the same way it declines a repo-retargeting flag: a forced
-// cleanup must be run deliberately, not auto-sanctioned. This is the gate's
-// refusal meaning of --force, kept distinct from the CLI's own --force, which
-// only OVERRIDES a cleanup refusal where the gate already permits the call.
-// worktree add's --force (reuse a branch, overwrite a path) is a different
-// concern and stays sanctioned.
+// merge, or worktree remove -- carrying a --force flag. Neither verb's CURRENT
+// CLI declares such a flag; this check is kept anyway as defense against an
+// OLDER provisioned binary whose merge and worktree remove still accepted
+// --force there, driving the CLI's worktree cleanup past its own no-work-loss
+// guard and destroying state on a tree the gate cannot see. sc15Identity
+// re-verifies the binary at the argv-supplied path against the argv-supplied
+// digest, not against this source tree's flag set, so an older release still
+// sitting at the provisioned path can satisfy identity while carrying the
+// retired flag; the gate declines to SANCTION that shape of call from a
+// primary checkout the same way it declines a repo-retargeting flag, since a
+// forced cleanup must be run deliberately, not auto-sanctioned. This is the
+// gate's own refusal meaning of --force: on today's binary it voids a sanction
+// no CLI flag would otherwise exercise, but the check costs nothing to keep and
+// closes the window a stale provisioned binary would reopen. worktree add's
+// --force (reuse a branch, overwrite a path) is a live flag on a different
+// verb and stays sanctioned.
 func sc15ForcesCleanup(args []string) bool {
 	cleanup := false
 	switch {
