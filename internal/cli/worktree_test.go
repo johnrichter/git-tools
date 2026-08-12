@@ -249,14 +249,11 @@ func TestCleanupWorktree_DryRun_ReportsWithoutRemoving(t *testing.T) {
 }
 
 // TestCleanupWorktree_DirtyTree_RefusedAndStaysPresent covers the refusal
-// SC-C2 says must stay reachable with no override once Force is removed: a
-// worktree whose checked-out branch is fully reachable from its landing
-// target (no unmerged-work refusal fires) but whose tree carries an
-// uncommitted change. Cleanup's own rule set has nothing to say about
-// dirtiness -- it is git itself that refuses `worktree remove` on a dirty
-// tree -- and since removeTarget always calls WorktreeRemove with an empty
-// git.WorktreeRemoveOptions{} (Force is never threaded through), that refusal
-// is unconditional: no flag anywhere in this call chain can override it.
+// SC-C5 says the rule set itself must raise, before git is ever asked to
+// remove anything: a worktree whose checked-out branch is fully reachable
+// from its landing target (no unmerged-work refusal fires) but whose tree
+// carries an uncommitted, untracked file. No flag anywhere in this call
+// chain can override it -- WorktreeRemoveOptions is never given Force.
 func TestCleanupWorktree_DirtyTree_RefusedAndStaysPresent(t *testing.T) {
 	dir, repo := cleanupFixture(t)
 	wt := addWorktreeBranch(t, dir, "feature", "main") // no commits beyond main
@@ -265,11 +262,132 @@ func TestCleanupWorktree_DirtyTree_RefusedAndStaysPresent(t *testing.T) {
 	}
 
 	out, err := worktreeclean.Cleanup(context.Background(), repo, wt, worktreeclean.Options{LandingTarget: "main"})
-	if err == nil {
-		t.Fatalf("want an error from git's own dirty-tree refusal, got result=%+v", out)
+	if err != nil {
+		t.Fatalf("Cleanup: %v", err)
+	}
+	if out.RefusalKind != worktreeclean.RefusalDirtyTree || out.Removed {
+		t.Fatalf("want dirty-tree refusal, got kind=%d removed=%v refusal=%q", out.RefusalKind, out.Removed, out.Refusal)
+	}
+	if len(out.UntrackedPaths) != 1 || out.UntrackedPaths[0] != "dirty.txt" {
+		t.Fatalf("UntrackedPaths = %v, want [dirty.txt]", out.UntrackedPaths)
+	}
+	if len(out.ModifiedPaths) != 0 {
+		t.Fatalf("ModifiedPaths = %v, want none", out.ModifiedPaths)
 	}
 	if _, statErr := os.Stat(wt); statErr != nil {
 		t.Fatalf("worktree %s was removed despite being dirty: %v", wt, statErr)
+	}
+}
+
+// TestCleanupWorktree_ModifiedTrackedFile_RefusesAndListsPath proves a
+// tracked file changed in place (no new untracked path) is caught too, and
+// lands in ModifiedPaths rather than UntrackedPaths.
+func TestCleanupWorktree_ModifiedTrackedFile_RefusesAndListsPath(t *testing.T) {
+	dir, repo := cleanupFixture(t)
+	wt := addWorktreeBranch(t, dir, "feature", "main")
+	if err := os.WriteFile(filepath.Join(wt, "base.txt"), []byte("changed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := worktreeclean.Cleanup(context.Background(), repo, wt, worktreeclean.Options{LandingTarget: "main"})
+	if err != nil {
+		t.Fatalf("Cleanup: %v", err)
+	}
+	if out.RefusalKind != worktreeclean.RefusalDirtyTree || out.Removed {
+		t.Fatalf("want dirty-tree refusal, got kind=%d removed=%v refusal=%q", out.RefusalKind, out.Removed, out.Refusal)
+	}
+	if len(out.ModifiedPaths) != 1 || out.ModifiedPaths[0] != "base.txt" {
+		t.Fatalf("ModifiedPaths = %v, want [base.txt]", out.ModifiedPaths)
+	}
+	if len(out.UntrackedPaths) != 0 {
+		t.Fatalf("UntrackedPaths = %v, want none", out.UntrackedPaths)
+	}
+	if !strings.Contains(out.Refusal, "commit it") || !strings.Contains(out.Refusal, "ignore it") || !strings.Contains(out.Refusal, "delete it deliberately") {
+		t.Fatalf("refusal %q does not name all three remedies", out.Refusal)
+	}
+	if strings.Contains(out.Refusal, "force") || strings.Contains(out.Refusal, "--force") {
+		t.Fatalf("refusal %q still names the removed --force override", out.Refusal)
+	}
+	if _, statErr := os.Stat(wt); statErr != nil {
+		t.Fatalf("worktree %s was removed despite being dirty: %v", wt, statErr)
+	}
+}
+
+// TestCleanupWorktree_UntrackedAndModifiedTogether_ListsBoth proves both
+// categories are reported in the same refusal when both are present.
+func TestCleanupWorktree_UntrackedAndModifiedTogether_ListsBoth(t *testing.T) {
+	dir, repo := cleanupFixture(t)
+	wt := addWorktreeBranch(t, dir, "feature", "main")
+	if err := os.WriteFile(filepath.Join(wt, "base.txt"), []byte("changed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(wt, "new.txt"), []byte("new\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := worktreeclean.Cleanup(context.Background(), repo, wt, worktreeclean.Options{LandingTarget: "main"})
+	if err != nil {
+		t.Fatalf("Cleanup: %v", err)
+	}
+	if out.RefusalKind != worktreeclean.RefusalDirtyTree || out.Removed {
+		t.Fatalf("want dirty-tree refusal, got kind=%d removed=%v refusal=%q", out.RefusalKind, out.Removed, out.Refusal)
+	}
+	if len(out.UntrackedPaths) != 1 || out.UntrackedPaths[0] != "new.txt" {
+		t.Fatalf("UntrackedPaths = %v, want [new.txt]", out.UntrackedPaths)
+	}
+	if len(out.ModifiedPaths) != 1 || out.ModifiedPaths[0] != "base.txt" {
+		t.Fatalf("ModifiedPaths = %v, want [base.txt]", out.ModifiedPaths)
+	}
+}
+
+// TestCleanupWorktree_IgnoredFileAlone_IsNotDirt proves an ignored file, on
+// its own, does not trip the dirty-tree refusal -- the operator ruling is
+// that only an untracked (non-ignored) or modified tracked file is a signal.
+func TestCleanupWorktree_IgnoredFileAlone_IsNotDirt(t *testing.T) {
+	dir, repo := cleanupFixture(t)
+	// Commit the ignore rule on main before branching, so feature starts out
+	// fully landed and the only thing left in its tree is the ignored file.
+	if err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("ignored.txt\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cgit(t, dir, "add", ".gitignore")
+	cgit(t, dir, "commit", "-q", "-m", "ignore ignored.txt")
+	wt := addWorktreeBranch(t, dir, "feature", "main")
+	if err := os.WriteFile(filepath.Join(wt, "ignored.txt"), []byte("ignored\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := worktreeclean.Cleanup(context.Background(), repo, wt, worktreeclean.Options{LandingTarget: "main"})
+	if err != nil {
+		t.Fatalf("Cleanup: %v", err)
+	}
+	if out.RefusalKind == worktreeclean.RefusalDirtyTree {
+		t.Fatalf("an ignored-only file wrongly tripped the dirty-tree refusal: %+v", out)
+	}
+	if out.Refusal != "" || !out.Removed {
+		t.Fatalf("want removal with no refusal, got refusal=%q removed=%v", out.Refusal, out.Removed)
+	}
+}
+
+// TestCleanupWorktree_UnmergedWork_StatesCountAndLandingTarget proves the
+// unmerged-work refusal names both the commit count and the landing target
+// it measured against -- the dirty-tree rule must not shadow this refusal
+// when the tree itself is clean.
+func TestCleanupWorktree_UnmergedWork_StatesCountAndLandingTarget(t *testing.T) {
+	dir, repo := cleanupFixture(t)
+	wt := addWorktreeBranch(t, dir, "feature", "main")
+	commitIn(t, wt, "feature.txt", "feature work")
+	commitIn(t, wt, "feature2.txt", "more feature work")
+
+	out, err := worktreeclean.Cleanup(context.Background(), repo, wt, worktreeclean.Options{LandingTarget: "main"})
+	if err != nil {
+		t.Fatalf("Cleanup: %v", err)
+	}
+	if out.RefusalKind != worktreeclean.RefusalUnmergedWork || out.Removed {
+		t.Fatalf("want unmerged-work refusal, got kind=%d removed=%v refusal=%q", out.RefusalKind, out.Removed, out.Refusal)
+	}
+	if !strings.Contains(out.Refusal, "2") || !strings.Contains(out.Refusal, "main") {
+		t.Fatalf("refusal %q does not state the commit count and landing target", out.Refusal)
 	}
 }
 

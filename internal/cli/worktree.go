@@ -113,10 +113,12 @@ func newWorktreeRemoveCmd() *cobra.Command {
 safe to discard. It refuses -- removing nothing and returning a named non-zero
 error -- when the worktree's checked-out branch (or a nested worktree's branch)
 carries commits unreachable from its landing target, when that target cannot be
-resolved from local refs, when a live sub-worktree nests under it, or when its
-HEAD is detached. The landing target is --landing-target if given, else the
-branch's upstream, else the local record of the remote's default branch; every
-step is answered from local refs, never the network.`,
+resolved from local refs, when the worktree's own tree has an untracked or
+modified path (commit it, ignore it, or delete it deliberately), when a live
+sub-worktree nests under it, or when its HEAD is detached. The landing target
+is --landing-target if given, else the branch's upstream, else the local
+record of the remote's default branch; every step is answered from local
+refs, never the network.`,
 		Args:    cobra.ExactArgs(1),
 		Example: "  git-tools worktree remove ../review --landing-target main",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -177,6 +179,12 @@ func cleanupData(out *worktreeclean.Result, dryRun bool) map[string]any {
 	if out.Unmerged > 0 {
 		data["unmerged_commits"] = out.Unmerged
 	}
+	if len(out.UntrackedPaths) > 0 {
+		data["untracked_paths"] = out.UntrackedPaths
+	}
+	if len(out.ModifiedPaths) > 0 {
+		data["modified_paths"] = out.ModifiedPaths
+	}
 	return data
 }
 
@@ -190,6 +198,8 @@ func cleanupRefusalCode(kind worktreeclean.RefusalKind) string {
 		return "precondition_unmet.git.worktree_branch_not_merged"
 	case worktreeclean.RefusalLandingUnresolved:
 		return "precondition_unmet.git.worktree_landing_unresolved"
+	case worktreeclean.RefusalDirtyTree:
+		return "precondition_unmet.git.worktree_dirty_tree"
 	case worktreeclean.RefusalUnmergedWork:
 		return "precondition_unmet.git.worktree_unmerged_work"
 	case worktreeclean.RefusalLiveSubWorktree:

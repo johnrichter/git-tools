@@ -1,9 +1,9 @@
 // Package worktreeclean holds the one rule set that decides whether a linked
 // worktree may be removed. Both cleanup paths -- the standalone `worktree
 // remove` verb and `merge --cleanup` -- call Cleanup, so the no-work-loss,
-// cardinality, wrong-branch, detached-head, and partial-failure rules cannot
-// diverge between them: there is a single choke point, not two copies that
-// drift.
+// cardinality, wrong-branch, detached-head, dirty-tree, and partial-failure
+// rules cannot diverge between them: there is a single choke point, not two
+// copies that drift.
 //
 // Every reachability question is answered from LOCAL refs alone -- the landing
 // target and the count of unreachable commits are resolved before anything is
@@ -14,6 +14,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -54,6 +55,7 @@ const (
 	RefusalDetachedHead
 	RefusalBranchNotMerged
 	RefusalLandingUnresolved
+	RefusalDirtyTree
 	RefusalUnmergedWork
 	RefusalLiveSubWorktree
 )
@@ -63,7 +65,12 @@ type Result struct {
 	Path     string   // resolved target path
 	Branches []string // short names of the branches whose reachability was weighed
 	Unmerged int      // commits that would be lost (0 unless an unmerged-work refusal)
-	Removed  bool     // the worktree was removed (false on a dry run or a refusal)
+	// UntrackedPaths and ModifiedPaths are every dirty path found in the
+	// target's own tree, relative to the target root and sorted for
+	// deterministic rendering (empty unless a dirty-tree refusal).
+	UntrackedPaths []string
+	ModifiedPaths  []string
+	Removed        bool // the worktree was removed (false on a dry run or a refusal)
 	// Refusal, when non-empty, is the named reason cleanup removed nothing. A
 	// caller renders it as a hard error (standalone path) or a caveat on an
 	// already successful merge (merge path); the reason string is the same
@@ -73,13 +80,15 @@ type Result struct {
 }
 
 // Cleanup is the single choke point both worktree-cleanup paths call, so the
-// no-work-loss, cardinality, wrong-branch, detached-head, and
+// no-work-loss, cardinality, wrong-branch, detached-head, dirty-tree, and
 // partial-failure rules cannot diverge between them. It removes the linked
-// worktree at target only once it has proven, from LOCAL refs alone, that no
-// commit checked out anywhere inside target would be lost. A returned error
-// is an infrastructure failure (a git command that could not run); a refusal
-// is carried on the result, never as an error, so the merge path can report
-// it as a caveat without unwinding a merge that already landed.
+// worktree at target only once it has proven, from LOCAL refs and the
+// target's own working tree alone, that no commit checked out anywhere
+// inside target would be lost and no uncommitted work sits in the target's
+// tree. A returned error is an infrastructure failure (a git command that
+// could not run); a refusal is carried on the result, never as an error, so
+// the merge path can report it as a caveat without unwinding a merge that
+// already landed.
 func Cleanup(ctx context.Context, repo *git.Repo, target string, opts Options) (*Result, error) {
 	list, err := repo.WorktreeList(ctx)
 	if err != nil {
@@ -121,6 +130,19 @@ func Cleanup(ctx context.Context, repo *git.Repo, target string, opts Options) (
 		res.Unmerged = unmerged
 	}
 
+	// The dirty-tree rule is resolved here too, before git is ever asked to
+	// remove anything: git's own `worktree remove` refuses a dirty target with
+	// unwrapped, path-free text, so the rule set has to answer this itself to
+	// name every offending path. A nested worktree is its own repository
+	// boundary -- `git status` reports it as one untracked directory entry --
+	// and the cardinality rule above already names it, so it is excluded here
+	// rather than double-counted as this target's own dirt.
+	untracked, modified, err := dirtyTreeState(ctx, res.Path, nestedRelPaths(list, repo.Dir, res.Path))
+	if err != nil {
+		return nil, err
+	}
+	res.UntrackedPaths, res.ModifiedPaths = untracked, modified
+
 	switch {
 	case entry.Branch == "":
 		res.RefusalKind = RefusalDetachedHead
@@ -133,6 +155,10 @@ func Cleanup(ctx context.Context, repo *git.Repo, target string, opts Options) (
 		res.RefusalKind = RefusalLandingUnresolved
 		res.Refusal = fmt.Sprintf("cannot resolve a landing target for %s from local refs; pass --landing-target to name one",
 			shortRef(entry.Branch))
+	case len(untracked) > 0 || len(modified) > 0:
+		res.RefusalKind = RefusalDirtyTree
+		res.Refusal = fmt.Sprintf("the worktree has uncommitted work (%s); commit it, ignore it, or delete it deliberately before removing the worktree",
+			describeDirty(untracked, modified))
 	case res.Unmerged > 0:
 		res.RefusalKind = RefusalUnmergedWork
 		res.Refusal = fmt.Sprintf("%d commit(s) on %s are not reachable from %s and would be lost",
@@ -252,6 +278,84 @@ func CountUnmerged(ctx context.Context, repo *git.Repo, branches []string, landi
 		total += n
 	}
 	return total, nil
+}
+
+// dirtyTreeState reports every untracked path and every modified tracked path
+// in the worktree at dir, sorted and relative to dir, other than a path under
+// exclude (each entry is a nested worktree's own boundary, "sub/dir/", that a
+// different rule already names). An ignored file is never in either list --
+// git status omits it unless asked with --ignored -- so an untracked,
+// non-ignored file is the only kind of untracked signal this sees. Renames
+// are reported as a plain delete plus add rather than paired, keeping each
+// entry a single unambiguous path.
+func dirtyTreeState(ctx context.Context, dir string, exclude []string) (untracked, modified []string, err error) {
+	res, runErr := gitexec.RunGit(ctx, dir, "status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames")
+	if runErr != nil {
+		return nil, nil, runErr
+	}
+	if res.ExitCode != 0 {
+		return nil, nil, &git.CommandError{Args: []string{"status", "--porcelain=v1", "-z"}, ExitCode: res.ExitCode, Stderr: strings.TrimSpace(string(res.Stderr))}
+	}
+	for _, entry := range strings.Split(strings.TrimRight(string(res.Stdout), "\x00"), "\x00") {
+		if entry == "" {
+			continue
+		}
+		code, path := entry[:2], entry[3:]
+		if pathExcluded(path, exclude) {
+			continue
+		}
+		if code == "??" {
+			untracked = append(untracked, path)
+		} else {
+			modified = append(modified, path)
+		}
+	}
+	sort.Strings(untracked)
+	sort.Strings(modified)
+	return untracked, modified, nil
+}
+
+// pathExcluded reports whether path (as `git status` reported it) names, or
+// falls under, one of exclude's nested-worktree boundaries.
+func pathExcluded(path string, exclude []string) bool {
+	for _, ex := range exclude {
+		if path == ex || strings.HasPrefix(path, ex) {
+			return true
+		}
+	}
+	return false
+}
+
+// nestedRelPaths returns, for every worktree in list that sits strictly under
+// targetResolved, its path relative to targetResolved with a trailing slash --
+// the form `git status`, run at targetResolved, reports that boundary in.
+func nestedRelPaths(list []git.WorktreeInfo, base, targetResolved string) []string {
+	var rels []string
+	for _, wt := range list {
+		p := ResolvedPath(base, wt.Path)
+		if p == targetResolved || !pathUnder(targetResolved, p) {
+			continue
+		}
+		rel, err := filepath.Rel(targetResolved, p)
+		if err != nil {
+			continue
+		}
+		rels = append(rels, filepath.ToSlash(rel)+"/")
+	}
+	return rels
+}
+
+// describeDirty renders untracked and modified as the path lists a dirty-tree
+// refusal names, omitting either category when it is empty.
+func describeDirty(untracked, modified []string) string {
+	var parts []string
+	if len(untracked) > 0 {
+		parts = append(parts, fmt.Sprintf("untracked: %s", strings.Join(untracked, ", ")))
+	}
+	if len(modified) > 0 {
+		parts = append(parts, fmt.Sprintf("modified: %s", strings.Join(modified, ", ")))
+	}
+	return strings.Join(parts, "; ")
 }
 
 // subtreeState returns the branches checked out at or under targetResolved and
