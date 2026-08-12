@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/johnrichter/claude-shared-tooling/go/git"
+	"github.com/johnrichter/git-tools/internal/worktreeclean"
 )
 
 // CompleteOptions configures Complete.
@@ -15,8 +16,11 @@ type CompleteOptions struct {
 	// match that branch — Complete never checks out a different branch on
 	// the caller's behalf.
 	BaseRef string
-	// Force merges and removes the worktree even if it still has
-	// uncommitted changes, discarding them. Default (false) refuses.
+	// Force is retained for API compatibility but does nothing: removal
+	// runs through internal/worktreeclean's shared rule set (SC-C4), the
+	// same one the standalone `worktree remove` verb uses, and that rule
+	// set has no override for a dirty tree. Setting Force no longer
+	// discards uncommitted work.
 	Force bool
 	// KeepBranch leaves the worktree's branch in place after a successful
 	// merge-back instead of deleting it.
@@ -42,10 +46,13 @@ type CompleteResult struct {
 // once a task is done, it folds the isolated work back into history and
 // frees the worktree slot.
 //
-// A dirty worktree is refused unless Force is set — Complete never
-// discards uncommitted work silently. A merge conflict aborts the merge
-// and returns *git.ConflictError with the worktree left untouched, so the
-// operator can resolve it by hand and retry.
+// Removal goes through internal/worktreeclean's shared rule set (SC-C4), the
+// same one the standalone `worktree remove` verb calls: a dirty worktree is
+// refused unconditionally, naming every offending path and the same three
+// remedies (commit it, ignore it, or delete it deliberately), and no option
+// here waives that. A merge conflict aborts the merge and returns
+// *git.ConflictError with the worktree left untouched, so the operator can
+// resolve it by hand and retry.
 //
 // If the branch delete step fails after a successful merge and worktree
 // removal, Complete still returns that error, but the work itself is
@@ -80,16 +87,6 @@ func Complete(ctx context.Context, repoRoot, id string, opts CompleteOptions) (C
 		}
 		result.Branch = branch
 
-		if !opts.Force {
-			dirty, err := isDirty(ctx, path)
-			if err != nil {
-				return fmt.Errorf("lifecycle: check %s for uncommitted changes: %w", path, err)
-			}
-			if dirty {
-				return fmt.Errorf("lifecycle: worktree %s has uncommitted changes; refusing to complete (set Force to discard)", path)
-			}
-		}
-
 		current, err := currentBranchName(ctx, repoRoot)
 		if err != nil {
 			return fmt.Errorf("lifecycle: resolve current branch of %s: %w", repoRoot, err)
@@ -115,8 +112,19 @@ func Complete(ctx context.Context, repoRoot, id string, opts CompleteOptions) (C
 		result.Merged = mergeRes.NewHead != preHead
 		result.NewHead = mergeRes.NewHead
 
-		if err := repo.WorktreeRemove(ctx, path, git.WorktreeRemoveOptions{Force: opts.Force}); err != nil {
+		// Cleanup is the one choke point both the standalone `worktree
+		// remove` verb and this merge-back call go through: it re-checks the
+		// branch is fully landed, refuses a dirty tree unconditionally, and
+		// only then removes the worktree. That check runs after the merge
+		// above, never before it, so a refusal here never leaves the merge
+		// half-done — the merge has already landed by the time this can
+		// refuse anything.
+		cleaned, err := worktreeclean.Cleanup(ctx, repo, path, worktreeclean.Options{MergedBranches: []string{branch}})
+		if err != nil {
 			return fmt.Errorf("lifecycle: remove worktree %s: %w", path, err)
+		}
+		if cleaned.Refusal != "" {
+			return fmt.Errorf("lifecycle: worktree %s: %s", path, cleaned.Refusal)
 		}
 		if err := removeActivity(worktreesDir, id); err != nil {
 			return fmt.Errorf("lifecycle: remove activity marker for %s: %w", id, err)

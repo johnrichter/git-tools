@@ -49,3 +49,14 @@ func writeFileT(t *testing.T, dir, name, content string) {
 		t.Fatalf("write %s: %v", name, err)
 	}
 }
+
+// commitFileT writes name in dir and commits it there, for a test that
+// needs a real commit (something Complete's merge step can land) rather
+// than an untracked or modified working-tree change (something its
+// worktreeclean-backed dirty check refuses on).
+func commitFileT(t *testing.T, dir, name, content string) {
+	t.Helper()
+	writeFileT(t, dir, name, content)
+	runGitT(t, dir, "add", "-A")
+	runGitT(t, dir, "commit", "-q", "-m", "commit "+name)
+}

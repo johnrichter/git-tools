@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/johnrichter/claude-shared-tooling/go/git"
@@ -18,9 +19,7 @@ func TestComplete_MergesBackAndCleansUp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Ensure: %v", err)
 	}
-	writeFileT(t, wt.Path, "feature.txt", "done\n")
-	runGitT(t, wt.Path, "add", "-A")
-	runGitT(t, wt.Path, "commit", "-q", "-m", "add feature")
+	commitFileT(t, wt.Path, "feature.txt", "done\n")
 
 	result, err := Complete(ctx, repo, "task-1", CompleteOptions{})
 	if err != nil {
@@ -54,9 +53,7 @@ func TestComplete_KeepBranch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Ensure: %v", err)
 	}
-	writeFileT(t, wt.Path, "feature.txt", "done\n")
-	runGitT(t, wt.Path, "add", "-A")
-	runGitT(t, wt.Path, "commit", "-q", "-m", "add feature")
+	commitFileT(t, wt.Path, "feature.txt", "done\n")
 
 	if _, err := Complete(ctx, repo, "task-1", CompleteOptions{KeepBranch: true}); err != nil {
 		t.Fatalf("Complete: %v", err)
@@ -84,7 +81,11 @@ func TestComplete_RefusesDirtyWorktree(t *testing.T) {
 	}
 }
 
-func TestComplete_ForceDiscardsUncommittedChanges(t *testing.T) {
+// TestComplete_ForceNoLongerWaivesDirtyRefusal is SC-C4's guard against a
+// parallel override: removal runs through internal/worktreeclean, whose
+// Options carries no Force, so CompleteOptions.Force (kept only for API
+// compatibility) cannot waive the refusal the way it used to.
+func TestComplete_ForceNoLongerWaivesDirtyRefusal(t *testing.T) {
 	repo := newScratchRepo(t)
 	ctx := context.Background()
 
@@ -94,11 +95,70 @@ func TestComplete_ForceDiscardsUncommittedChanges(t *testing.T) {
 	}
 	writeFileT(t, wt.Path, "uncommitted.txt", "not staged\n")
 
-	if _, err := Complete(ctx, repo, "task-1", CompleteOptions{Force: true}); err != nil {
-		t.Fatalf("Complete with Force: %v", err)
+	if _, err := Complete(ctx, repo, "task-1", CompleteOptions{Force: true}); err == nil {
+		t.Fatal("Complete with Force on a dirty worktree = nil error, want a refusal: Force no longer waives it")
 	}
-	if _, err := os.Stat(wt.Path); !os.IsNotExist(err) {
-		t.Fatalf("worktree directory still exists after forced Complete: err=%v", err)
+	if _, err := os.Stat(wt.Path); err != nil {
+		t.Fatalf("refused Complete must leave the worktree in place even with Force set: %v", err)
+	}
+}
+
+// TestComplete_DirtyRefusalMatchesSharedRuleText proves the refusal Complete
+// raises is worktreeclean's own text, not a parallel message: it names the
+// same offending path and the same three remedies (SC-C5) the standalone
+// `worktree remove` verb reports for the identical condition, and never
+// mentions the removed --force override.
+func TestComplete_DirtyRefusalMatchesSharedRuleText(t *testing.T) {
+	repo := newScratchRepo(t)
+	ctx := context.Background()
+
+	wt, err := Ensure(ctx, repo, "task-1")
+	if err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+	writeFileT(t, wt.Path, "uncommitted.txt", "not staged\n")
+
+	_, err = Complete(ctx, repo, "task-1", CompleteOptions{})
+	if err == nil {
+		t.Fatal("Complete on a dirty worktree = nil error, want a refusal")
+	}
+	for _, want := range []string{"uncommitted.txt", "commit it", "ignore it", "delete it deliberately"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("refusal %q does not name %q; want the same shared refusal internal/cli's worktree remove reports", err.Error(), want)
+		}
+	}
+	if strings.Contains(err.Error(), "--force") {
+		t.Errorf("refusal %q still references the removed --force override", err.Error())
+	}
+}
+
+// TestComplete_DirtyRefusalDoesNotUndoTheMerge proves the merge-before-remove
+// order: even when the removal step refuses on a dirty tree, the branch's
+// commits already landed on BaseRef by the time that refusal fires, and the
+// branch itself is left intact rather than deleted out from under a merge
+// that never fully completed.
+func TestComplete_DirtyRefusalDoesNotUndoTheMerge(t *testing.T) {
+	repo := newScratchRepo(t)
+	ctx := context.Background()
+
+	wt, err := Ensure(ctx, repo, "task-1")
+	if err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+	commitFileT(t, wt.Path, "feature.txt", "done\n")
+	writeFileT(t, wt.Path, "uncommitted.txt", "not staged\n")
+
+	if _, err := Complete(ctx, repo, "task-1", CompleteOptions{}); err == nil {
+		t.Fatal("Complete on a dirty worktree = nil error, want a refusal")
+	}
+	if _, err := os.Stat(filepath.Join(repo, "feature.txt")); err != nil {
+		t.Fatalf("a dirty-tree refusal must not undo the merge that already landed: %v", err)
+	}
+	if _, err := os.Stat(wt.Path); err != nil {
+		t.Fatalf("refused Complete must leave the worktree in place: %v", err)
+	}
+	if !branchExists(ctx, repo, "task-1") {
+		t.Error("a refused cleanup must not delete the branch")
 	}
 }
 
