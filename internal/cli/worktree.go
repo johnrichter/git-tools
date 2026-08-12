@@ -115,10 +115,11 @@ error -- when the worktree's checked-out branch (or a nested worktree's branch)
 carries commits unreachable from its landing target, when that target cannot be
 resolved from local refs, when the worktree's own tree has an untracked or
 modified path (commit it, ignore it, or delete it deliberately), when a live
-sub-worktree nests under it, or when its HEAD is detached. The landing target
-is --landing-target if given, else the branch's upstream, else the local
-record of the remote's default branch; every step is answered from local
-refs, never the network.`,
+sub-worktree nests under it, or when its HEAD is detached. No flag overrides
+any of these refusals -- each condition must be resolved on its own terms
+before the worktree can go. The landing target is --landing-target if given,
+else the branch's upstream, else the local record of the remote's default
+branch; every step is answered from local refs, never the network.`,
 		Args:    cobra.ExactArgs(1),
 		Example: "  git-tools worktree remove ../review --landing-target main",
 		RunE: func(cmd *cobra.Command, args []string) error {
