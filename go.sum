@@ -20,8 +20,8 @@ github.com/johnrichter/claude-shared-tooling/go/clikit v0.1.0 h1:dm4HqCTBlqRQVnW
 github.com/johnrichter/claude-shared-tooling/go/clikit v0.1.0/go.mod h1:rtQByZDhN7vR3+NIqcrpqeuXSpdKV1K8jlE7/kNOqYE=
 github.com/johnrichter/claude-shared-tooling/go/fsx v0.1.0 h1:YvdyHlvEa8FBPVtqBKiHWtRh6qcZ2YQBPpoJvRZ3V2k=
 github.com/johnrichter/claude-shared-tooling/go/fsx v0.1.0/go.mod h1:LyvBP1ps4T06RSwkpwGgfXsk8ytOEUbb5OycEjw1+qc=
-github.com/johnrichter/claude-shared-tooling/go/git v0.2.0 h1:pZ1N6CB8fiL2ZeRYrvGez74BiN0pP1JNE3bopYDJLHE=
-github.com/johnrichter/claude-shared-tooling/go/git v0.2.0/go.mod h1:pif5eJ8oKlHimE/EVVQyeMdCqF/ZRYb86KfnY9XgJxY=
+github.com/johnrichter/claude-shared-tooling/go/git v0.3.0 h1:TeODClrj0uoBuMBPfhI2Phf+BlZjrNenEYCl7wohDxI=
+github.com/johnrichter/claude-shared-tooling/go/git v0.3.0/go.mod h1:pif5eJ8oKlHimE/EVVQyeMdCqF/ZRYb86KfnY9XgJxY=
 github.com/johnrichter/claude-shared-tooling/go/githooks v0.1.0 h1:qBV9mBFNncuFfGUA1IoC9/PyOtAsL1b+9gIJxV3X4kA=
 github.com/johnrichter/claude-shared-tooling/go/githooks v0.1.0/go.mod h1:CfguuAYbWRPsKkf8x15Dy7Ogi1kf+aw3Fn5/mP/EhpM=
 github.com/johnrichter/claude-shared-tooling/go/logkit v0.1.0 h1:IOOkbM68r9LZVjEwbgXN/cuuXiDcGjmHTHBk/HhBL1A=
