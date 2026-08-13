@@ -7,11 +7,16 @@
 package cli_test
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/johnrichter/claude-shared-tooling/go/git"
+
+	"github.com/johnrichter/git-tools/internal/signing"
 )
 
 // signingRepo is initRepo plus a working commit-signing setup, so commits made
@@ -565,5 +570,81 @@ func TestMerge_DryRunMintedCommitUnsignable_StillReportsWouldMerge(t *testing.T)
 	}
 	if got := runGit(t, dir, "rev-parse", "HEAD"); got != head {
 		t.Fatalf("a dry run moved the target ref: HEAD=%s want %s", got, head)
+	}
+}
+
+// assertNoSigningKeyResolves fails the test unless dir cannot actually sign a
+// commit, using the same probe the merge verb itself relies on. This makes the
+// keyless carve-out tests below assert the fixture's own precondition instead
+// of merely assuming it.
+func assertNoSigningKeyResolves(t *testing.T, dir string) {
+	t.Helper()
+	available, detail, err := signing.NewProber(&git.Repo{Dir: dir}).Available(context.Background())
+	if err != nil {
+		t.Fatalf("probing whether %s can sign: %v", dir, err)
+	}
+	if available {
+		t.Fatalf("fixture unexpectedly resolves a signing key in %s", dir)
+	}
+	if detail == "" {
+		t.Fatalf("no-key probe reported no detail")
+	}
+}
+
+// SC-B3: a fast-forwardable, already-verifying source must land even in a
+// repository that cannot sign at all. This is structural, not incidental: per
+// WillMintCommit, a single source the target can fast-forward to (FastForward
+// != never) mints no merge commit, so the merge-commit signing check that
+// follows the gate never runs; and per the gate itself, a range that already
+// verifies is skipped as already_signed without ever probing for a key. Two
+// independent carve-outs, not one, both have to hold for this to pass — a
+// future change that hoists the signing probe earlier, or that makes the gate
+// probe before checking allVerify, would break one of them silently. Do not
+// delete this as "obviously true" from reading the code alone.
+func TestMerge_KeylessFastForwardableAlreadyVerifying_Lands(t *testing.T) {
+	bin := buildCLI(t)
+	dir := signingRepo(t)
+	tip := signedBranch(t, dir, "feature")
+	breakSigningKey(t, dir)
+	assertNoSigningKeyResolves(t, dir)
+
+	r, exit := runCLI(t, bin, "--repo", dir, "merge", "feature")
+	if r.Status != "success" || exit != 0 {
+		t.Fatalf("status=%s exit=%d, want success/0: %+v", r.Status, exit, r)
+	}
+	if len(r.Errors) != 0 {
+		t.Fatalf("a keyless fast-forward triggered a signing refusal: %+v", r.Errors)
+	}
+	if record := gateRecord(t, r, "feature"); record["action"] != "already_signed" {
+		t.Fatalf("gate action=%v, want already_signed: %+v", record["action"], record)
+	}
+	if got := runGit(t, dir, "rev-parse", "HEAD"); got != tip {
+		t.Fatalf("HEAD did not fast-forward to the source tip: got %s want %s", got, tip)
+	}
+}
+
+// The --fast-forward only form of the same carve-out: WillMintCommit treats
+// FastForwardOnly the same as the default allow (only FastForwardNever or an
+// octopus mints a commit), so this must succeed for the identical structural
+// reason as the plain-merge case above.
+func TestMerge_KeylessFastForwardOnlyAlreadyVerifying_Lands(t *testing.T) {
+	bin := buildCLI(t)
+	dir := signingRepo(t)
+	tip := signedBranch(t, dir, "feature")
+	breakSigningKey(t, dir)
+	assertNoSigningKeyResolves(t, dir)
+
+	r, exit := runCLI(t, bin, "--repo", dir, "merge", "feature", "--fast-forward", "only")
+	if r.Status != "success" || exit != 0 {
+		t.Fatalf("status=%s exit=%d, want success/0: %+v", r.Status, exit, r)
+	}
+	if len(r.Errors) != 0 {
+		t.Fatalf("a keyless --fast-forward only merge triggered a signing refusal: %+v", r.Errors)
+	}
+	if record := gateRecord(t, r, "feature"); record["action"] != "already_signed" {
+		t.Fatalf("gate action=%v, want already_signed: %+v", record["action"], record)
+	}
+	if got := runGit(t, dir, "rev-parse", "HEAD"); got != tip {
+		t.Fatalf("HEAD did not fast-forward to the source tip: got %s want %s", got, tip)
 	}
 }
