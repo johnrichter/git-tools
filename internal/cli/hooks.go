@@ -27,7 +27,7 @@ func newHooksInstallCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadConfig(cmd.Flags())
 			if err != nil {
-				return finishErr(cmd, "internal.config.load_failed", "load configuration", err)
+				return finishErr(cmd, nil, "internal.config.load_failed", "load configuration", err)
 			}
 
 			hooksDir, _ := cmd.Flags().GetString("hooks-dir")
@@ -50,7 +50,7 @@ func newHooksInstallCmd() *cobra.Command {
 				if errors.Is(err, hooks.ErrHookExists) {
 					return finishHookConflict(cmd, err)
 				}
-				return finishErr(cmd, "internal.hooks.install_failed", "install hook", err)
+				return finishErr(cmd, nil, "internal.hooks.install_failed", "install hook", err)
 			}
 
 			clikitResult, buildErr := clikitSuccess(cmd, map[string]any{
@@ -60,7 +60,7 @@ func newHooksInstallCmd() *cobra.Command {
 				"dry_run":     result.DryRun,
 			})
 			if buildErr != nil {
-				return finishErr(cmd, "internal.result.build_failed", "build result", buildErr)
+				return finishErr(cmd, nil, "internal.result.build_failed", "build result", buildErr)
 			}
 			return finish(cmd, clikitResult)
 		},
@@ -84,11 +84,11 @@ func finishHookConflict(cmd *cobra.Command, err error) error {
 		nil,
 	)
 	if buildErr != nil {
-		return finishErr(cmd, "internal.result.build_failed", "build diagnostic", buildErr)
+		return finishErr(cmd, nil, "internal.result.build_failed", "build diagnostic", buildErr)
 	}
 	result, buildErr := clikit.NewConflict(commandPath(cmd), nil, []clikit.Diagnostic{diag}, nil)
 	if buildErr != nil {
-		return finishErr(cmd, "internal.result.build_failed", "build result", buildErr)
+		return finishErr(cmd, nil, "internal.result.build_failed", "build result", buildErr)
 	}
 	return finish(cmd, result)
 }

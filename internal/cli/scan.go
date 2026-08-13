@@ -32,11 +32,11 @@ func newScanSecretsCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadConfig(cmd.Flags())
 			if err != nil {
-				return finishErr(cmd, "internal.config.load_failed", "load configuration", err)
+				return finishErr(cmd, nil, "internal.config.load_failed", "load configuration", err)
 			}
 			findings, err := githooks.ScanSecrets(cfg.Repo, githooks.DefaultSkipRules)
 			if err != nil {
-				return finishErr(cmd, "internal.githooks.scan_secrets_failed", "scan for secrets", err)
+				return finishErr(cmd, nil, "internal.githooks.scan_secrets_failed", "scan for secrets", err)
 			}
 			return emitScan(cmd, githooks.ScanOutcome{Secrets: findings})
 		},
@@ -53,16 +53,16 @@ func newScanLFSCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadConfig(cmd.Flags())
 			if err != nil {
-				return finishErr(cmd, "internal.config.load_failed", "load configuration", err)
+				return finishErr(cmd, nil, "internal.config.load_failed", "load configuration", err)
 			}
 			staged, _ := cmd.Flags().GetBool("staged")
 			candidates, err := listCandidates(cmd.Context(), cfg.Repo, staged)
 			if err != nil {
-				return finishErr(cmd, "internal.git.list_candidates_failed", "list candidate files", err)
+				return finishErr(cmd, nil, "internal.git.list_candidates_failed", "list candidate files", err)
 			}
 			findings, err := githooks.ScanRawBinary(cfg.Repo, candidates, githooks.DefaultSkipRules, cfg.MaxBinaryBytes, lfsRouteChecker(cmd.Context(), cfg.Repo))
 			if err != nil {
-				return finishErr(cmd, "internal.githooks.scan_raw_binary_failed", "scan for raw binaries", err)
+				return finishErr(cmd, nil, "internal.githooks.scan_raw_binary_failed", "scan for raw binaries", err)
 			}
 			return emitScan(cmd, githooks.ScanOutcome{RawBinary: findings})
 		},
@@ -80,15 +80,15 @@ func newScanPrivacyCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadConfig(cmd.Flags())
 			if err != nil {
-				return finishErr(cmd, "internal.config.load_failed", "load configuration", err)
+				return finishErr(cmd, nil, "internal.config.load_failed", "load configuration", err)
 			}
 			tier := githooks.PrivacyTier(cfg.PrivacyTier)
 			if !tier.Known() {
-				return finishUsage(cmd, "usage.cli.invalid_privacy_tier", fmt.Sprintf("--privacy-tier %q is not one of public, datadog, personal", cfg.PrivacyTier))
+				return finishUsage(cmd, nil, "usage.cli.invalid_privacy_tier", fmt.Sprintf("--privacy-tier %q is not one of public, datadog, personal", cfg.PrivacyTier))
 			}
 			failures, warnings, err := githooks.ScanPrivacy(cfg.Repo, tier, githooks.PrivacyOptions{SkipRules: githooks.DefaultSkipRules})
 			if err != nil {
-				return finishErr(cmd, "internal.githooks.scan_privacy_failed", "scan for privacy violations", err)
+				return finishErr(cmd, nil, "internal.githooks.scan_privacy_failed", "scan for privacy violations", err)
 			}
 			return emitScan(cmd, githooks.ScanOutcome{PrivacyFailures: failures, PrivacyWarnings: warnings, Strict: cfg.Strict})
 		},
@@ -105,29 +105,29 @@ func newScanAllCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadConfig(cmd.Flags())
 			if err != nil {
-				return finishErr(cmd, "internal.config.load_failed", "load configuration", err)
+				return finishErr(cmd, nil, "internal.config.load_failed", "load configuration", err)
 			}
 			tier := githooks.PrivacyTier(cfg.PrivacyTier)
 			if !tier.Known() {
-				return finishUsage(cmd, "usage.cli.invalid_privacy_tier", fmt.Sprintf("--privacy-tier %q is not one of public, datadog, personal", cfg.PrivacyTier))
+				return finishUsage(cmd, nil, "usage.cli.invalid_privacy_tier", fmt.Sprintf("--privacy-tier %q is not one of public, datadog, personal", cfg.PrivacyTier))
 			}
 			staged, _ := cmd.Flags().GetBool("staged")
 
 			secrets, err := githooks.ScanSecrets(cfg.Repo, githooks.DefaultSkipRules)
 			if err != nil {
-				return finishErr(cmd, "internal.githooks.scan_secrets_failed", "scan for secrets", err)
+				return finishErr(cmd, nil, "internal.githooks.scan_secrets_failed", "scan for secrets", err)
 			}
 			candidates, err := listCandidates(cmd.Context(), cfg.Repo, staged)
 			if err != nil {
-				return finishErr(cmd, "internal.git.list_candidates_failed", "list candidate files", err)
+				return finishErr(cmd, nil, "internal.git.list_candidates_failed", "list candidate files", err)
 			}
 			rawBinary, err := githooks.ScanRawBinary(cfg.Repo, candidates, githooks.DefaultSkipRules, cfg.MaxBinaryBytes, lfsRouteChecker(cmd.Context(), cfg.Repo))
 			if err != nil {
-				return finishErr(cmd, "internal.githooks.scan_raw_binary_failed", "scan for raw binaries", err)
+				return finishErr(cmd, nil, "internal.githooks.scan_raw_binary_failed", "scan for raw binaries", err)
 			}
 			failures, warnings, err := githooks.ScanPrivacy(cfg.Repo, tier, githooks.PrivacyOptions{SkipRules: githooks.DefaultSkipRules})
 			if err != nil {
-				return finishErr(cmd, "internal.githooks.scan_privacy_failed", "scan for privacy violations", err)
+				return finishErr(cmd, nil, "internal.githooks.scan_privacy_failed", "scan for privacy violations", err)
 			}
 
 			return emitScan(cmd, githooks.ScanOutcome{
@@ -154,7 +154,7 @@ func newScanAllCmd() *cobra.Command {
 func emitScan(cmd *cobra.Command, outcome githooks.ScanOutcome) error {
 	code, err := githooks.EmitHookResult(cmd.OutOrStdout(), commandPath(cmd), outcome)
 	if err != nil {
-		return finishErr(cmd, "internal.result.build_failed", "build scan result", err)
+		return finishErr(cmd, nil, "internal.result.build_failed", "build scan result", err)
 	}
 	return finishCode(code)
 }

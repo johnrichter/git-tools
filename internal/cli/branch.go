@@ -43,7 +43,7 @@ contains the branch's current tip, or drop --force.`,
 			name, startPoint := args[0], args[1]
 			cfg, err := loadConfig(cmd.Flags())
 			if err != nil {
-				return finishErr(cmd, "internal.config.load_failed", "load configuration", err)
+				return finishErr(cmd, nil, "internal.config.load_failed", "load configuration", err)
 			}
 			repo, repoErr := requireRepo(cmd, cfg)
 			if repo == nil {
@@ -63,22 +63,22 @@ contains the branch's current tip, or drop --force.`,
 				// --force naming a branch that does not exist, are untouched by it.
 				oldTip, exists, resolveErr := worktreeclean.RevParseLocal(cmd.Context(), repo.Dir, "refs/heads/"+name)
 				if resolveErr != nil {
-					return finishErr(cmd, "internal.git.branch_head_resolve_failed", fmt.Sprintf("resolve %s's current head", name), resolveErr)
+					return finishErr(cmd, nil, "internal.git.branch_head_resolve_failed", fmt.Sprintf("resolve %s's current head", name), resolveErr)
 				}
 				if exists {
 					newTip, resolved, resolveErr := worktreeclean.RevParseLocal(cmd.Context(), repo.Dir, startPoint)
 					if resolveErr != nil {
-						return finishErr(cmd, "internal.git.branch_start_point_resolve_failed", fmt.Sprintf("resolve start point %s", startPoint), resolveErr)
+						return finishErr(cmd, nil, "internal.git.branch_start_point_resolve_failed", fmt.Sprintf("resolve start point %s", startPoint), resolveErr)
 					}
 					// An unresolvable start-point is left to CreateBranch below, which
 					// fails with git's own message -- unchanged from today.
 					if resolved {
 						orphaned, countErr := worktreeclean.CountUnmerged(cmd.Context(), repo, []string{oldTip}, newTip)
 						if countErr != nil {
-							return finishErr(cmd, "internal.git.branch_reachability_check_failed", fmt.Sprintf("check %s's reachability from %s", name, startPoint), countErr)
+							return finishErr(cmd, nil, "internal.git.branch_reachability_check_failed", fmt.Sprintf("check %s's reachability from %s", name, startPoint), countErr)
 						}
 						if orphaned > 0 {
-							return finishDiagnostic(cmd, clikit.NewPreconditionUnmet, "precondition_unmet.git.branch_move_orphans_commits",
+							return finishDiagnostic(cmd, nil, clikit.NewPreconditionUnmet, "precondition_unmet.git.branch_move_orphans_commits",
 								fmt.Sprintf("moving %s from %s to %s would orphan %d commit(s) not reachable from the new start point", name, oldTip, startPoint, orphaned),
 								clikit.Manual("point start-point at a ref that already contains the branch's current tip, or drop --force"),
 								map[string]any{"branch": name, "current_tip": oldTip, "start_point": startPoint, "orphaned_commits": orphaned})
@@ -88,12 +88,12 @@ contains the branch's current tip, or drop --force.`,
 			}
 
 			if err := repo.CreateBranch(cmd.Context(), name, startPoint, git.BranchOptions{Force: force, DryRun: dryRun}); err != nil {
-				return finishErr(cmd, "internal.git.branch_create_failed", fmt.Sprintf("create branch %s at %s", name, startPoint), err)
+				return finishErr(cmd, nil, "internal.git.branch_create_failed", fmt.Sprintf("create branch %s at %s", name, startPoint), err)
 			}
 
 			result, buildErr := clikitSuccess(cmd, map[string]any{"branch": name, "start_point": startPoint, "dry_run": dryRun})
 			if buildErr != nil {
-				return finishErr(cmd, "internal.result.build_failed", "build result", buildErr)
+				return finishErr(cmd, nil, "internal.result.build_failed", "build result", buildErr)
 			}
 			return finish(cmd, result)
 		},
@@ -132,7 +132,7 @@ Exit codes:
 			name := args[0]
 			cfg, err := loadConfig(cmd.Flags())
 			if err != nil {
-				return finishErr(cmd, "internal.config.load_failed", "load configuration", err)
+				return finishErr(cmd, nil, "internal.config.load_failed", "load configuration", err)
 			}
 			repo, repoErr := requireRepo(cmd, cfg)
 			if repo == nil {
@@ -148,10 +148,10 @@ Exit codes:
 			} else {
 				head, ok, resolveErr := worktreeclean.RevParseLocal(cmd.Context(), repo.Dir, "refs/heads/"+name)
 				if resolveErr != nil {
-					return finishErr(cmd, "internal.git.branch_head_resolve_failed", fmt.Sprintf("resolve %s's current head", name), resolveErr)
+					return finishErr(cmd, nil, "internal.git.branch_head_resolve_failed", fmt.Sprintf("resolve %s's current head", name), resolveErr)
 				}
 				if !ok {
-					return finishDiagnostic(cmd, clikit.NewNotFound, "not_found.git.branch_not_found",
+					return finishDiagnostic(cmd, nil, clikit.NewNotFound, "not_found.git.branch_not_found",
 						fmt.Sprintf("branch %s does not exist", name),
 						clikit.Manual(fmt.Sprintf("run `git -C %s branch --list` to see what exists", repo.Dir)), nil)
 				}
@@ -166,15 +166,15 @@ Exit codes:
 			// that skips it.
 			landing, unmerged, ok, err := worktreeclean.ReachableFrom(cmd.Context(), repo, name, landingTarget, cfg.Remote)
 			if err != nil {
-				return finishErr(cmd, "internal.git.branch_reachability_check_failed", fmt.Sprintf("check %s's reachability", name), err)
+				return finishErr(cmd, nil, "internal.git.branch_reachability_check_failed", fmt.Sprintf("check %s's reachability", name), err)
 			}
 			if !ok {
-				return finishDiagnostic(cmd, clikit.NewPreconditionUnmet, "precondition_unmet.git.branch_landing_unresolved",
+				return finishDiagnostic(cmd, nil, clikit.NewPreconditionUnmet, "precondition_unmet.git.branch_landing_unresolved",
 					fmt.Sprintf("cannot resolve a landing target for %s from local refs; pass --landing-target to name one", name),
 					clikit.Manual("pass --landing-target to name a ref this branch's work is already reachable from"), nil)
 			}
 			if unmerged > 0 {
-				return finishDiagnostic(cmd, clikit.NewPreconditionUnmet, "precondition_unmet.git.branch_unmerged_work",
+				return finishDiagnostic(cmd, nil, clikit.NewPreconditionUnmet, "precondition_unmet.git.branch_unmerged_work",
 					fmt.Sprintf("%s carries %d commit(s) not reachable from %s and would be lost", name, unmerged, landing),
 					clikit.Manual("land the branch onto the landing target first; there is no override"),
 					map[string]any{"branch": name, "unmerged_commits": unmerged, "landing_target": landing})
@@ -182,12 +182,12 @@ Exit codes:
 
 			outcome, err := repo.DeleteBranch(cmd.Context(), name, expectedHead, dryRun)
 			if err != nil {
-				return handleGitError(cmd, err, "internal.git.branch_delete_failed", fmt.Sprintf("delete branch %s", name))
+				return handleGitError(cmd, nil, err, "internal.git.branch_delete_failed", fmt.Sprintf("delete branch %s", name))
 			}
 
 			result, buildErr := clikitSuccess(cmd, gitresult.RewriteOutcomeData(outcome))
 			if buildErr != nil {
-				return finishErr(cmd, "internal.result.build_failed", "build result", buildErr)
+				return finishErr(cmd, nil, "internal.result.build_failed", "build result", buildErr)
 			}
 			return finish(cmd, result)
 		},
@@ -214,7 +214,7 @@ func newBranchListCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadConfig(cmd.Flags())
 			if err != nil {
-				return finishErr(cmd, "internal.config.load_failed", "load configuration", err)
+				return finishErr(cmd, nil, "internal.config.load_failed", "load configuration", err)
 			}
 			repo, repoErr := requireRepo(cmd, cfg)
 			if repo == nil {
@@ -223,7 +223,7 @@ func newBranchListCmd() *cobra.Command {
 
 			entries, err := listLocalBranches(cmd.Context(), repo.Dir)
 			if err != nil {
-				return finishErr(cmd, "internal.git.branch_list_failed", "list branches", err)
+				return finishErr(cmd, nil, "internal.git.branch_list_failed", "list branches", err)
 			}
 
 			data := map[string]any{"count": len(entries)}
@@ -232,7 +232,7 @@ func newBranchListCmd() *cobra.Command {
 			}
 			result, buildErr := clikitSuccess(cmd, data)
 			if buildErr != nil {
-				return finishErr(cmd, "internal.result.build_failed", "build result", buildErr)
+				return finishErr(cmd, nil, "internal.result.build_failed", "build result", buildErr)
 			}
 			return finish(cmd, result)
 		},

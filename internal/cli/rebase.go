@@ -19,7 +19,7 @@ func newRebaseCmd() *cobra.Command {
 			upstream := args[0]
 			cfg, err := loadConfig(cmd.Flags())
 			if err != nil {
-				return finishErr(cmd, "internal.config.load_failed", "load configuration", err)
+				return finishErr(cmd, nil, "internal.config.load_failed", "load configuration", err)
 			}
 			repo, repoErr := requireRepo(cmd, cfg)
 			if repo == nil {
@@ -43,7 +43,7 @@ func newRebaseCmd() *cobra.Command {
 				Remote:         cfg.Remote,
 			})
 			if err != nil {
-				return handleGitError(cmd, err, "internal.git.rebase_failed", fmt.Sprintf("rebase onto %s", upstream))
+				return handleGitError(cmd, nil, err, "internal.git.rebase_failed", fmt.Sprintf("rebase onto %s", upstream))
 			}
 
 			data := gitresult.RewriteOutcomeData(result.RewriteOutcome)
@@ -52,7 +52,7 @@ func newRebaseCmd() *cobra.Command {
 			}
 			clikitResult, buildErr := clikitSuccess(cmd, data)
 			if buildErr != nil {
-				return finishErr(cmd, "internal.result.build_failed", "build result", buildErr)
+				return finishErr(cmd, nil, "internal.result.build_failed", "build result", buildErr)
 			}
 			return finish(cmd, clikitResult)
 		},

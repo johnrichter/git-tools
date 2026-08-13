@@ -153,13 +153,14 @@ func finishCode(code int) error {
 
 // finishErr builds and emits a clikit.StatusInternal result for err — an
 // infrastructure failure from this CLI itself, not a diagnostic the
-// underlying tool reported. code must be in the "internal" class.
-func finishErr(cmd *cobra.Command, code, message string, err error) error {
+// underlying tool reported. code must be in the "internal" class. data
+// becomes the result's data map (nil for a caller with nothing to report).
+func finishErr(cmd *cobra.Command, data map[string]any, code, message string, err error) error {
 	diag, buildErr := clikit.NewError(code, sanitizeMessage(fmt.Sprintf("%s: %s", message, err)), clikit.Manual("retry; if this persists, file an issue with the log output"), nil)
 	if buildErr != nil {
 		return buildErr
 	}
-	result, buildErr := clikit.NewInternal(commandPath(cmd), nil, []clikit.Diagnostic{diag}, nil)
+	result, buildErr := clikit.NewInternal(commandPath(cmd), data, []clikit.Diagnostic{diag}, nil)
 	if buildErr != nil {
 		return buildErr
 	}
@@ -168,8 +169,9 @@ func finishErr(cmd *cobra.Command, code, message string, err error) error {
 
 // finishUsage builds and emits a clikit.StatusUsage result: the invocation
 // itself is wrong (a required setting missing, an unparseable value) and
-// nothing was attempted. code must be in the "usage" class.
-func finishUsage(cmd *cobra.Command, code, message string) error {
+// nothing was attempted. code must be in the "usage" class. data becomes
+// the result's data map (nil for a caller with nothing to report).
+func finishUsage(cmd *cobra.Command, data map[string]any, code, message string) error {
 	diag, buildErr := clikit.NewError(
 		code, sanitizeMessage(message),
 		clikit.Manual(fmt.Sprintf("run `%s --help` for valid flags and usage", cmd.CommandPath())),
@@ -178,7 +180,7 @@ func finishUsage(cmd *cobra.Command, code, message string) error {
 	if buildErr != nil {
 		return buildErr
 	}
-	result, buildErr := clikit.NewUsage(commandPath(cmd), nil, []clikit.Diagnostic{diag}, nil)
+	result, buildErr := clikit.NewUsage(commandPath(cmd), data, []clikit.Diagnostic{diag}, nil)
 	if buildErr != nil {
 		return buildErr
 	}
@@ -206,30 +208,31 @@ func requireRepo(cmd *cobra.Command, cfg *Config) (*git.Repo, error) {
 		map[string]any{"repo": cfg.Repo},
 	)
 	if buildErr != nil {
-		return nil, finishErr(cmd, "internal.result.build_failed", "build diagnostic", buildErr)
+		return nil, finishErr(cmd, nil, "internal.result.build_failed", "build diagnostic", buildErr)
 	}
 	result, buildErr := clikit.NewNotFound(commandPath(cmd), nil, []clikit.Diagnostic{diag}, nil)
 	if buildErr != nil {
-		return nil, finishErr(cmd, "internal.result.build_failed", "build result", buildErr)
+		return nil, finishErr(cmd, nil, "internal.result.build_failed", "build result", buildErr)
 	}
 	return nil, finish(cmd, result)
 }
 
 // handleGitError classifies err from a git library call: a stale
 // compare-and-swap or an aborted merge/rebase conflict becomes a
-// clikit.StatusConflict result; anything else falls back to a
-// clikit.StatusInternal result under fallbackCode/fallbackMessage.
-func handleGitError(cmd *cobra.Command, err error, fallbackCode, fallbackMessage string) error {
+// clikit.StatusConflict result carrying data; anything else falls back to a
+// clikit.StatusInternal result under fallbackCode/fallbackMessage, also
+// carrying data.
+func handleGitError(cmd *cobra.Command, data map[string]any, err error, fallbackCode, fallbackMessage string) error {
 	diag, ok, buildErr := gitresult.ConflictDiagnostic(err)
 	if buildErr != nil {
-		return finishErr(cmd, "internal.result.build_failed", "build diagnostic", buildErr)
+		return finishErr(cmd, nil, "internal.result.build_failed", "build diagnostic", buildErr)
 	}
 	if !ok {
-		return finishErr(cmd, fallbackCode, fallbackMessage, err)
+		return finishErr(cmd, data, fallbackCode, fallbackMessage, err)
 	}
-	result, buildErr := clikit.NewConflict(commandPath(cmd), nil, []clikit.Diagnostic{diag}, nil)
+	result, buildErr := clikit.NewConflict(commandPath(cmd), data, []clikit.Diagnostic{diag}, nil)
 	if buildErr != nil {
-		return finishErr(cmd, "internal.result.build_failed", "build result", buildErr)
+		return finishErr(cmd, nil, "internal.result.build_failed", "build result", buildErr)
 	}
 	return finish(cmd, result)
 }
@@ -239,15 +242,15 @@ func handleGitError(cmd *cobra.Command, err error, fallbackCode, fallbackMessage
 // NewNotFound, NewConflict, NewUsage, NewTransient, ...) — and emits it.
 // finishErr and finishUsage each hand-roll this shape for one fixed status;
 // a caller needing a different status, triage or diagnostic context uses
-// this instead of repeating it.
-func finishDiagnostic(cmd *cobra.Command, build func(command []string, data map[string]any, errors, caveats []clikit.Diagnostic) (*clikit.Result, error), code, message string, triage clikit.Triage, context map[string]any) error {
+// this instead of repeating it. data becomes the result's data map.
+func finishDiagnostic(cmd *cobra.Command, data map[string]any, build func(command []string, data map[string]any, errors, caveats []clikit.Diagnostic) (*clikit.Result, error), code, message string, triage clikit.Triage, context map[string]any) error {
 	diag, buildErr := clikit.NewError(code, sanitizeMessage(message), triage, context)
 	if buildErr != nil {
-		return finishErr(cmd, "internal.result.build_failed", "build diagnostic", buildErr)
+		return finishErr(cmd, nil, "internal.result.build_failed", "build diagnostic", buildErr)
 	}
-	result, buildErr := build(commandPath(cmd), nil, []clikit.Diagnostic{diag}, nil)
+	result, buildErr := build(commandPath(cmd), data, []clikit.Diagnostic{diag}, nil)
 	if buildErr != nil {
-		return finishErr(cmd, "internal.result.build_failed", "build result", buildErr)
+		return finishErr(cmd, nil, "internal.result.build_failed", "build result", buildErr)
 	}
 	return finish(cmd, result)
 }
@@ -258,11 +261,11 @@ func finishDiagnostic(cmd *cobra.Command, build func(command []string, data map[
 func finishCaveat(cmd *cobra.Command, data map[string]any, code, message string, triage clikit.Triage, context map[string]any) error {
 	caveat, buildErr := clikit.NewCaveat(code, sanitizeMessage(message), triage, context)
 	if buildErr != nil {
-		return finishErr(cmd, "internal.result.build_failed", "build caveat", buildErr)
+		return finishErr(cmd, nil, "internal.result.build_failed", "build caveat", buildErr)
 	}
 	result, buildErr := clikit.NewCaveats(commandPath(cmd), data, []clikit.Diagnostic{caveat})
 	if buildErr != nil {
-		return finishErr(cmd, "internal.result.build_failed", "build result", buildErr)
+		return finishErr(cmd, nil, "internal.result.build_failed", "build result", buildErr)
 	}
 	return finish(cmd, result)
 }

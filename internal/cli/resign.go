@@ -46,7 +46,7 @@ func newResignCmd() *cobra.Command {
 			}
 			base, _ := cmd.Flags().GetString("base")
 			if base == "" {
-				return finishUsage(cmd, "usage.cli.missing_base", "--base is required")
+				return finishUsage(cmd, nil, "usage.cli.missing_base", "--base is required")
 			}
 			return runResign(cmd, ref, base)
 		},
@@ -66,7 +66,7 @@ func addSyncFlags(cmd *cobra.Command) {
 func runResign(cmd *cobra.Command, ref, base string) error {
 	cfg, err := loadConfig(cmd.Flags())
 	if err != nil {
-		return finishErr(cmd, "internal.config.load_failed", "load configuration", err)
+		return finishErr(cmd, nil, "internal.config.load_failed", "load configuration", err)
 	}
 	repo, repoErr := requireRepo(cmd, cfg)
 	if repo == nil {
@@ -88,14 +88,14 @@ func runResign(cmd *cobra.Command, ref, base string) error {
 	})
 	if err != nil {
 		if msg, ok := unresolvedRangeMessage(err); ok {
-			return finishUsage(cmd, "usage.cli.invalid_range", msg)
+			return finishUsage(cmd, nil, "usage.cli.invalid_range", msg)
 		}
-		return handleGitError(cmd, err, "internal.git.resign_failed", fmt.Sprintf("resign %s..%s", base, ref))
+		return handleGitError(cmd, nil, err, "internal.git.resign_failed", fmt.Sprintf("resign %s..%s", base, ref))
 	}
 
 	result, buildErr := clikitSuccess(cmd, gitresult.RewriteOutcomeData(outcome))
 	if buildErr != nil {
-		return finishErr(cmd, "internal.result.build_failed", "build result", buildErr)
+		return finishErr(cmd, nil, "internal.result.build_failed", "build result", buildErr)
 	}
 	return finish(cmd, result)
 }

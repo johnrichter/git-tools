@@ -16,6 +16,26 @@ import (
 	"github.com/johnrichter/git-tools/internal/worktreeclean"
 )
 
+// Result-data keys merge's result carries once the values they name are
+// resolved. Both are strings.
+//
+// dataKeyRepo names the resolved absolute repository path. Present on every
+// exit once --repo has resolved to a git working tree (requireRepo has
+// returned a *git.Repo) — absent only on the two exits that run before that:
+// a load-configuration failure, and requireRepo's own refusal.
+//
+// dataKeyTarget names the branch being merged into (empty for a detached
+// HEAD, which is itself a value merge reports rather than omits). Present on
+// every exit from the point the current branch has been read onward — absent,
+// alongside dataKeyRepo, on the two exits above, and alongside dataKeyRepo's
+// presence, on the two exits that run with the repository resolved but before
+// that read: an invalid --fast-forward value, and a failure doing the read
+// itself.
+const (
+	dataKeyRepo   = "repo"
+	dataKeyTarget = "target"
+)
+
 func newMergeCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "merge <branch>...",
@@ -60,11 +80,15 @@ preflight that does not detect the condition.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadConfig(cmd.Flags())
 			if err != nil {
-				return finishErr(cmd, "internal.config.load_failed", "load configuration", err)
+				return finishErr(cmd, nil, "internal.config.load_failed", "load configuration", err)
 			}
 			repo, repoErr := requireRepo(cmd, cfg)
 			if repo == nil {
 				return repoErr
+			}
+			repoPath, pathErr := filepath.Abs(repo.Dir)
+			if pathErr != nil {
+				repoPath = repo.Dir
 			}
 
 			message, _ := cmd.Flags().GetString("message")
@@ -74,7 +98,7 @@ preflight that does not detect the condition.`,
 
 			ff, err := parseFastForward(ffMode)
 			if err != nil {
-				return finishUsage(cmd, "usage.cli.invalid_fast_forward", err.Error())
+				return finishUsage(cmd, map[string]any{dataKeyRepo: repoPath}, "usage.cli.invalid_fast_forward", err.Error())
 			}
 
 			// The target's own validity is a precondition, settled before the
@@ -82,14 +106,14 @@ preflight that does not detect the condition.`,
 			// the one checked out and every named source — exactly where it was.
 			target, err := gitexec.CurrentBranch(cmd.Context(), repo.Dir)
 			if err != nil {
-				return finishErr(cmd, "internal.git.head_check_failed", "resolve the branch being merged into", err)
+				return finishErr(cmd, map[string]any{dataKeyRepo: repoPath}, "internal.git.head_check_failed", "resolve the branch being merged into", err)
 			}
 			if target == "" {
 				head, headErr := resolveCommit(cmd.Context(), repo.Dir, "HEAD")
 				if headErr != nil {
-					return finishErr(cmd, "internal.git.head_check_failed", "resolve HEAD", headErr)
+					return finishErr(cmd, map[string]any{dataKeyRepo: repoPath, dataKeyTarget: target}, "internal.git.head_check_failed", "resolve HEAD", headErr)
 				}
-				return finishDiagnostic(cmd, clikit.NewPreconditionUnmet,
+				return finishDiagnostic(cmd, map[string]any{dataKeyRepo: repoPath, dataKeyTarget: target}, clikit.NewPreconditionUnmet,
 					"precondition_unmet.git.merge_target_detached_head",
 					fmt.Sprintf("HEAD is detached at %s, not on a branch; merge needs a branch checked out to land sources into", head),
 					clikit.Manual("check out a branch (e.g. `git switch -c <name>` or `git checkout <branch>`) and re-run; nothing was merged"),
@@ -99,11 +123,7 @@ preflight that does not detect the condition.`,
 				if source != target {
 					continue
 				}
-				repoPath, pathErr := filepath.Abs(repo.Dir)
-				if pathErr != nil {
-					repoPath = repo.Dir
-				}
-				return finishDiagnostic(cmd, clikit.NewPreconditionUnmet,
+				return finishDiagnostic(cmd, map[string]any{dataKeyRepo: repoPath, dataKeyTarget: target}, clikit.NewPreconditionUnmet,
 					"precondition_unmet.git.merge_target_is_source",
 					fmt.Sprintf("%s has %s checked out, and %s is also named as a source; a branch cannot be merged into itself", repoPath, target, source),
 					clikit.Manual(fmt.Sprintf("check out a branch other than %s, or drop %s from the sources; nothing was merged", target, source)),
@@ -118,10 +138,10 @@ preflight that does not detect the condition.`,
 			// the wrong operation, not just a risky one.
 			linkedPath, primaryPath, wtErr := resolvedLinkedWorktree(cmd.Context(), repo.Dir)
 			if wtErr != nil {
-				return finishErr(cmd, "internal.git.worktree_check_failed", "check whether the resolved target is a linked worktree", wtErr)
+				return finishErr(cmd, map[string]any{dataKeyRepo: repoPath, dataKeyTarget: target}, "internal.git.worktree_check_failed", "check whether the resolved target is a linked worktree", wtErr)
 			}
 			if linkedPath != "" {
-				return finishDiagnostic(cmd, clikit.NewPreconditionUnmet,
+				return finishDiagnostic(cmd, map[string]any{dataKeyRepo: repoPath, dataKeyTarget: target}, clikit.NewPreconditionUnmet,
 					"precondition_unmet.git.merge_target_is_linked_worktree",
 					fmt.Sprintf("%s is a linked worktree, not the repository's primary checkout at %s; merge refuses to land there", linkedPath, primaryPath),
 					clikit.Manual(fmt.Sprintf("run merge from the primary checkout at %s (or point --repo at it) instead of the linked worktree %s; nothing was merged", primaryPath, linkedPath)),
@@ -134,7 +154,7 @@ preflight that does not detect the condition.`,
 			prober := signing.NewProber(repo)
 			gated, refusal := signing.Gate(cmd.Context(), repo, target, args, dryRun, prober)
 			if refusal != nil {
-				return finishDiagnostic(cmd, clikit.NewPreconditionUnmet, refusal.Code(), refusal.Message(), refusal.Advice(), refusal.Context())
+				return finishDiagnostic(cmd, map[string]any{dataKeyRepo: repoPath, dataKeyTarget: target}, clikit.NewPreconditionUnmet, refusal.Code(), refusal.Message(), refusal.Advice(), refusal.Context())
 			}
 
 			// A real merge whose every source range is empty lands nothing —
@@ -151,13 +171,13 @@ preflight that does not detect the condition.`,
 					clikit.Manual("nothing was merged; there was nothing to land"),
 					map[string]any{"sources": args, "target": target})
 				if buildErr != nil {
-					return finishErr(cmd, "internal.result.build_failed", "build diagnostic", buildErr)
+					return finishErr(cmd, map[string]any{dataKeyRepo: repoPath, dataKeyTarget: target}, "internal.result.build_failed", "build diagnostic", buildErr)
 				}
 				result, buildErr := clikit.NewGateNegative(commandPath(cmd),
-					map[string]any{"dry_run": false, "signing_gate": gated},
+					map[string]any{dataKeyRepo: repoPath, dataKeyTarget: target, "dry_run": false, "signing_gate": gated},
 					[]clikit.Diagnostic{diag}, nil)
 				if buildErr != nil {
-					return finishErr(cmd, "internal.result.build_failed", "build result", buildErr)
+					return finishErr(cmd, map[string]any{dataKeyRepo: repoPath, dataKeyTarget: target}, "internal.result.build_failed", "build result", buildErr)
 				}
 				return finish(cmd, result)
 			}
@@ -173,7 +193,7 @@ preflight that does not detect the condition.`,
 			// target, so the minting decision is unaffected by its order.
 			willMint, err := signing.WillMintCommit(cmd.Context(), repo, target, args, ff)
 			if err != nil {
-				return finishErr(cmd, "internal.git.merge_shape_check_failed", "determine whether the merge will mint a commit", err)
+				return finishErr(cmd, map[string]any{dataKeyRepo: repoPath, dataKeyTarget: target}, "internal.git.merge_shape_check_failed", "determine whether the merge will mint a commit", err)
 			}
 
 			// A real merge that mints a commit signs it: prove git can sign
@@ -184,10 +204,10 @@ preflight that does not detect the condition.`,
 			if sign {
 				available, detail, probeErr := prober.Available(cmd.Context())
 				if probeErr != nil {
-					return finishErr(cmd, "internal.git.signing_probe_failed", "test whether git can sign the merge commit", probeErr)
+					return finishErr(cmd, map[string]any{dataKeyRepo: repoPath, dataKeyTarget: target}, "internal.git.signing_probe_failed", "test whether git can sign the merge commit", probeErr)
 				}
 				if !available {
-					return finishDiagnostic(cmd, clikit.NewPreconditionUnmet,
+					return finishDiagnostic(cmd, map[string]any{dataKeyRepo: repoPath, dataKeyTarget: target}, clikit.NewPreconditionUnmet,
 						"precondition_unmet.git.signing_key_unresolved",
 						fmt.Sprintf("no key resolved for commit signing, so the merge commit for %s would be unsigned: %s", strings.Join(args, " "), detail),
 						clikit.Manual("configure a signing key (gpg.format plus user.signingkey, or this environment's signing setup) and re-run; nothing was merged"),
@@ -197,10 +217,10 @@ preflight that does not detect the condition.`,
 
 			result, err := repo.Merge(cmd.Context(), args, git.MergeOptions{Message: message, FastForward: ff, DryRun: dryRun, Sign: sign})
 			if err != nil {
-				return handleGitError(cmd, err, "internal.git.merge_failed", fmt.Sprintf("merge %s", strings.Join(args, " ")))
+				return handleGitError(cmd, map[string]any{dataKeyRepo: repoPath, dataKeyTarget: target}, err, "internal.git.merge_failed", fmt.Sprintf("merge %s", strings.Join(args, " ")))
 			}
 
-			data := map[string]any{"dry_run": result.DryRun, "signing_gate": gated}
+			data := map[string]any{dataKeyRepo: repoPath, dataKeyTarget: target, "dry_run": result.DryRun, "signing_gate": gated}
 			if result.DryRun {
 				data["would_merge"] = result.WouldMerge
 			} else {
@@ -229,7 +249,7 @@ preflight that does not detect the condition.`,
 
 			clikitResult, buildErr := clikitSuccess(cmd, data)
 			if buildErr != nil {
-				return finishErr(cmd, "internal.result.build_failed", "build result", buildErr)
+				return finishErr(cmd, data, "internal.result.build_failed", "build result", buildErr)
 			}
 			return finish(cmd, clikitResult)
 		},

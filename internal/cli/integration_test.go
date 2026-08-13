@@ -699,6 +699,111 @@ func TestAbandonmentRoute_UnmergedBranch_RefusedAtBothActs(t *testing.T) {
 	}
 }
 
+// TestOtherVerbs_DataMaps_DoNotCarryMergeDataKeys is SC-A2's regression
+// backstop: finishErr, finishUsage and finishDiagnostic all gained a data
+// parameter for merge's sake, but every pre-existing call site outside
+// merge.go still passes nil, so no other verb's result should carry the
+// "repo" or "target" keys merge now populates. One case per verb, chosen to
+// hit a different one of the three widened builders and a different
+// clikit status, so a mistake threading data into any of them shows up
+// here.
+func TestOtherVerbs_DataMaps_DoNotCarryMergeDataKeys(t *testing.T) {
+	bin := buildCLI(t)
+
+	assertNoMergeKeys := func(t *testing.T, r wireResult) {
+		t.Helper()
+		if _, ok := r.Data["repo"]; ok {
+			t.Fatalf("data unexpectedly carries a repo key: %+v", r.Data)
+		}
+		if _, ok := r.Data["target"]; ok {
+			t.Fatalf("data unexpectedly carries a target key: %+v", r.Data)
+		}
+	}
+
+	t.Run("sign root commit usage error", func(t *testing.T) {
+		dir := initRepo(t)
+		r, exit := runCLI(t, bin, "--repo", dir, "sign", "HEAD")
+		if r.Status != "usage" || exit != 50 {
+			t.Fatalf("status=%s exit=%d, want usage/50: %+v", r.Status, exit, r)
+		}
+		assertNoMergeKeys(t, r)
+	})
+
+	t.Run("worktree list not_found", func(t *testing.T) {
+		r, exit := runCLI(t, bin, "--repo", t.TempDir(), "worktree", "list")
+		if r.Status != "not_found" || exit != 40 {
+			t.Fatalf("status=%s exit=%d, want not_found/40: %+v", r.Status, exit, r)
+		}
+		assertNoMergeKeys(t, r)
+	})
+
+	t.Run("branch delete unmerged precondition_unmet", func(t *testing.T) {
+		dir := initRepo(t)
+		runGit(t, dir, "branch", "feature")
+		runGit(t, dir, "checkout", "-q", "feature")
+		head := commitFile(t, dir, "feature.txt", "feature\n", "feature work")
+		runGit(t, dir, "checkout", "-q", "main")
+		r, exit := runCLI(t, bin, "--repo", dir, "branch", "delete", "feature", head, "--landing-target", "main")
+		if r.Status != "precondition_unmet" || exit != 30 {
+			t.Fatalf("status=%s exit=%d, want precondition_unmet/30: %+v", r.Status, exit, r)
+		}
+		assertNoMergeKeys(t, r)
+	})
+
+	t.Run("scan secrets precondition_unmet", func(t *testing.T) {
+		dir := initRepo(t)
+		commitFile(t, dir, "config.env", "AWS_KEY=AKIAIOSFODNN7EXAMPLE\n", "add config")
+		r, exit := runCLI(t, bin, "--repo", dir, "scan", "secrets")
+		if r.Status != "precondition_unmet" || exit != 30 {
+			t.Fatalf("status=%s exit=%d, want precondition_unmet/30: %+v", r.Status, exit, r)
+		}
+		assertNoMergeKeys(t, r)
+	})
+
+	t.Run("branch create success", func(t *testing.T) {
+		dir := initRepo(t)
+		r, exit := runCLI(t, bin, "--repo", dir, "branch", "create", "feature/x", "HEAD")
+		if r.Status != "success" || exit != 0 {
+			t.Fatalf("status=%s exit=%d, want success/0: %+v", r.Status, exit, r)
+		}
+		assertNoMergeKeys(t, r)
+	})
+
+	t.Run("rebase success", func(t *testing.T) {
+		dir := initRepo(t)
+		runGit(t, dir, "branch", "feature")
+		commitFile(t, dir, "main-only.txt", "main\n", "main advances")
+		runGit(t, dir, "checkout", "-q", "feature")
+		commitFile(t, dir, "feature-only.txt", "feature\n", "feature work")
+		r, exit := runCLI(t, bin, "--repo", dir, "rebase", "main")
+		if r.Status != "success" || exit != 0 {
+			t.Fatalf("status=%s exit=%d, want success/0: %+v", r.Status, exit, r)
+		}
+		assertNoMergeKeys(t, r)
+	})
+
+	t.Run("hooks install conflict", func(t *testing.T) {
+		dir := initRepo(t)
+		if r, exit := runCLI(t, bin, "--repo", dir, "hooks", "install"); r.Status != "success" || exit != 0 {
+			t.Fatalf("first install: status=%s exit=%d: %+v", r.Status, exit, r)
+		}
+		r, exit := runCLI(t, bin, "--repo", dir, "hooks", "install")
+		if r.Status != "conflict" || exit != 41 {
+			t.Fatalf("status=%s exit=%d, want conflict/41: %+v", r.Status, exit, r)
+		}
+		assertNoMergeKeys(t, r)
+	})
+
+	t.Run("push repo retargeting usage", func(t *testing.T) {
+		dir := initRepo(t)
+		r, exit := runCLIIn(t, bin, dir, "push", "main", "--repo", ".")
+		if r.Status != "usage" || exit != 50 {
+			t.Fatalf("status=%s exit=%d, want usage/50: %+v", r.Status, exit, r)
+		}
+		assertNoMergeKeys(t, r)
+	})
+}
+
 func TestHooksInstall_ExistingScriptWithoutForce_IsConflict(t *testing.T) {
 	bin := buildCLI(t)
 	dir := initRepo(t)

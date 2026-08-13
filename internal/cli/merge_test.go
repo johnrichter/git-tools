@@ -906,3 +906,231 @@ func TestMerge_KeylessFastForwardOnlyAlreadyVerifying_Lands(t *testing.T) {
 		t.Fatalf("HEAD did not fast-forward to the source tip: got %s want %s", got, tip)
 	}
 }
+
+// SC-A2: merge's result data carries the resolved absolute repository path
+// and the target branch (keys "repo" and "target") from the point each is
+// resolved onward, and neither key before that. Each case below sets up its
+// own fixture and states exactly which of the two keys the result must
+// carry -- present with a specific value, or absent -- so a regression that
+// drops a key, or that starts reporting one too early, shows up as a
+// mismatch here rather than passing unnoticed because some other assertion
+// on the same exit path happened to look elsewhere.
+func TestMerge_DataKeys_PerExitPath(t *testing.T) {
+	bin := buildCLI(t)
+
+	cases := []struct {
+		name       string
+		setup      func(t *testing.T) (args []string, wantRepoDir string) // wantRepoDir empty means the "repo" key must be absent
+		wantStatus string
+		wantExit   int
+		wantTarget bool   // whether the "target" key must be present at all
+		hasTarget  bool   // when wantTarget, whether it is actually checked for an exact value below
+		targetVal  string // the exact value expected when hasTarget
+	}{
+		{
+			name: "success",
+			setup: func(t *testing.T) ([]string, string) {
+				dir := signingRepo(t)
+				runGit(t, dir, "branch", "feature")
+				runGit(t, dir, "checkout", "-q", "feature")
+				commitFile(t, dir, "feature.txt", "feature\n", "feature work")
+				runGit(t, dir, "checkout", "-q", "main")
+				return []string{"--repo", dir, "merge", "feature"}, dir
+			},
+			wantStatus: "success", wantExit: 0, wantTarget: true, hasTarget: true, targetVal: "main",
+		},
+		{
+			name: "dry_run_success",
+			setup: func(t *testing.T) ([]string, string) {
+				dir := signingRepo(t)
+				runGit(t, dir, "branch", "feature")
+				runGit(t, dir, "checkout", "-q", "feature")
+				commitFile(t, dir, "feature.txt", "feature\n", "feature work")
+				runGit(t, dir, "checkout", "-q", "main")
+				return []string{"--repo", dir, "merge", "feature", "--dry-run"}, dir
+			},
+			wantStatus: "success", wantExit: 0, wantTarget: true, hasTarget: true, targetVal: "main",
+		},
+		{
+			// Cluster A refusal: a branch cannot be merged into itself.
+			name: "cluster_a_self_target",
+			setup: func(t *testing.T) ([]string, string) {
+				dir := signingRepo(t)
+				return []string{"--repo", dir, "merge", "main"}, dir
+			},
+			wantStatus: "precondition_unmet", wantExit: 30, wantTarget: true, hasTarget: true, targetVal: "main",
+		},
+		{
+			// Cluster A refusal: a detached HEAD names no target branch --
+			// the target key is still present, carrying the empty string
+			// merge itself reports rather than omits.
+			name: "cluster_a_detached_head",
+			setup: func(t *testing.T) ([]string, string) {
+				dir := initRepo(t)
+				runGit(t, dir, "branch", "feature")
+				runGit(t, dir, "checkout", "-q", "--detach", "main")
+				return []string{"--repo", dir, "merge", "feature"}, dir
+			},
+			wantStatus: "precondition_unmet", wantExit: 30, wantTarget: true, hasTarget: true, targetVal: "",
+		},
+		{
+			// Cluster A refusal: the resolved target is a linked worktree,
+			// not the primary checkout -- --repo names the worktree itself,
+			// so that (not the primary checkout) is the reported repo.
+			name: "cluster_a_linked_worktree",
+			setup: func(t *testing.T) ([]string, string) {
+				dir := signingRepo(t)
+				wt, _ := featureWorktree(t, dir, "feature")
+				runGit(t, dir, "branch", "other")
+				return []string{"--repo", wt, "merge", "other"}, wt
+			},
+			wantStatus: "precondition_unmet", wantExit: 30, wantTarget: true, hasTarget: true, targetVal: "feature",
+		},
+		{
+			// SC-A3, exit 20: every source is already contained in the
+			// target, so nothing lands, but the repo and target are both
+			// resolved by this point.
+			name: "exit_20_all_sources_empty",
+			setup: func(t *testing.T) ([]string, string) {
+				dir := signingRepo(t)
+				runGit(t, dir, "branch", "feature")
+				return []string{"--repo", dir, "merge", "feature"}, dir
+			},
+			wantStatus: "gate_negative", wantExit: 20, wantTarget: true, hasTarget: true, targetVal: "main",
+		},
+		{
+			// The merge-commit signing refusal: no key resolves, so the
+			// commit merge would mint stays unsigned and the merge refuses.
+			name: "signing_refusal",
+			setup: func(t *testing.T) ([]string, string) {
+				dir := initRepo(t)
+				runGit(t, dir, "config", "gpg.format", "ssh")
+				runGit(t, dir, "config", "user.signingkey", filepath.Join(t.TempDir(), "absent-key.pub"))
+				unsignedBranch(t, dir, "feature")
+				return []string{"--repo", dir, "merge", "feature"}, dir
+			},
+			wantStatus: "precondition_unmet", wantExit: 30, wantTarget: true, hasTarget: true, targetVal: "main",
+		},
+		{
+			// A real conflicting merge: handleGitError's clikit.NewConflict
+			// path carries the same pair.
+			name: "conflict",
+			setup: func(t *testing.T) ([]string, string) {
+				dir := signingRepo(t)
+				runGit(t, dir, "branch", "feature")
+				commitFile(t, dir, "base.txt", "main change\n", "main changes base")
+				runGit(t, dir, "checkout", "-q", "feature")
+				commitFile(t, dir, "base.txt", "feature change\n", "feature changes base")
+				runGit(t, dir, "checkout", "-q", "main")
+				return []string{"--repo", dir, "merge", "feature", "--message", "merge feature"}, dir
+			},
+			wantStatus: "conflict", wantExit: 41, wantTarget: true, hasTarget: true, targetVal: "main",
+		},
+		{
+			// An invalid --fast-forward value is rejected before the target
+			// branch is ever read: repo alone, no target key at all.
+			name: "invalid_fast_forward_usage",
+			setup: func(t *testing.T) ([]string, string) {
+				dir := signingRepo(t)
+				runGit(t, dir, "branch", "feature")
+				return []string{"--repo", dir, "merge", "feature", "--fast-forward", "bogus"}, dir
+			},
+			wantStatus: "usage", wantExit: 50, wantTarget: false,
+		},
+		{
+			// A load-configuration failure runs before --repo is even
+			// opened: neither key is present.
+			name: "pre_resolution_load_config_failure",
+			setup: func(t *testing.T) ([]string, string) {
+				dir := initRepo(t)
+				return []string{"--repo", dir, "--config", filepath.Join(t.TempDir(), "missing.yaml"), "merge", "feature"}, ""
+			},
+			wantStatus: "internal", wantExit: 90, wantTarget: false,
+		},
+		{
+			// requireRepo's own not_found refusal fires before this verb
+			// resolves anything of its own: neither key is present.
+			name: "pre_resolution_repo_not_found",
+			setup: func(t *testing.T) ([]string, string) {
+				return []string{"--repo", filepath.Join(t.TempDir(), "does-not-exist"), "merge", "feature"}, ""
+			},
+			wantStatus: "not_found", wantExit: 40, wantTarget: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			args, wantRepoDir := tc.setup(t)
+			r, exit := runCLI(t, bin, args...)
+			if r.Status != tc.wantStatus || exit != tc.wantExit {
+				t.Fatalf("status=%s exit=%d, want %s/%d: %+v", r.Status, exit, tc.wantStatus, tc.wantExit, r)
+			}
+
+			repoVal, hasRepo := r.Data["repo"]
+			if wantRepoDir == "" {
+				if hasRepo {
+					t.Fatalf("data carries a repo key before --repo has resolved: %+v", r.Data)
+				}
+			} else {
+				wantAbs, err := filepath.Abs(wantRepoDir)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !hasRepo || repoVal != wantAbs {
+					t.Fatalf("data[repo] = %v, want the resolved absolute path %q: %+v", repoVal, wantAbs, r.Data)
+				}
+			}
+
+			targetVal, hasTarget := r.Data["target"]
+			if !tc.wantTarget {
+				if hasTarget {
+					t.Fatalf("data carries a target key before the target branch has been read: %+v", r.Data)
+				}
+				return
+			}
+			if !hasTarget {
+				t.Fatalf("data is missing the target key: %+v", r.Data)
+			}
+			if tc.hasTarget && targetVal != tc.targetVal {
+				t.Fatalf("data[target] = %v, want %q: %+v", targetVal, tc.targetVal, r.Data)
+			}
+		})
+	}
+}
+
+// TestMerge_DataKeys_ExemptBoundaries_AreAssertedNotAssumed pins SC-A2's two
+// exemption boundaries directly, independent of the table above: the two
+// exits that run before --repo resolves (load-configuration, and
+// requireRepo's own refusal) carry neither key, and the two that run with
+// the repository resolved but before the target branch is read (an invalid
+// --fast-forward value, and a failure reading it) carry the repo key alone.
+// The former pair is exercised by name above
+// (pre_resolution_load_config_failure, pre_resolution_repo_not_found); the
+// latter pair's --fast-forward case is exercised above too
+// (invalid_fast_forward_usage). The fourth case -- CurrentBranch itself
+// failing to run rather than answering -- needs git to fail to spawn, not
+// merely exit non-zero, which no fixture over a real repository can
+// organically produce; it is asserted only by inspection of merge.go's
+// finishErr call at that point, which passes the identical
+// map[string]any{dataKeyRepo: repoPath} literal as the --fast-forward case
+// above, not exercised end-to-end here.
+func TestMerge_DataKeys_ExemptBoundaries_AreAssertedNotAssumed(t *testing.T) {
+	bin := buildCLI(t)
+	dir := initRepo(t)
+
+	r, exit := runCLI(t, bin, "--repo", dir, "--config", filepath.Join(t.TempDir(), "missing.yaml"), "merge", "feature")
+	if r.Status != "internal" || exit != 90 {
+		t.Fatalf("status=%s exit=%d, want internal/90: %+v", r.Status, exit, r)
+	}
+	if len(r.Data) != 0 {
+		t.Fatalf("a load-configuration failure carries a non-empty data map: %+v", r.Data)
+	}
+
+	r, exit = runCLI(t, bin, "--repo", filepath.Join(t.TempDir(), "does-not-exist"), "merge", "feature")
+	if r.Status != "not_found" || exit != 40 {
+		t.Fatalf("status=%s exit=%d, want not_found/40: %+v", r.Status, exit, r)
+	}
+	if len(r.Data) != 0 {
+		t.Fatalf("requireRepo's own refusal carries a non-empty data map: %+v", r.Data)
+	}
+}

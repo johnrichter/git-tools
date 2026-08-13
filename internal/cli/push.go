@@ -62,13 +62,13 @@ Exit codes:
 			// unconditionally rather than trying to sanction some values
 			// and not others.
 			if cmd.Flags().Changed("repo") || cmd.Flags().Changed("config") {
-				return finishUsage(cmd, "usage.cli.push_retargeting_flag",
+				return finishUsage(cmd, nil, "usage.cli.push_retargeting_flag",
 					"push always operates on the invoking process's own working directory; --repo/--config are refused")
 			}
 
 			cfg, err := loadConfig(cmd.Flags())
 			if err != nil {
-				return finishErr(cmd, "internal.config.load_failed", "load configuration", err)
+				return finishErr(cmd, nil, "internal.config.load_failed", "load configuration", err)
 			}
 			if err := openHere(cmd); err != nil {
 				return err
@@ -78,26 +78,26 @@ Exit codes:
 
 			dirty, err := gitexec.TreeDirty(ctx, ".")
 			if err != nil {
-				return finishErr(cmd, "internal.git.diff_check_failed", "check working tree state", err)
+				return finishErr(cmd, nil, "internal.git.diff_check_failed", "check working tree state", err)
 			}
 			if dirty {
-				return finishDiagnostic(cmd, clikit.NewPreconditionUnmet, "precondition_unmet.git.dirty_tree",
+				return finishDiagnostic(cmd, nil, clikit.NewPreconditionUnmet, "precondition_unmet.git.dirty_tree",
 					"the working tree has tracked modifications or staged changes relative to HEAD",
 					clikit.Manual("commit or stash the pending changes, then re-run"), nil)
 			}
 
 			isBranch, err := gitexec.RefExists(ctx, ".", "heads", ref)
 			if err != nil {
-				return finishErr(cmd, "internal.git.show_ref_failed", fmt.Sprintf("check whether %s is a local branch", ref), err)
+				return finishErr(cmd, nil, "internal.git.show_ref_failed", fmt.Sprintf("check whether %s is a local branch", ref), err)
 			}
 			refKind := "branch"
 			if !isBranch {
 				isTag, err := gitexec.RefExists(ctx, ".", "tags", ref)
 				if err != nil {
-					return finishErr(cmd, "internal.git.show_ref_failed", fmt.Sprintf("check whether %s is a local tag", ref), err)
+					return finishErr(cmd, nil, "internal.git.show_ref_failed", fmt.Sprintf("check whether %s is a local tag", ref), err)
 				}
 				if !isTag {
-					return finishDiagnostic(cmd, clikit.NewNotFound, "not_found.git.ref_not_found",
+					return finishDiagnostic(cmd, nil, clikit.NewNotFound, "not_found.git.ref_not_found",
 						fmt.Sprintf("%q is neither a local branch nor a local tag", ref),
 						clikit.Manual(fmt.Sprintf("create or check out %q locally, then re-run", ref)),
 						map[string]any{"ref": ref})
@@ -112,14 +112,14 @@ Exit codes:
 			if refKind == "branch" {
 				head, err := gitexec.CurrentBranch(ctx, ".")
 				if err != nil {
-					return finishErr(cmd, "internal.git.head_check_failed", "resolve the current branch", err)
+					return finishErr(cmd, nil, "internal.git.head_check_failed", "resolve the current branch", err)
 				}
 				if head != ref {
 					reported := head
 					if reported == "" {
 						reported = "detached HEAD"
 					}
-					return finishDiagnostic(cmd, clikit.NewConflict, "conflict.git.head_mismatch",
+					return finishDiagnostic(cmd, nil, clikit.NewConflict, "conflict.git.head_mismatch",
 						fmt.Sprintf("HEAD is on %s, not %s; push only advances the branch currently checked out", reported, ref),
 						clikit.RunTool("git", "checkout", ref),
 						map[string]any{"ref": ref, "head": reported})
@@ -128,11 +128,11 @@ Exit codes:
 
 			localSHA, err := localRefSHA(ctx, ".", fullRef)
 			if err != nil {
-				return finishErr(cmd, "internal.git.resolve_ref_failed", fmt.Sprintf("resolve %s", fullRef), err)
+				return finishErr(cmd, nil, "internal.git.resolve_ref_failed", fmt.Sprintf("resolve %s", fullRef), err)
 			}
 			remoteSHA, hadRemote, err := remoteRefSHA(ctx, ".", cfg.Remote, fullRef)
 			if err != nil {
-				return finishErr(cmd, "internal.git.query_remote_failed", fmt.Sprintf("query %s on %s", fullRef, cfg.Remote), err)
+				return finishErr(cmd, nil, "internal.git.query_remote_failed", fmt.Sprintf("query %s on %s", fullRef, cfg.Remote), err)
 			}
 
 			dryRun, _ := cmd.Flags().GetBool("dry-run")
@@ -150,17 +150,17 @@ Exit codes:
 				data["would_push"] = refspec
 				clikitResult, buildErr := clikitSuccess(cmd, data)
 				if buildErr != nil {
-					return finishErr(cmd, "internal.result.build_failed", "build result", buildErr)
+					return finishErr(cmd, nil, "internal.result.build_failed", "build result", buildErr)
 				}
 				return finish(cmd, clikitResult)
 			}
 
 			res, err := gitexec.RunGit(ctx, ".", "push", cfg.Remote, refspec)
 			if err != nil {
-				return finishErr(cmd, "internal.git.push_failed", fmt.Sprintf("push %s to %s", fullRef, cfg.Remote), err)
+				return finishErr(cmd, nil, "internal.git.push_failed", fmt.Sprintf("push %s to %s", fullRef, cfg.Remote), err)
 			}
 			if res.ExitCode != 0 {
-				return finishDiagnostic(cmd, clikit.NewTransient, "transient.git.push_rejected",
+				return finishDiagnostic(cmd, nil, clikit.NewTransient, "transient.git.push_rejected",
 					strings.TrimSpace(string(res.Stderr)),
 					clikit.Reinvoke("git-tools", "push", ref),
 					map[string]any{"ref": ref, "remote": cfg.Remote})
@@ -172,7 +172,7 @@ Exit codes:
 			data["new_head"] = localSHA
 			clikitResult, buildErr := clikitSuccess(cmd, data)
 			if buildErr != nil {
-				return finishErr(cmd, "internal.result.build_failed", "build result", buildErr)
+				return finishErr(cmd, nil, "internal.result.build_failed", "build result", buildErr)
 			}
 			return finish(cmd, clikitResult)
 		},
@@ -186,7 +186,7 @@ Exit codes:
 // cfg.Repo — see newPushCmd's Long text for why --repo can't retarget it.
 func openHere(cmd *cobra.Command) error {
 	if _, err := git.Open(cmd.Context(), "."); err != nil {
-		return finishDiagnostic(cmd, clikit.NewNotFound, "not_found.git.repo_not_found",
+		return finishDiagnostic(cmd, nil, clikit.NewNotFound, "not_found.git.repo_not_found",
 			err.Error(),
 			clikit.Manual("run git-tools push from inside a git working tree"), nil)
 	}

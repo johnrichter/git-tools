@@ -56,7 +56,7 @@ func newWorktreeAddCmd() *cobra.Command {
 			path, ref := args[0], args[1]
 			cfg, err := loadConfig(cmd.Flags())
 			if err != nil {
-				return finishErr(cmd, "internal.config.load_failed", "load configuration", err)
+				return finishErr(cmd, nil, "internal.config.load_failed", "load configuration", err)
 			}
 			repo, repoErr := requireRepo(cmd, cfg)
 			if repo == nil {
@@ -68,7 +68,7 @@ func newWorktreeAddCmd() *cobra.Command {
 			dryRun, _ := cmd.Flags().GetBool("dry-run")
 
 			if err := repo.WorktreeAdd(cmd.Context(), path, ref, git.WorktreeAddOptions{NewBranch: branch, Force: force, DryRun: dryRun}); err != nil {
-				return handleGitError(cmd, err, "internal.git.worktree_add_failed", fmt.Sprintf("add worktree %s at %s", path, ref))
+				return handleGitError(cmd, nil, err, "internal.git.worktree_add_failed", fmt.Sprintf("add worktree %s at %s", path, ref))
 			}
 
 			if !dryRun {
@@ -78,10 +78,10 @@ func newWorktreeAddCmd() *cobra.Command {
 				// before telling a caller it can rely on it.
 				list, listErr := repo.WorktreeList(cmd.Context())
 				if listErr != nil {
-					return finishErr(cmd, "internal.git.worktree_verify_failed", "verify the worktree was created", listErr)
+					return finishErr(cmd, nil, "internal.git.worktree_verify_failed", "verify the worktree was created", listErr)
 				}
 				if !worktreeRegisteredAt(list, repo.Dir, path) {
-					return finishDiagnostic(cmd, clikit.NewInternal, "internal.git.worktree_add_unverified",
+					return finishDiagnostic(cmd, nil, clikit.NewInternal, "internal.git.worktree_add_unverified",
 						fmt.Sprintf("verify the worktree was created: git worktree add reported success but %s does not appear in `git worktree list`", path),
 						clikit.Manual(fmt.Sprintf("run `git -C %s worktree list` to see what git actually registered, and re-check the path passed to `worktree add`", repo.Dir)),
 						nil)
@@ -94,7 +94,7 @@ func newWorktreeAddCmd() *cobra.Command {
 			}
 			result, buildErr := clikitSuccess(cmd, data)
 			if buildErr != nil {
-				return finishErr(cmd, "internal.result.build_failed", "build result", buildErr)
+				return finishErr(cmd, nil, "internal.result.build_failed", "build result", buildErr)
 			}
 			return finish(cmd, result)
 		},
@@ -126,7 +126,7 @@ branch; every step is answered from local refs, never the network.`,
 			path := args[0]
 			cfg, err := loadConfig(cmd.Flags())
 			if err != nil {
-				return finishErr(cmd, "internal.config.load_failed", "load configuration", err)
+				return finishErr(cmd, nil, "internal.config.load_failed", "load configuration", err)
 			}
 			repo, repoErr := requireRepo(cmd, cfg)
 			if repo == nil {
@@ -142,7 +142,7 @@ branch; every step is answered from local refs, never the network.`,
 				DryRun:        dryRun,
 			})
 			if err != nil {
-				return handleGitError(cmd, err, "internal.git.worktree_remove_failed", fmt.Sprintf("remove worktree %s", path))
+				return handleGitError(cmd, nil, err, "internal.git.worktree_remove_failed", fmt.Sprintf("remove worktree %s", path))
 			}
 
 			data := cleanupData(out, dryRun)
@@ -151,16 +151,16 @@ branch; every step is answered from local refs, never the network.`,
 				// was removed, and the operator must resolve the named condition
 				// before the worktree can go.
 				if out.RefusalKind == worktreeclean.RefusalNotRegistered {
-					return finishDiagnostic(cmd, clikit.NewNotFound, "not_found.git.worktree_not_registered",
+					return finishDiagnostic(cmd, nil, clikit.NewNotFound, "not_found.git.worktree_not_registered",
 						out.Refusal, clikit.RunTool("git-tools", "worktree", "list"), data)
 				}
-				return finishDiagnostic(cmd, clikit.NewPreconditionUnmet, cleanupRefusalCode(out.RefusalKind),
+				return finishDiagnostic(cmd, nil, clikit.NewPreconditionUnmet, cleanupRefusalCode(out.RefusalKind),
 					out.Refusal, clikit.Manual("resolve the named condition"), data)
 			}
 
 			result, buildErr := clikitSuccess(cmd, data)
 			if buildErr != nil {
-				return finishErr(cmd, "internal.result.build_failed", "build result", buildErr)
+				return finishErr(cmd, nil, "internal.result.build_failed", "build result", buildErr)
 			}
 			return finish(cmd, result)
 		},
@@ -219,7 +219,7 @@ func newWorktreeListCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadConfig(cmd.Flags())
 			if err != nil {
-				return finishErr(cmd, "internal.config.load_failed", "load configuration", err)
+				return finishErr(cmd, nil, "internal.config.load_failed", "load configuration", err)
 			}
 			repo, repoErr := requireRepo(cmd, cfg)
 			if repo == nil {
@@ -228,7 +228,7 @@ func newWorktreeListCmd() *cobra.Command {
 
 			list, err := repo.WorktreeList(cmd.Context())
 			if err != nil {
-				return finishErr(cmd, "internal.git.worktree_list_failed", "list worktrees", err)
+				return finishErr(cmd, nil, "internal.git.worktree_list_failed", "list worktrees", err)
 			}
 
 			entries := make([]worktreeEntry, len(list))
@@ -241,7 +241,7 @@ func newWorktreeListCmd() *cobra.Command {
 			}
 			result, buildErr := clikitSuccess(cmd, data)
 			if buildErr != nil {
-				return finishErr(cmd, "internal.result.build_failed", "build result", buildErr)
+				return finishErr(cmd, nil, "internal.result.build_failed", "build result", buildErr)
 			}
 			return finish(cmd, result)
 		},
