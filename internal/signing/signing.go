@@ -1,25 +1,3 @@
-// Package signing is the merge landing channel's signing gate: given the
-// branch a merge lands onto and the source branches it would land, it re-signs
-// — or refuses — every source's incoming commits before the merge itself runs,
-// so nothing ever lands unsigned. Gate is the entry point.
-//
-// Inputs: an open git.Repo, the branch being merged into, the source branches,
-// and whether the merge is a dry run. Outputs: a per-source signing_gate
-// report (each entry naming the source and the Action taken), or a *Refusal
-// that stops the merge.
-//
-// Invariants:
-//   - The gate never moves a ref on a dry run, and never lands a source it
-//     could not sign.
-//   - Sources are gated independently and in order; a late refusal reports the
-//     rewrites that already landed on earlier sources rather than unwinding
-//     them.
-//   - Refusal messages are raw (unsanitized) at this package boundary; the
-//     caller that emits a Refusal as a diagnostic sanitizes it there, exactly
-//     once.
-//   - This package depends only on gitexec and the shared git/clikit
-//     libraries — never on CLI or worktree-cleanup code — so both a clikit
-//     consumer and a plain-error consumer can call it.
 package signing
 
 import (
@@ -90,10 +68,13 @@ func (r *Refusal) Context() map[string]any {
 // applied. A source that carries unsigned commits and cannot be signed is
 // refused — the merge verb never lands unsigned incoming commits.
 //
-// The merge commit itself is outside this gate: it covers only the incoming
-// commits each source carries. Whether the merge mints a commit of its own,
-// and whether that commit is signed, is the caller's concern — WillMintCommit
-// answers the first, and the shared prober proves signing for the second.
+// Gate itself signs only the incoming commits each source carries. The merge
+// commit is covered too, by the caller: WillMintCommit settles whether the
+// merge will mint one, and the shared Prober proves git can sign it before
+// the merge runs, so the caller asks for that signature explicitly instead of
+// depending on commit.gpgsign. Together, Gate and the caller's use of
+// WillMintCommit and Prober mean nothing a merge lands — incoming or
+// minted — goes out unsigned.
 //
 // dryRun mirrors the merge's own --dry-run: the gate reports the rewrite it
 // would apply and moves no ref, so a dry-run merge stays free of side effects.
