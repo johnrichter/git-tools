@@ -282,6 +282,79 @@ func TestMerge_DryRun_ReportsTheRewriteWithoutApplyingIt(t *testing.T) {
 	}
 }
 
+// FB21 (SC-F1): a conflict that fires after the gate has already rewritten a
+// source must not go silent about that rewrite. The rewrite itself is never
+// unwound by the abort that follows -- go/git's Merge always leaves the tree
+// exactly as clean as it found it -- so the only defect to close is the
+// result staying silent about a rewrite that already landed.
+func TestMerge_ConflictAfterRewrite_CarriesTheRewrittenSourceList(t *testing.T) {
+	bin := buildCLI(t)
+	dir := signingRepo(t)
+
+	// feature forks off main and picks up one unsigned commit changing the
+	// same line main is about to change too. The gate re-signs that commit
+	// before the merge runs -- Resign preserves the tree exactly, so the
+	// conflict survives the rewrite -- and then main's own conflicting
+	// change makes the merge itself abort.
+	runGit(t, dir, "checkout", "-q", "-b", "feature", "main")
+	runGit(t, dir, "config", "commit.gpgsign", "false")
+	commitFile(t, dir, "base.txt", "feature change\n", "feature changes base")
+	runGit(t, dir, "config", "commit.gpgsign", "true")
+	runGit(t, dir, "checkout", "-q", "main")
+	commitFile(t, dir, "base.txt", "main change\n", "main changes base")
+	head := runGit(t, dir, "rev-parse", "HEAD")
+
+	r, exit := runCLI(t, bin, "--repo", dir, "merge", "feature", "--message", "merge feature")
+	if r.Status != "conflict" || exit != 41 {
+		t.Fatalf("status=%s exit=%d, want conflict/41: %+v", r.Status, exit, r)
+	}
+
+	rewritten, ok := r.Data["rewritten"].([]any)
+	if !ok || len(rewritten) != 1 {
+		t.Fatalf("data[rewritten] = %+v, want one entry for the re-signed source feature", r.Data["rewritten"])
+	}
+	entry, _ := rewritten[0].(map[string]any)
+	if entry["source"] != "feature" {
+		t.Fatalf("rewritten entry = %+v, want source %q", entry, "feature")
+	}
+	for _, key := range []string{"old_head", "new_head", "backup_tag"} {
+		if v, ok := entry[key]; !ok || v == "" || v == nil {
+			t.Fatalf("rewritten entry missing %s: %+v", key, entry)
+		}
+	}
+
+	if got := runGit(t, dir, "rev-parse", "HEAD"); got != head {
+		t.Fatalf("the aborted merge moved HEAD: got %s want %s", got, head)
+	}
+	if got := runGit(t, dir, "status", "--porcelain"); got != "" {
+		t.Fatalf("the aborted merge left the working tree dirty: %q", got)
+	}
+}
+
+// The companion case: a conflict with no prior rewrite -- every source's
+// range already verifies -- carries no rewritten key at all, never an empty
+// list.
+func TestMerge_ConflictWithNoPriorRewrite_CarriesNoRewrittenKey(t *testing.T) {
+	bin := buildCLI(t)
+	dir := signingRepo(t)
+	runGit(t, dir, "branch", "feature")
+	commitFile(t, dir, "base.txt", "main change\n", "main changes base")
+	runGit(t, dir, "checkout", "-q", "feature")
+	commitFile(t, dir, "base.txt", "feature change\n", "feature changes base")
+	runGit(t, dir, "checkout", "-q", "main")
+
+	r, exit := runCLI(t, bin, "--repo", dir, "merge", "feature", "--message", "merge feature")
+	if r.Status != "conflict" || exit != 41 {
+		t.Fatalf("status=%s exit=%d, want conflict/41: %+v", r.Status, exit, r)
+	}
+	if _, ok := r.Data["rewritten"]; ok {
+		t.Fatalf("a conflict with no prior rewrite carries a rewritten key: %+v", r.Data)
+	}
+	if got := runGit(t, dir, "status", "--porcelain"); got != "" {
+		t.Fatalf("the aborted merge left the working tree dirty: %q", got)
+	}
+}
+
 // SC-A3: a merge whose every source range is empty — each source already
 // contained in the target — lands nothing, so it is an expected negative
 // (exit 20, gate_negative), not an empty success. The gate still reports each

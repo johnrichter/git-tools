@@ -217,7 +217,11 @@ preflight that does not detect the condition.`,
 
 			result, err := repo.Merge(cmd.Context(), args, git.MergeOptions{Message: message, FastForward: ff, DryRun: dryRun, Sign: sign})
 			if err != nil {
-				return handleGitError(cmd, map[string]any{dataKeyRepo: repoPath, dataKeyTarget: target}, err, "internal.git.merge_failed", fmt.Sprintf("merge %s", strings.Join(args, " ")))
+				conflictData := map[string]any{dataKeyRepo: repoPath, dataKeyTarget: target}
+				if rewritten := rewrittenSources(gated); len(rewritten) > 0 {
+					conflictData["rewritten"] = rewritten
+				}
+				return handleGitError(cmd, conflictData, err, "internal.git.merge_failed", fmt.Sprintf("merge %s", strings.Join(args, " ")))
 			}
 
 			data := map[string]any{dataKeyRepo: repoPath, dataKeyTarget: target, "dry_run": result.DryRun, "signing_gate": gated}
@@ -274,6 +278,29 @@ func allEmptyRange(gated []map[string]any) bool {
 		}
 	}
 	return true
+}
+
+// rewrittenSources extracts, from the gate's per-source report, the entries
+// the gate actually re-signed — in the same vocabulary (source, old_head,
+// new_head, backup_tag) signing.Refusal's own rewritten context uses, so an
+// operator sees one shape whether the gate stopped the merge or the merge
+// itself aborted afterward. It returns nil when nothing was rewritten, so a
+// caller with no rewrite to report omits the key rather than emitting an
+// empty list.
+func rewrittenSources(gated []map[string]any) []map[string]any {
+	var rewritten []map[string]any
+	for _, record := range gated {
+		if record["action"] != signing.ActionResigned {
+			continue
+		}
+		rewritten = append(rewritten, map[string]any{
+			"source":     record["source"],
+			"old_head":   record["old_head"],
+			"new_head":   record["new_head"],
+			"backup_tag": record["backup_tag"],
+		})
+	}
+	return rewritten
 }
 
 // cleanupMergedWorktrees removes the worktree of each just-merged branch,
