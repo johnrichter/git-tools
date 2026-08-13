@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/johnrichter/claude-shared-tooling/go/git"
+	"github.com/johnrichter/git-tools/internal/signing"
 )
 
 func TestComplete_MergesBackAndCleansUp(t *testing.T) {
@@ -210,6 +211,124 @@ func TestComplete_NoOpMergeStillCleansUp(t *testing.T) {
 	}
 	if _, err := os.Stat(wt.Path); !os.IsNotExist(err) {
 		t.Fatal("worktree not removed after a no-op merge")
+	}
+}
+
+// TestComplete_SignsMintedMergeCommit proves SC-B1's parity for the
+// lifecycle merge-back path: in a signable repository, a merge that mints a
+// commit of its own (forced here by diverging base so no fast-forward is
+// possible) is signed, exactly like the merge verb's own forced-merge-commit
+// case.
+func TestComplete_SignsMintedMergeCommit(t *testing.T) {
+	repo := signableScratchRepo(t)
+	ctx := context.Background()
+
+	wt, err := Ensure(ctx, repo, "task-1")
+	if err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+	commitFileT(t, wt.Path, "feature.txt", "done\n")
+	commitFileT(t, repo, "base.txt", "diverge\n") // base is no longer feature's ancestor
+
+	if _, err := Complete(ctx, repo, "task-1", CompleteOptions{}); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if parents := runGitT(t, repo, "rev-list", "--parents", "-1", "HEAD"); len(strings.Fields(parents)) != 3 {
+		t.Fatalf("HEAD is not a two-parent merge commit: %q", parents)
+	}
+	if state := runGitT(t, repo, "log", "-1", "--format=%G?", "HEAD"); state != "G" && state != "U" {
+		t.Fatalf("minted merge commit signature state = %q, want G or U", state)
+	}
+}
+
+// TestComplete_KeylessRepoRefusesBeforeMergeAndRemoval proves: the signing
+// gate runs before repo.Merge (K8, SC-F3) and returns its *signing.Refusal
+// as a plain error (never a diagnostic type); the base ref never moves and
+// the worktree is never removed; and the refusal text is the signing
+// package's own — the one gate, SIGN-CONTRACT, that the merge verb's CLI
+// path reports for the identical unresolved-key condition.
+func TestComplete_KeylessRepoRefusesBeforeMergeAndRemoval(t *testing.T) {
+	repo := newScratchRepo(t)
+	ctx := context.Background()
+
+	wt, err := Ensure(ctx, repo, "task-1")
+	if err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+	commitFileT(t, wt.Path, "feature.txt", "done\n") // unsigned: commit.gpgsign is false
+	breakSigningKeyT(t, repo)
+	preHead := runGitT(t, repo, "rev-parse", "HEAD")
+
+	_, err = Complete(ctx, repo, "task-1", CompleteOptions{})
+	if err == nil {
+		t.Fatal("Complete in a keyless repository = nil error, want the signing gate's refusal")
+	}
+	var refusal *signing.Refusal
+	if !errors.As(err, &refusal) {
+		t.Fatalf("Complete error = %v (%T), want it to wrap *signing.Refusal", err, err)
+	}
+	if got := refusal.Code(); got != "precondition_unmet.git.signing_key_unresolved" {
+		t.Errorf("refusal code = %q, want precondition_unmet.git.signing_key_unresolved", got)
+	}
+	// This is the exact text internal/signing.Gate raises for this condition —
+	// the same text the merge verb's CLI reports for a merge of the identical
+	// shape, since both call the one gate.
+	if got, want := err.Error(), "no key resolved for commit signing, so merging task-1 would land unsigned commits: "; !strings.HasPrefix(got, want) {
+		t.Errorf("refusal message = %q, want it to start with %q", got, want)
+	}
+	if got := runGitT(t, repo, "rev-parse", "HEAD"); got != preHead {
+		t.Errorf("base ref moved despite the refusal: HEAD = %s, want %s", got, preHead)
+	}
+	if _, err := os.Stat(wt.Path); err != nil {
+		t.Fatalf("a gate refusal must run before removal and leave the worktree in place: %v", err)
+	}
+	if !branchExists(ctx, repo, "task-1") {
+		t.Error("a gate refusal must not delete the branch")
+	}
+}
+
+// TestComplete_MintedCommitUnsignable_RefusesBeforeMergeAndRemoval covers the
+// branch TestComplete_KeylessRepoRefusesBeforeMergeAndRemoval does not reach:
+// the source's own commits already verify (Gate's "already_signed" path, no
+// re-signing needed), so the gate itself raises no refusal, but the base has
+// diverged so the merge cannot fast-forward and must mint a merge commit of
+// its own (SC-B1). With no key available for that commit, Complete must
+// refuse at the merge-commit check — the same one internal/cli's merge verb
+// hits in TestMerge_MintedCommitUnsignable_Refuses30NotInternal — not attempt
+// an unsigned `git merge`. The base ref must not move and the worktree must
+// still be present, exactly as any other pre-merge refusal.
+func TestComplete_MintedCommitUnsignable_RefusesBeforeMergeAndRemoval(t *testing.T) {
+	repo := signableScratchRepo(t)
+	ctx := context.Background()
+
+	wt, err := Ensure(ctx, repo, "task-1")
+	if err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+	commitFileT(t, wt.Path, "feature.txt", "done\n") // signed: commit.gpgsign is true
+	commitFileT(t, repo, "base.txt", "diverge\n")    // base is no longer feature's ancestor
+	breakSigningKeyT(t, repo)                        // break the key only after both commits verify
+	preHead := runGitT(t, repo, "rev-parse", "HEAD")
+
+	_, err = Complete(ctx, repo, "task-1", CompleteOptions{})
+	if err == nil {
+		t.Fatal("Complete with an unsignable minted merge commit = nil error, want a refusal")
+	}
+	var refusal *signing.Refusal
+	if errors.As(err, &refusal) {
+		t.Fatalf("Complete error = %v (%T), want a plain error from the merge-commit check, not a *signing.Refusal from Gate (Gate must have passed: the source already verifies)", err, err)
+	}
+	if got, want := err.Error(), "no key resolved for commit signing, so the merge commit for task-1 would be unsigned: "; !strings.HasPrefix(got, want) {
+		t.Errorf("refusal message = %q, want it to start with %q (matching internal/cli's merge verb for the identical minted-commit-unsignable condition)", got, want)
+	}
+	if got := runGitT(t, repo, "rev-parse", "HEAD"); got != preHead {
+		t.Errorf("base ref moved despite the refusal: HEAD = %s, want %s", got, preHead)
+	}
+	if _, err := os.Stat(wt.Path); err != nil {
+		t.Fatalf("a merge-commit-signing refusal must run before removal and leave the worktree in place: %v", err)
+	}
+	if !branchExists(ctx, repo, "task-1") {
+		t.Error("a merge-commit-signing refusal must not delete the branch")
 	}
 }
 
