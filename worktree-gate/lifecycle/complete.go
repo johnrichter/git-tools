@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/johnrichter/claude-shared-tooling/go/git"
+	"github.com/johnrichter/git-tools/internal/signing"
 	"github.com/johnrichter/git-tools/internal/worktreeclean"
 )
 
@@ -45,6 +46,19 @@ type CompleteResult struct {
 // worktree and, by default, its branch. It is Ensure's counterpart: called
 // once a task is done, it folds the isolated work back into history and
 // frees the worktree slot.
+//
+// Complete is NOT a sanctioned landing channel — internal/cli's merge verb
+// is. It still runs the same signing gate before its merge, because the
+// worktree-isolation gate this package supports lives inside the repository
+// it protects: any write path in this repository that lands a commit is
+// bound by the repository's own no-unsigned-commits rule, whether or not
+// that path is the one operators are told to use. Before repo.Merge runs,
+// Complete calls internal/signing.Gate on the worktree's branch exactly as
+// the merge verb does, and refuses in the same shape: a *signing.Refusal
+// returned as a plain error, with the base ref and worktree both untouched.
+// If the merge will mint a commit of its own, Complete proves the
+// repository can sign it first and passes that request to repo.Merge, so
+// the minted commit is signed (SC-B1) rather than landing bare.
 //
 // Removal goes through internal/worktreeclean's shared rule set (SC-C4), the
 // same one the standalone `worktree remove` verb calls: a dirty worktree is
@@ -103,8 +117,35 @@ func Complete(ctx context.Context, repoRoot, id string, opts CompleteOptions) (C
 			return fmt.Errorf("lifecycle: resolve HEAD of %s: %w", repoRoot, err)
 		}
 
+		// The gate runs before the merge, exactly as it does for the merge
+		// verb: a refusal here leaves baseRef and the worktree exactly where
+		// they were, never half-landing a source it could not sign.
+		prober := signing.NewProber(repo)
+		if _, refusal := signing.Gate(ctx, repo, baseRef, []string{branch}, false, prober); refusal != nil {
+			return refusal
+		}
+
+		// A merge that will mint a commit of its own must sign it too (SC-B1).
+		// Settle that up front, the same way the merge verb does, so a keyless
+		// repository refuses here rather than failing mid-merge.
+		willMint, err := signing.WillMintCommit(ctx, repo, baseRef, []string{branch}, git.FastForwardAllow)
+		if err != nil {
+			return fmt.Errorf("lifecycle: determine whether merging %s will mint a commit: %w", branch, err)
+		}
+		sign := willMint
+		if sign {
+			available, detail, err := prober.Available(ctx)
+			if err != nil {
+				return fmt.Errorf("lifecycle: test whether %s can sign the merge commit: %w", repoRoot, err)
+			}
+			if !available {
+				return fmt.Errorf("no key resolved for commit signing, so the merge commit for %s would be unsigned: %s", branch, detail)
+			}
+		}
+
 		mergeRes, err := repo.Merge(ctx, []string{branch}, git.MergeOptions{
 			Message: fmt.Sprintf("Merge worktree %s (branch %s)", id, branch),
+			Sign:    sign,
 		})
 		if err != nil {
 			return fmt.Errorf("lifecycle: merge %s into %s: %w", branch, baseRef, err)
