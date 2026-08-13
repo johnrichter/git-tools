@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -101,6 +102,24 @@ Exit codes:
 					fmt.Sprintf("%s has %s checked out, and %s is also named as a source; a branch cannot be merged into itself", repoPath, target, source),
 					clikit.Manual(fmt.Sprintf("check out a branch other than %s, or drop %s from the sources; nothing was merged", target, source)),
 					map[string]any{"repo": repoPath, "target": target, "source": source})
+			}
+
+			// The resolved target itself is a precondition too, settled here
+			// alongside the detached-head and self-target checks above and
+			// before the signing gate touches anything: a linked worktree is
+			// refused whether it got named by --repo or just inferred from the
+			// process's own working directory, since landing a merge there is
+			// the wrong operation, not just a risky one.
+			linkedPath, primaryPath, wtErr := resolvedLinkedWorktree(cmd.Context(), repo.Dir)
+			if wtErr != nil {
+				return finishErr(cmd, "internal.git.worktree_check_failed", "check whether the resolved target is a linked worktree", wtErr)
+			}
+			if linkedPath != "" {
+				return finishDiagnostic(cmd, clikit.NewPreconditionUnmet,
+					"precondition_unmet.git.merge_target_is_linked_worktree",
+					fmt.Sprintf("%s is a linked worktree, not the repository's primary checkout at %s; merge refuses to land there", linkedPath, primaryPath),
+					clikit.Manual(fmt.Sprintf("run merge from the primary checkout at %s (or point --repo at it) instead of the linked worktree %s; nothing was merged", primaryPath, linkedPath)),
+					map[string]any{"resolved_target": linkedPath, "primary_checkout": primaryPath})
 			}
 
 			// One prober serves both the gate, which re-signs incoming ranges,
@@ -220,6 +239,53 @@ func cleanupMergedWorktrees(ctx context.Context, repo *git.Repo, mergedBranches 
 		}
 	}
 	return cleaned, unremoved
+}
+
+// resolvedLinkedWorktree reports whether dir's checkout is a linked worktree
+// rather than a repository's primary one. It reads git's own worktree
+// bookkeeping -- a linked worktree's top-level ".git" is a file pointing back
+// at the shared administrative area, where the primary checkout's is a
+// directory -- rather than inferring the answer from where the path sits.
+// linkedPath and primaryPath are both empty (with a nil error) when dir
+// resolves to the primary checkout.
+//
+// This refusal is the condition SC-A6's corrected remedy text must never
+// advise as the fix for the condition it addresses: telling an operator
+// stuck at a linked worktree to "just merge from here" would just trade one
+// refused target for another. That coupling has to survive in this comment
+// so the L2 remedy task cannot lose track of it.
+func resolvedLinkedWorktree(ctx context.Context, dir string) (linkedPath, primaryPath string, err error) {
+	top, err := gitPathOutput(ctx, dir, "rev-parse", "--show-toplevel")
+	if err != nil {
+		return "", "", err
+	}
+
+	info, statErr := os.Lstat(filepath.Join(top, ".git"))
+	if statErr != nil {
+		return "", "", fmt.Errorf("stat %s: %w", filepath.Join(top, ".git"), statErr)
+	}
+	if info.IsDir() {
+		return "", "", nil
+	}
+
+	common, err := gitPathOutput(ctx, dir, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	if err != nil {
+		return "", "", err
+	}
+	return top, filepath.Dir(common), nil
+}
+
+// gitPathOutput runs a git rev-parse subcommand that prints one path and
+// returns it trimmed, surfacing a non-zero exit as *git.CommandError.
+func gitPathOutput(ctx context.Context, dir string, args ...string) (string, error) {
+	res, err := gitexec.RunGit(ctx, dir, args...)
+	if err != nil {
+		return "", err
+	}
+	if res.ExitCode != 0 {
+		return "", &git.CommandError{Args: args, ExitCode: res.ExitCode, Stderr: strings.TrimSpace(string(res.Stderr))}
+	}
+	return strings.TrimSpace(string(res.Stdout)), nil
 }
 
 // resolveCommit resolves ref (e.g. "HEAD") to the object id it currently

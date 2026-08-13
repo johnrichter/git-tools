@@ -90,6 +90,81 @@ func TestMerge_CleanupRemovesMergedWorktree(t *testing.T) {
 	}
 }
 
+// SC-A4 (D2): a merge whose resolved target is a linked worktree is refused
+// before anything else runs, whether that target was named by --repo or just
+// inferred from the process's own working directory. Exit 30, both the
+// resolved worktree path and the primary checkout named in the refusal, and
+// no ref moves.
+func TestMerge_ResolvedTargetIsLinkedWorktree_ViaRepoFlag_RefusedWithExit30(t *testing.T) {
+	bin := buildCLI(t)
+	dir := signingRepo(t)
+	wt, tip := featureWorktree(t, dir, "feature")
+	runGit(t, dir, "branch", "other")
+
+	r, exit := runCLI(t, bin, "--repo", wt, "merge", "other")
+	if r.Status != "precondition_unmet" || exit != 30 {
+		t.Fatalf("status=%s exit=%d, want precondition_unmet/30: %+v", r.Status, exit, r)
+	}
+	if len(r.Errors) == 0 {
+		t.Fatal("precondition_unmet result carries no errors for the linked-worktree target")
+	}
+	msg, _ := r.Errors[0]["message"].(string)
+	if !strings.Contains(msg, wt) || !strings.Contains(msg, dir) {
+		t.Fatalf("refusal does not name both the resolved worktree (%s) and the primary checkout (%s): %q", wt, dir, msg)
+	}
+	context, _ := r.Errors[0]["context"].(map[string]any)
+	if context["resolved_target"] == "" || context["primary_checkout"] == "" {
+		t.Fatalf("refusal context is missing resolved_target/primary_checkout: %+v", context)
+	}
+	if got := runGit(t, dir, "rev-parse", "feature"); got != tip {
+		t.Fatalf("feature's ref moved despite the refusal: got %s want %s", got, tip)
+	}
+	if got := runGit(t, dir, "rev-parse", "HEAD"); got == "" {
+		t.Fatalf("primary checkout HEAD unreadable after refusal")
+	}
+}
+
+// The companion case: the target is never named by --repo at all, only
+// inferred from cwd sitting inside the linked worktree -- the refusal must
+// still fire.
+func TestMerge_ResolvedTargetIsLinkedWorktree_InferredFromCwd_RefusedWithExit30(t *testing.T) {
+	bin := buildCLI(t)
+	dir := signingRepo(t)
+	wt, tip := featureWorktree(t, dir, "feature")
+	runGit(t, dir, "branch", "other")
+
+	r, exit := runCLIIn(t, bin, wt, "merge", "other")
+	if r.Status != "precondition_unmet" || exit != 30 {
+		t.Fatalf("status=%s exit=%d, want precondition_unmet/30: %+v", r.Status, exit, r)
+	}
+	msg, _ := r.Errors[0]["message"].(string)
+	if !strings.Contains(msg, wt) || !strings.Contains(msg, dir) {
+		t.Fatalf("refusal does not name both the resolved worktree (%s) and the primary checkout (%s): %q", wt, dir, msg)
+	}
+	if got := runGit(t, dir, "rev-parse", "feature"); got != tip {
+		t.Fatalf("feature's ref moved despite the refusal: got %s want %s", got, tip)
+	}
+}
+
+// The primary checkout itself is unaffected by the new refusal: a merge
+// resolved there (the ordinary case) proceeds exactly as before.
+func TestMerge_ResolvedTargetIsPrimaryCheckout_Unaffected(t *testing.T) {
+	bin := buildCLI(t)
+	dir := signingRepo(t)
+	runGit(t, dir, "branch", "feature")
+	runGit(t, dir, "checkout", "-q", "feature")
+	tip := commitFile(t, dir, "feature.txt", "feature\n", "feature work")
+	runGit(t, dir, "checkout", "-q", "main")
+
+	r, exit := runCLI(t, bin, "--repo", dir, "merge", "feature")
+	if r.Status != "success" || exit != 0 {
+		t.Fatalf("status=%s exit=%d, want success/0: %+v", r.Status, exit, r)
+	}
+	if got := runGit(t, dir, "rev-parse", "HEAD"); got != tip {
+		t.Fatalf("main did not fast-forward to feature tip: got %s want %s", got, tip)
+	}
+}
+
 func TestMerge_NoCleanupFlag_RemovesNothing(t *testing.T) {
 	bin := buildCLI(t)
 	dir := signingRepo(t)
