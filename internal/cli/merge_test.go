@@ -282,17 +282,76 @@ func TestMerge_DryRun_ReportsTheRewriteWithoutApplyingIt(t *testing.T) {
 	}
 }
 
-func TestMerge_AlreadyContainedSource_IsSkippedNotAnError(t *testing.T) {
+// SC-A3: a merge whose every source range is empty — each source already
+// contained in the target — lands nothing, so it is an expected negative
+// (exit 20, gate_negative), not an empty success. The gate still reports each
+// source as empty_range, the target ref does not move, and the record is a
+// valid schema_version 1 record.
+func TestMerge_AllSourcesEmpty_ExitsGateNegativeAndMovesNothing(t *testing.T) {
 	bin := buildCLI(t)
 	dir := signingRepo(t)
 	runGit(t, dir, "branch", "feature")
+	before := runGit(t, dir, "rev-parse", "HEAD")
 
 	r, exit := runCLI(t, bin, "--repo", dir, "merge", "feature")
-	if r.Status != "success" || exit != 0 {
-		t.Fatalf("status=%s exit=%d, want success/0: %+v", r.Status, exit, r)
+	if r.Status != "gate_negative" || exit != 20 {
+		t.Fatalf("status=%s exit=%d, want gate_negative/20: %+v", r.Status, exit, r)
+	}
+	if r.SchemaVersion != 1 {
+		t.Fatalf("emitted record schema_version=%d, want 1: %+v", r.SchemaVersion, r)
+	}
+	if code, _ := r.Errors[0]["code"].(string); code != "gate_negative.git.merge_all_sources_empty" {
+		t.Fatalf("governing error code=%q, want gate_negative.git.merge_all_sources_empty: %+v", code, r.Errors[0])
 	}
 	if record := gateRecord(t, r, "feature"); record["action"] != "empty_range" {
 		t.Fatalf("gate action=%v, want empty_range: %+v", record["action"], record)
+	}
+	if got := runGit(t, dir, "rev-parse", "HEAD"); got != before {
+		t.Fatalf("the target ref moved on the gate-negative path: got %s want %s", got, before)
+	}
+}
+
+// SC-A3, partial case: a merge where at least one source lands still exits 0
+// and reports every source's action, empty_range included for the contained
+// ones. Two sources make an octopus that mints (and signs) a commit, so this
+// also proves the gate-negative check does not swallow a merge that has real
+// work to land.
+func TestMerge_OneEmptyOneLanding_ExitsSuccessReportingBoth(t *testing.T) {
+	bin := buildCLI(t)
+	dir := signingRepo(t)
+	runGit(t, dir, "branch", "empty") // already contained in main: an empty range
+	signedBranch(t, dir, "feature")   // one signed commit ahead: a range that lands
+
+	r, exit := runCLI(t, bin, "--repo", dir, "merge", "empty", "feature", "--message", "merge empty feature")
+	if r.Status != "success" || exit != 0 {
+		t.Fatalf("status=%s exit=%d, want success/0: %+v", r.Status, exit, r)
+	}
+	if record := gateRecord(t, r, "empty"); record["action"] != "empty_range" {
+		t.Fatalf("empty source action=%v, want empty_range: %+v", record["action"], record)
+	}
+	if record := gateRecord(t, r, "feature"); record["action"] != "already_signed" {
+		t.Fatalf("landing source action=%v, want already_signed: %+v", record["action"], record)
+	}
+}
+
+// SC-A3's dry-run exemption: --dry-run cannot tell an all-empty range from a
+// would-merge, so it keeps reporting would_merge at exit 0 and moves no ref,
+// the accepted cost the exit-code doc names.
+func TestMerge_DryRunAllSourcesEmpty_StillReportsWouldMerge(t *testing.T) {
+	bin := buildCLI(t)
+	dir := signingRepo(t)
+	runGit(t, dir, "branch", "feature")
+	before := runGit(t, dir, "rev-parse", "HEAD")
+
+	r, exit := runCLI(t, bin, "--repo", dir, "merge", "feature", "--dry-run")
+	if r.Status != "success" || exit != 0 {
+		t.Fatalf("status=%s exit=%d, want success/0: %+v", r.Status, exit, r)
+	}
+	if r.Data["would_merge"] != true {
+		t.Fatalf("dry run over an all-empty range did not report would_merge: %+v", r.Data)
+	}
+	if got := runGit(t, dir, "rev-parse", "HEAD"); got != before {
+		t.Fatalf("a dry run moved the target ref: got %s want %s", got, before)
 	}
 }
 

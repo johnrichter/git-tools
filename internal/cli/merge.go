@@ -44,11 +44,17 @@ before touching the target branch rather than landing an unsigned tip.
 Exit codes:
   0  success              the sources merged (with any re-signing reported)
   10 caveats              the merge landed, but an opted-in cleanup did not complete
+  20 gate_negative        every source was already in the target, so nothing landed
   30 precondition_unmet   signing could not be satisfied; nothing was merged
   40 not_found            --repo is not a git working tree
   41 conflict             the merge would conflict; it was aborted
   50 usage                a flag value is not valid
-  90 internal             an underlying git command failed unexpectedly`,
+  90 internal             an underlying git command failed unexpectedly
+
+Exit 20 is an expected negative answer, not a failure: the merge asked to land
+something and there was nothing to land. --dry-run is blind to this — it still
+reports would_merge at exit 0 over an all-empty range, the accepted cost of a
+preflight that does not detect the condition.`,
 		Args:    cobra.MinimumNArgs(1),
 		Example: "  git-tools merge --message \"merge release\" release/1.2",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -131,6 +137,31 @@ Exit codes:
 				return finishDiagnostic(cmd, clikit.NewPreconditionUnmet, refusal.Code(), refusal.Message(), refusal.Advice(), refusal.Context())
 			}
 
+			// A real merge whose every source range is empty lands nothing —
+			// each source is already contained in the target — so it is an
+			// expected negative (exit 20), not an empty success. This is settled
+			// before the mint check below so an all-empty octopus reports the
+			// negative rather than probing signing for a commit it will never
+			// mint. A dry run is deliberately exempt: it cannot tell this case
+			// from a would-merge and keeps reporting would_merge at exit 0.
+			if !dryRun && allEmptyRange(gated) {
+				diag, buildErr := clikit.NewError(
+					"gate_negative.git.merge_all_sources_empty",
+					fmt.Sprintf("every source (%s) is already contained in %s, so the merge would land nothing", strings.Join(args, " "), target),
+					clikit.Manual("nothing was merged; there was nothing to land"),
+					map[string]any{"sources": args, "target": target})
+				if buildErr != nil {
+					return finishErr(cmd, "internal.result.build_failed", "build diagnostic", buildErr)
+				}
+				result, buildErr := clikit.NewGateNegative(commandPath(cmd),
+					map[string]any{"dry_run": false, "signing_gate": gated},
+					[]clikit.Diagnostic{diag}, nil)
+				if buildErr != nil {
+					return finishErr(cmd, "internal.result.build_failed", "build result", buildErr)
+				}
+				return finish(cmd, result)
+			}
+
 			// Decide before the merge whether it will mint a merge commit of its
 			// own. That commit must be signed too, so its signability is a
 			// precondition to settle up front — not something to stumble into
@@ -208,6 +239,21 @@ Exit codes:
 	cmd.Flags().Bool("dry-run", false, "merge into the index and report clean-mergeability, always aborting afterward")
 	cmd.Flags().Bool("cleanup", false, "after a successful merge, remove each merged branch's worktree once its work has safely landed")
 	return cmd
+}
+
+// allEmptyRange reports whether every gated source's range was empty — each
+// source already contained in the target, so the merge would land nothing. An
+// empty gated slice is not all-empty: there was no source to gate.
+func allEmptyRange(gated []map[string]any) bool {
+	if len(gated) == 0 {
+		return false
+	}
+	for _, record := range gated {
+		if record["action"] != signing.ActionEmptyRange {
+			return false
+		}
+	}
+	return true
 }
 
 // cleanupMergedWorktrees removes the worktree of each just-merged branch,
