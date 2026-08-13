@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -69,14 +70,37 @@ Exit codes:
 				return finishUsage(cmd, "usage.cli.invalid_fast_forward", err.Error())
 			}
 
-			// The signing gate runs before the merge, so a refusal leaves the
-			// checked-out branch exactly where it was.
+			// The target's own validity is a precondition, settled before the
+			// signing gate and the merge, so a refusal here leaves every branch —
+			// the one checked out and every named source — exactly where it was.
 			target, err := gitexec.CurrentBranch(cmd.Context(), repo.Dir)
 			if err != nil {
 				return finishErr(cmd, "internal.git.head_check_failed", "resolve the branch being merged into", err)
 			}
 			if target == "" {
-				target = "HEAD"
+				head, headErr := resolveCommit(cmd.Context(), repo.Dir, "HEAD")
+				if headErr != nil {
+					return finishErr(cmd, "internal.git.head_check_failed", "resolve HEAD", headErr)
+				}
+				return finishDiagnostic(cmd, clikit.NewPreconditionUnmet,
+					"precondition_unmet.git.merge_target_detached_head",
+					fmt.Sprintf("HEAD is detached at %s, not on a branch; merge needs a branch checked out to land sources into", head),
+					clikit.Manual("check out a branch (e.g. `git switch -c <name>` or `git checkout <branch>`) and re-run; nothing was merged"),
+					map[string]any{"head": head})
+			}
+			for _, source := range args {
+				if source != target {
+					continue
+				}
+				repoPath, pathErr := filepath.Abs(repo.Dir)
+				if pathErr != nil {
+					repoPath = repo.Dir
+				}
+				return finishDiagnostic(cmd, clikit.NewPreconditionUnmet,
+					"precondition_unmet.git.merge_target_is_source",
+					fmt.Sprintf("%s has %s checked out, and %s is also named as a source; a branch cannot be merged into itself", repoPath, target, source),
+					clikit.Manual(fmt.Sprintf("check out a branch other than %s, or drop %s from the sources; nothing was merged", target, source)),
+					map[string]any{"repo": repoPath, "target": target, "source": source})
 			}
 
 			// One prober serves both the gate, which re-signs incoming ranges,
@@ -196,6 +220,19 @@ func cleanupMergedWorktrees(ctx context.Context, repo *git.Repo, mergedBranches 
 		}
 	}
 	return cleaned, unremoved
+}
+
+// resolveCommit resolves ref (e.g. "HEAD") to the object id it currently
+// names in dir.
+func resolveCommit(ctx context.Context, dir, ref string) (string, error) {
+	res, err := gitexec.RunGit(ctx, dir, "rev-parse", "--verify", ref)
+	if err != nil {
+		return "", err
+	}
+	if res.ExitCode != 0 {
+		return "", &git.CommandError{Args: []string{"rev-parse", "--verify", ref}, ExitCode: res.ExitCode, Stderr: strings.TrimSpace(string(res.Stderr))}
+	}
+	return strings.TrimSpace(string(res.Stdout)), nil
 }
 
 // parseFastForward maps the --fast-forward flag's string value onto

@@ -623,6 +623,130 @@ func TestMerge_KeylessFastForwardableAlreadyVerifying_Lands(t *testing.T) {
 	}
 }
 
+// SC-A1: merging into a worktree that already has the target checked out is a
+// self-target, caught before the gate ever runs. The process's cwd sits inside
+// the worktree and no --repo is given, matching how a build script invoked
+// from inside its own task worktree would call this by accident. "other"
+// precedes the offending source in the argument list, so a regression that
+// let the gate start on earlier sources before this check would show up as a
+// backup tag or a moved "other" tip.
+func TestMerge_SelfTargetInWorktree_RefusesBeforeGate(t *testing.T) {
+	bin := buildCLI(t)
+	dir := signingRepo(t)
+	wt, featureTip := featureWorktree(t, dir, "feature")
+	otherTip := unsignedBranch(t, dir, "other")
+	mainTip := runGit(t, dir, "rev-parse", "main")
+
+	r, exit := runCLIIn(t, bin, wt, "merge", "other", "feature")
+	if r.Status != "precondition_unmet" || exit != 30 {
+		t.Fatalf("status=%s exit=%d, want precondition_unmet/30: %+v", r.Status, exit, r)
+	}
+	if code, _ := r.Errors[0]["code"].(string); code != "precondition_unmet.git.merge_target_is_source" {
+		t.Fatalf("refusal code=%q, want precondition_unmet.git.merge_target_is_source: %+v", code, r.Errors[0])
+	}
+	absWt, err := filepath.Abs(wt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _ := r.Errors[0]["message"].(string)
+	if !strings.Contains(message, absWt) || !strings.Contains(message, "feature") {
+		t.Fatalf("refusal does not name the resolved repository path and the target branch: %q", message)
+	}
+	context, _ := r.Errors[0]["context"].(map[string]any)
+	if context["repo"] != absWt || context["target"] != "feature" || context["source"] != "feature" {
+		t.Fatalf("refusal context does not name the resolved path, the target and the offending source: %+v", context)
+	}
+	if got := runGit(t, dir, "rev-parse", "main"); got != mainTip {
+		t.Fatalf("main moved despite the refusal: got %s want %s", got, mainTip)
+	}
+	if got := runGit(t, dir, "rev-parse", "feature"); got != featureTip {
+		t.Fatalf("the self-targeted source feature moved despite the refusal: got %s want %s", got, featureTip)
+	}
+	if got := runGit(t, dir, "rev-parse", "other"); got != otherTip {
+		t.Fatalf("the other named source moved despite the refusal: got %s want %s", got, otherTip)
+	}
+	if tags := runGit(t, dir, "tag", "--list"); tags != "" {
+		t.Fatalf("a refusal before the gate still left a backup tag: %q", tags)
+	}
+}
+
+// Both refusals resolve before the merge itself, so --dry-run does not exempt
+// this one — only the empty-range success path (SC-A3) is dry-run-exempt.
+func TestMerge_SelfTargetInWorktree_DryRunAlsoRefuses(t *testing.T) {
+	bin := buildCLI(t)
+	dir := signingRepo(t)
+	wt, featureTip := featureWorktree(t, dir, "feature")
+
+	r, exit := runCLIIn(t, bin, wt, "merge", "feature", "--dry-run")
+	if r.Status != "precondition_unmet" || exit != 30 {
+		t.Fatalf("status=%s exit=%d, want precondition_unmet/30: %+v", r.Status, exit, r)
+	}
+	if code, _ := r.Errors[0]["code"].(string); code != "precondition_unmet.git.merge_target_is_source" {
+		t.Fatalf("refusal code=%q, want precondition_unmet.git.merge_target_is_source: %+v", code, r.Errors[0])
+	}
+	if got := runGit(t, dir, "rev-parse", "feature"); got != featureTip {
+		t.Fatalf("feature moved despite a dry-run refusal: got %s want %s", got, featureTip)
+	}
+}
+
+// SC-A5: a detached HEAD names no branch to merge into. The old behavior
+// silently substituted the literal string "HEAD" as the target and let the
+// gate run against it; this refuses instead, naming the detached HEAD and the
+// commit it resolves to, before the gate or the merge ever runs.
+func TestMerge_DetachedHeadTarget_RefusesNamingResolvedCommit(t *testing.T) {
+	bin := buildCLI(t)
+	dir := initRepo(t)
+	runGit(t, dir, "branch", "feature")
+	head := runGit(t, dir, "rev-parse", "HEAD")
+	runGit(t, dir, "checkout", "-q", "--detach", "main")
+
+	r, exit := runCLI(t, bin, "--repo", dir, "merge", "feature")
+	if r.Status != "precondition_unmet" || exit != 30 {
+		t.Fatalf("status=%s exit=%d, want precondition_unmet/30: %+v", r.Status, exit, r)
+	}
+	if code, _ := r.Errors[0]["code"].(string); code != "precondition_unmet.git.merge_target_detached_head" {
+		t.Fatalf("refusal code=%q, want precondition_unmet.git.merge_target_detached_head: %+v", code, r.Errors[0])
+	}
+	message, _ := r.Errors[0]["message"].(string)
+	if !strings.Contains(message, "detached") || !strings.Contains(message, head) {
+		t.Fatalf("refusal does not name the detached HEAD and its resolved commit: %q", message)
+	}
+	context, _ := r.Errors[0]["context"].(map[string]any)
+	if context["head"] != head {
+		t.Fatalf("refusal context does not carry the resolved commit: %+v", context)
+	}
+	if got := runGit(t, dir, "rev-parse", "main"); got != head {
+		t.Fatalf("main moved despite the refusal: got %s want %s", got, head)
+	}
+	if got := runGit(t, dir, "rev-parse", "feature"); got != head {
+		t.Fatalf("feature moved despite the refusal: got %s want %s", got, head)
+	}
+	if got := runGit(t, dir, "rev-parse", "--abbrev-ref", "HEAD"); got != "HEAD" {
+		t.Fatalf("HEAD is no longer detached after the refusal: %q", got)
+	}
+}
+
+// The dry-run counterpart to the detached-HEAD refusal above: both
+// preconditions resolve before the merge, so neither is dry-run-exempt.
+func TestMerge_DetachedHeadTarget_DryRunAlsoRefuses(t *testing.T) {
+	bin := buildCLI(t)
+	dir := initRepo(t)
+	runGit(t, dir, "branch", "feature")
+	head := runGit(t, dir, "rev-parse", "HEAD")
+	runGit(t, dir, "checkout", "-q", "--detach", "main")
+
+	r, exit := runCLI(t, bin, "--repo", dir, "merge", "feature", "--dry-run")
+	if r.Status != "precondition_unmet" || exit != 30 {
+		t.Fatalf("status=%s exit=%d, want precondition_unmet/30: %+v", r.Status, exit, r)
+	}
+	if code, _ := r.Errors[0]["code"].(string); code != "precondition_unmet.git.merge_target_detached_head" {
+		t.Fatalf("refusal code=%q, want precondition_unmet.git.merge_target_detached_head: %+v", code, r.Errors[0])
+	}
+	if got := runGit(t, dir, "rev-parse", "HEAD"); got != head {
+		t.Fatalf("a dry-run refusal still moved HEAD: got %s want %s", got, head)
+	}
+}
+
 // The --fast-forward only form of the same carve-out: WillMintCommit treats
 // FastForwardOnly the same as the default allow (only FastForwardNever or an
 // octopus mints a commit), so this must succeed for the identical structural
