@@ -253,15 +253,36 @@ func listLocalBranches(ctx context.Context, dir string) ([]branchEntry, error) {
 	if res.ExitCode != 0 {
 		return nil, &git.CommandError{Args: args, ExitCode: res.ExitCode, Stderr: strings.TrimSpace(string(res.Stderr))}
 	}
-	out := strings.TrimSpace(string(res.Stdout))
+	return listLocalBranchesRows(string(res.Stdout)), nil
+}
+
+// listLocalBranchesRows parses for-each-ref's tab-separated
+// "%(refname:short)%09%(objectname)%09%(HEAD)" rows into branchEntry values.
+// Only a trailing newline is trimmed here, never the whole output's
+// surrounding whitespace: for-each-ref writes a real (empty) %(HEAD) field
+// for every branch that isn't checked out, and stripping all trailing
+// whitespace would eat that field's own trailing tab off the last row along
+// with the newline, silently shortening it to two fields. A row that still
+// arrives with fewer than three fields is tolerated -- treated as
+// not-current -- rather than indexed unconditionally, so a future format
+// change can't panic the verb the way a missing field once did.
+func listLocalBranchesRows(out string) []branchEntry {
+	out = strings.TrimSuffix(out, "\n")
 	if out == "" {
-		return nil, nil
+		return nil
 	}
 	lines := strings.Split(out, "\n")
 	entries := make([]branchEntry, len(lines))
 	for i, line := range lines {
 		fields := strings.SplitN(line, "\t", 3)
-		entries[i] = branchEntry{Name: fields[0], Head: fields[1], Current: fields[2] == "*"}
+		entry := branchEntry{Name: fields[0]}
+		if len(fields) > 1 {
+			entry.Head = fields[1]
+		}
+		if len(fields) > 2 {
+			entry.Current = fields[2] == "*"
+		}
+		entries[i] = entry
 	}
-	return entries, nil
+	return entries
 }

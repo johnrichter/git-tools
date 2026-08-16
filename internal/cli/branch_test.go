@@ -293,6 +293,35 @@ func TestBranchList_ReportsCurrentFlagPerBranch(t *testing.T) {
 	}
 }
 
+// TestBranchList_LastBranchByNameIsNotHEAD is the CLI-level companion to
+// listLocalBranchesRows' payload tests: for-each-ref sorts by refname, so a
+// branch named to sort after "main" lands last in real output, with HEAD not
+// the last row -- exactly the shape that panicked before the fix.
+func TestBranchList_LastBranchByNameIsNotHEAD(t *testing.T) {
+	bin := buildCLI(t)
+	dir := initRepo(t)
+	runGit(t, dir, "branch", "zzz-not-checked-out")
+
+	r, exit := runCLI(t, bin, "--repo", dir, "branch", "list")
+	if r.Status != "success" || exit != 0 {
+		t.Fatalf("status=%s exit=%d, want success/0: %+v", r.Status, exit, r)
+	}
+	branches, _ := r.Data["branches"].([]any)
+	if count, _ := r.Data["count"].(float64); int(count) != len(branches) || len(branches) != 2 {
+		t.Fatalf("count=%v branches=%d, want both 2: %+v", r.Data["count"], len(branches), r.Data)
+	}
+	currentCount := 0
+	for _, e := range branches {
+		m := e.(map[string]any)
+		if b, _ := m["current"].(bool); b {
+			currentCount++
+		}
+	}
+	if currentCount != 1 {
+		t.Fatalf("exactly one branch must be marked current, got %d: %+v", currentCount, branches)
+	}
+}
+
 // TestBranchList_WritesNothing pins AC1: whatever list reports, HEAD, the
 // branch set, and the working tree must be byte-identical before and after.
 func TestBranchList_WritesNothing(t *testing.T) {
