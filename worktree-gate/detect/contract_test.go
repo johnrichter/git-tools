@@ -1,13 +1,12 @@
 package detect
 
-// Digest verification for the four data artifacts this package's contracts
+// Digest verification for the three data artifacts this package's contracts
 // pin: the cwd-resolution corpus (SC-CWD-RESOLVER-CONTRACT), the
-// tracking-doc basename set (SC-TRACKINGDOCS-CONTRACT), the bash-connector
-// set, and SC11's banned-name list (the same list scripts/surface-hygiene.sh
-// scans against). Each digest below is the sha256 recorded for the
-// git-tools tag the artifact ships under -- update the digest in the same
-// commit as any change to the artifact it names, or this test catches the
-// drift.
+// bash-connector set, and SC11's banned-name list (the same list
+// scripts/surface-hygiene.sh scans against). Each digest below is the sha256
+// recorded for the git-tools tag the artifact ships under -- update the digest
+// in the same commit as any change to the artifact it names, or this test
+// catches the drift.
 //
 // Self-contained by construction: every input is a file this repo already
 // ships, so there is no environment variable, sibling checkout, or
@@ -25,7 +24,6 @@ var pinnedDigests = []struct {
 	sha256 string
 }{
 	{"testdata/cwd-corpus.json", "34cb50bc13cd2abda88332b13eaf27e0b319c31ea71d9a016a0c07369ec194a1"},
-	{"trackingdocs.json", "199d5abf6229a5c3cce5be62f2337d49f92c65c3216aad1ab25dcf3249de6a90"},
 	{"contracts/connectors.json", "ef53c0b7154fc37dd2e2aa0d5be13f0ba0c61cd1463b67c17aa869ec3277c01e"},
 	{"contracts/banned-names.json", "8189784124b3dd59491f0fec9d208c250559a2639fdfe1a6823947e4f15f78aa"},
 }

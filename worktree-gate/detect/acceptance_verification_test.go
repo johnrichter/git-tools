@@ -49,24 +49,11 @@ func TestAC1_NoRolloutEnvSurface(t *testing.T) {
 func TestAC2_Bash_VerbsErr_MustDeny(t *testing.T) {
 	fs := primaryFS()
 	verbsErr := errors.New("verbs.json is corrupt")
-	d := Decide(fs.lstat, fs.readFile, Verbs{}, verbsErr, TrackingDocs{}, nil, Input{
+	d := Decide(fs.lstat, fs.readFile, Verbs{}, verbsErr, Input{
 		ToolName: "Bash", CWD: "/repo", Command: "rm -rf build",
 	})
 	if !d.Deny {
 		t.Fatalf("AC2 FAIL: verbsErr on a primary-checkout Bash call did not deny (fail-open): %+v", d)
-	}
-}
-
-// AC2: a tracking-doc data failure on the Write/Edit axis must DENY, not
-// fail open/Degraded.
-func TestAC2_Write_TrackingDocsErr_MustDeny(t *testing.T) {
-	fs := primaryFS()
-	tdErr := errors.New("trackingdocs.json is corrupt")
-	d := Decide(fs.lstat, fs.readFile, Verbs{}, nil, TrackingDocs{}, tdErr, Input{
-		ToolName: "Write", FilePath: "/repo/plan.md", ProjectDir: "/repo",
-	})
-	if !d.Deny {
-		t.Fatalf("AC2 FAIL: trackingDocsErr on a primary-checkout Write did not deny (fail-open): %+v", d)
 	}
 }
 
@@ -78,7 +65,7 @@ func TestAC2_Write_TrackingDocsErr_MustDeny(t *testing.T) {
 func TestAC4_DecideBash_UsesEffectiveCWD_NotSessionCWDAlone(t *testing.T) {
 	fs := newFakeFS().dir("/repo/.git").file("/repo/wt/.git", "gitdir: /repo/.git/worktrees/wt\n")
 	v := testVerbs(t)
-	d := Decide(fs.lstat, fs.readFile, v, nil, TrackingDocs{}, nil, Input{
+	d := Decide(fs.lstat, fs.readFile, v, nil, Input{
 		ToolName: "Bash", CWD: "/repo", Command: "cd /repo/wt && rm -rf build",
 	})
 	if d.Deny {

@@ -28,7 +28,7 @@ func TestSDET_FB7_LiveWorktreeUnderHome_UnaffectedByExemption(t *testing.T) {
 	// classification.
 	for _, cwd := range []string{"/tmp", "/repo/.claude/worktrees/live"} {
 		t.Run("cwd="+cwd, func(t *testing.T) {
-			d := Decide(fs.lstat, fs.readFile, v, nil, TrackingDocs{}, nil, Input{
+			d := Decide(fs.lstat, fs.readFile, v, nil, Input{
 				ToolName: "Bash",
 				CWD:      cwd,
 				Command:  "rm /repo/.claude/worktrees/live",
@@ -40,7 +40,7 @@ func TestSDET_FB7_LiveWorktreeUnderHome_UnaffectedByExemption(t *testing.T) {
 	}
 
 	t.Run("cwd=/repo (denied by the cwd leg, not the target)", func(t *testing.T) {
-		d := Decide(fs.lstat, fs.readFile, v, nil, TrackingDocs{}, nil, Input{
+		d := Decide(fs.lstat, fs.readFile, v, nil, Input{
 			ToolName: "Bash",
 			CWD:      "/repo",
 			Command:  "rm /repo/.claude/worktrees/live",
@@ -107,7 +107,7 @@ func TestSDET_FB7_ScratchExemption_Boundaries(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			d := Decide(fs.lstat, fs.readFile, v, nil, TrackingDocs{}, nil, Input{
+			d := Decide(fs.lstat, fs.readFile, v, nil, Input{
 				ToolName: "Bash",
 				CWD:      c.cwd,
 				Command:  "rm " + c.target,
@@ -121,16 +121,15 @@ func TestSDET_FB7_ScratchExemption_Boundaries(t *testing.T) {
 
 // TestSDET_FB7_WriteFileTool_NotExempted pins that the FB7 exemption is
 // wired only into the Bash named-path leg (SC20), never into the Write/Edit
-// tool's decideFileWrite path -- there is no ProjectDir/tracking-doc-style
-// carve-out there, so a Write/Edit whose FilePath resolves under the worktree
-// home in a primary checkout must still deny via the existing KindPrimary
-// branch, unaffected by this task's change.
+// tool's decideFileWrite path, so a Write/Edit whose FilePath resolves under
+// the worktree home in a primary checkout must still deny via the existing
+// KindPrimary branch.
 func TestSDET_FB7_WriteFileTool_NotExempted(t *testing.T) {
 	fs := newFakeFS().
 		dir("/repo/.git").
 		file("/repo/tracked.md", "tracked\n")
 
-	d := Decide(fs.lstat, fs.readFile, testVerbs(t), nil, TrackingDocs{}, nil, Input{
+	d := Decide(fs.lstat, fs.readFile, testVerbs(t), nil, Input{
 		ToolName: "Write",
 		FilePath: "/repo/.claude/worktrees/scratch-thing",
 	})

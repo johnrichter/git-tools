@@ -39,12 +39,11 @@ func VerifyWith(cases []Case, decide func(Case) detect.Decision) []Failure {
 
 // Verify runs cases through the real gate: each case's declared topology is
 // rendered as an in-memory filesystem and evaluated by detect.Decide against
-// verbs and trackingDocs. Passing verbsErr/trackingDocsErr through lets a
-// caller also exercise either classifier-degraded path across the same
-// fixture set.
-func Verify(cases []Case, verbs detect.Verbs, verbsErr error, trackingDocs detect.TrackingDocs, trackingDocsErr error) []Failure {
+// verbs. Passing verbsErr through lets a caller also exercise the
+// classifier-degraded path across the same fixture set.
+func Verify(cases []Case, verbs detect.Verbs, verbsErr error) []Failure {
 	return VerifyWith(cases, func(c Case) detect.Decision {
 		lstat, readFile := buildFS(c)
-		return detect.Decide(lstat, readFile, verbs, verbsErr, trackingDocs, trackingDocsErr, c.toInput())
+		return detect.Decide(lstat, readFile, verbs, verbsErr, c.toInput())
 	})
 }

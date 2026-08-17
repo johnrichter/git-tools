@@ -141,7 +141,6 @@ jobs:
           mkdir -p "$ARTIFACTS_DIR"
           ( cd worktree-gate/detect && sha256sum \
               testdata/cwd-corpus.json \
-              trackingdocs.json \
               contracts/connectors.json \
               contracts/banned-names.json \
             | sort -k2 ) > "${ARTIFACTS_DIR}/contract-digests.txt"

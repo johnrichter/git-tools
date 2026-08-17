@@ -42,8 +42,6 @@ type Case struct {
 	FilePath string // Write/Edit target
 	CWD      string // Bash working directory
 	Command  string // Bash command
-
-	ProjectDir string // CLAUDE_PROJECT_DIR, feeds the tracking-doc exemption
 }
 
 // wantDeny is the invariant Category encodes: only Read fixtures may pass
@@ -53,7 +51,6 @@ func (c Case) wantDeny() bool { return c.Category != Read }
 func (c Case) toInput() detect.Input {
 	return detect.Input{
 		ToolName: c.Tool, CWD: c.CWD, FilePath: c.FilePath, Command: c.Command,
-		ProjectDir: c.ProjectDir,
 	}
 }
 
@@ -143,26 +140,7 @@ func Set() []Case {
 		// -- read: the incumbent's non-mutating-tool no-op, re-expressed --
 		{Name: "read-tool-is-noop", Category: Read, Topology: Primary, Tool: "Read", FilePath: "/repo/a.go"},
 
-		// -- read: tracking-doc exemption -- a Write/Edit under the configured
-		// project dir whose basename is in the delivery-agent-team tracking-doc
-		// set is allowed even in a primary checkout, matching the incumbent
-		// write-locus-gate.sh's own $PROJ carve-out --
-		{Name: "write-tracking-doc-exempt-plan-json", Category: Read, Topology: Primary, Tool: "Write", ProjectDir: "/proj", FilePath: "/proj/.dat/some-effort/plan.json"},
-		{Name: "edit-tracking-doc-exempt-plan-json", Category: Read, Topology: Primary, Tool: "Edit", ProjectDir: "/proj", FilePath: "/proj/.dat/some-effort/plan.json"},
-		{Name: "write-tracking-doc-exempt-design-md", Category: Read, Topology: Primary, Tool: "Write", ProjectDir: "/proj", FilePath: "/proj/.dat/some-effort/design.md"},
-		{Name: "write-tracking-doc-exempt-plan-md", Category: Read, Topology: Primary, Tool: "Write", ProjectDir: "/proj", FilePath: "/proj/.dat/some-effort/plan.md"},
-		{Name: "write-tracking-doc-exempt-execution-json", Category: Read, Topology: Primary, Tool: "Write", ProjectDir: "/proj", FilePath: "/proj/.dat/some-effort/execution.json"},
-		{Name: "write-tracking-doc-exempt-execution-md", Category: Read, Topology: Primary, Tool: "Write", ProjectDir: "/proj", FilePath: "/proj/.dat/some-effort/execution.md"},
-		{Name: "write-tracking-doc-exempt-feedback-json", Category: Read, Topology: Primary, Tool: "Write", ProjectDir: "/proj", FilePath: "/proj/.dat/some-effort/feedback.json"},
-		{Name: "write-tracking-doc-exempt-feedback-md", Category: Read, Topology: Primary, Tool: "Write", ProjectDir: "/proj", FilePath: "/proj/.dat/some-effort/feedback.md"},
-		{Name: "write-tracking-doc-exempt-at-any-depth", Category: Read, Topology: Primary, Tool: "Write", ProjectDir: "/proj", FilePath: "/proj/a/b/c/design.md"},
-
-		// -- write: tracking-doc exemption narrowing negatives -- each
-		// precondition drops separately, so the exemption stays pinned to
-		// its exact case rather than widening --
-		{Name: "write-tracking-doc-no-project-dir-denied", Category: Write, Topology: Primary, Tool: "Write", ProjectDir: "", FilePath: "/repo/.dat/some-effort/plan.json"},
-		{Name: "write-tracking-doc-outside-project-dir-denied", Category: Write, Topology: Primary, Tool: "Write", ProjectDir: "/proj", FilePath: "/otherrepo/.dat/some-effort/plan.json"},
-		{Name: "write-tracking-doc-nonexempt-basename-md-denied", Category: Write, Topology: Primary, Tool: "Write", ProjectDir: "/proj", FilePath: "/proj/.dat/some-effort/notes.md"},
-		{Name: "write-tracking-doc-nonexempt-basename-json-denied", Category: Write, Topology: Primary, Tool: "Write", ProjectDir: "/proj", FilePath: "/proj/.dat/some-effort/config.json"},
+		// -- write: a .dat-tree path in the primary checkout, any basename --
+		{Name: "write-dat-plan-json-in-primary", Category: Write, Topology: Primary, Tool: "Write", FilePath: "/repo/.dat/some-effort/plan.json"},
 	}
 }

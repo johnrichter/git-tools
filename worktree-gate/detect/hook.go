@@ -41,11 +41,10 @@ func Run(r io.Reader, stdout, errOut io.Writer, lstat LstatFunc, readFile ReadFi
 // stdout only when denying -- an allowed call produces no output, so the
 // tool proceeds under the harness's default. A Decision.Degraded defect is
 // reported on errOut only, never on stdout, so it never becomes part of the
-// tool-call decision. getenv resolves the environment signal the
-// tracking-doc exemption reads (os.Getenv in production). provisionedBinPath
-// and provisionedBinDigest carry SC15's allowance inputs, supplied by the
-// invoking wrapper as ARGV, never read from the environment here. It returns
-// the process exit code the caller should use.
+// tool-call decision. provisionedBinPath and provisionedBinDigest carry
+// SC15's allowance inputs, supplied by the invoking wrapper as ARGV, never
+// read from the environment here. It returns the process exit code the
+// caller should use.
 func RunGate(r io.Reader, stdout, errOut io.Writer, lstat LstatFunc, readFile ReadFileFunc, getenv func(string) string, provisionedBinPath, provisionedBinDigest string) int {
 	var p payload
 	if err := json.NewDecoder(r).Decode(&p); err != nil {
@@ -59,13 +58,11 @@ func RunGate(r io.Reader, stdout, errOut io.Writer, lstat LstatFunc, readFile Re
 	}
 
 	verbs, verbsErr := DefaultVerbs()
-	trackingDocs, trackingDocsErr := DefaultTrackingDocs()
-	decision := Decide(lstat, readFile, verbs, verbsErr, trackingDocs, trackingDocsErr, Input{
+	decision := Decide(lstat, readFile, verbs, verbsErr, Input{
 		ToolName:             p.ToolName,
 		CWD:                  p.CWD,
 		FilePath:             p.ToolInput.FilePath,
 		Command:              p.ToolInput.Command,
-		ProjectDir:           getenv(ProjectDirEnvVar),
 		ProvisionedBinPath:   provisionedBinPath,
 		ProvisionedBinDigest: provisionedBinDigest,
 	})

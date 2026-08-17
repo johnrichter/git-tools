@@ -13,7 +13,7 @@ import (
 
 func TestDecide_Write_EmptyFilePath_NoOp(t *testing.T) {
 	fs := primaryFS()
-	d := Decide(fs.lstat, fs.readFile, Verbs{}, nil, TrackingDocs{}, nil, Input{ToolName: "Write", FilePath: ""})
+	d := Decide(fs.lstat, fs.readFile, Verbs{}, nil, Input{ToolName: "Write", FilePath: ""})
 	if d.Deny || d.Degraded != "" {
 		t.Errorf("expected no-op for an empty file path, got %+v", d)
 	}
@@ -24,7 +24,7 @@ func TestDecide_Write_IndeterminateGitEntry_DeniedFailClosed(t *testing.T) {
 	// redirect file (e.g. corrupted or an unrecognized type) -- must deny,
 	// never guess it's safely inside a worktree.
 	fs := newFakeFS().file("/repo/.git", "not a gitdir line\n")
-	d := Decide(fs.lstat, fs.readFile, Verbs{}, nil, TrackingDocs{}, nil, Input{ToolName: "Write", FilePath: "/repo/a.go"})
+	d := Decide(fs.lstat, fs.readFile, Verbs{}, nil, Input{ToolName: "Write", FilePath: "/repo/a.go"})
 	if !d.Deny {
 		t.Fatal("expected deny when the .git entry's kind can't be classified (fail closed on uncertainty)")
 	}
@@ -32,7 +32,7 @@ func TestDecide_Write_IndeterminateGitEntry_DeniedFailClosed(t *testing.T) {
 
 func TestDecide_Write_IndeterminateRepoMembership_DeniedFailClosed(t *testing.T) {
 	fs := newFakeFS().errAt("/repo/.git", errors.New("permission denied"))
-	d := Decide(fs.lstat, fs.readFile, Verbs{}, nil, TrackingDocs{}, nil, Input{ToolName: "Write", FilePath: "/repo/a.go"})
+	d := Decide(fs.lstat, fs.readFile, Verbs{}, nil, Input{ToolName: "Write", FilePath: "/repo/a.go"})
 	if !d.Deny {
 		t.Fatal("expected deny when repo membership can't be resolved for a Write (fail closed on uncertainty)")
 	}
@@ -40,7 +40,7 @@ func TestDecide_Write_IndeterminateRepoMembership_DeniedFailClosed(t *testing.T)
 
 func TestDecide_Edit_SameRulesAsWrite(t *testing.T) {
 	fs := primaryFS()
-	d := Decide(fs.lstat, fs.readFile, Verbs{}, nil, TrackingDocs{}, nil, Input{ToolName: "Edit", FilePath: "/repo/a.go"})
+	d := Decide(fs.lstat, fs.readFile, Verbs{}, nil, Input{ToolName: "Edit", FilePath: "/repo/a.go"})
 	if !d.Deny {
 		t.Fatal("expected Edit outside a worktree to deny, same as Write")
 	}
@@ -51,7 +51,7 @@ func TestDecide_Edit_SameRulesAsWrite(t *testing.T) {
 func TestDecide_Bash_WorktreeWithDegradedClassifier_AllowedAndDegraded(t *testing.T) {
 	fs := worktreeFS()
 	verbsErr := errors.New("worktree-gate: embedded verbs.json is corrupt")
-	d := Decide(fs.lstat, fs.readFile, Verbs{}, verbsErr, TrackingDocs{}, nil, Input{ToolName: "Bash", CWD: "/repo/wt", Command: "git commit -m x"})
+	d := Decide(fs.lstat, fs.readFile, Verbs{}, verbsErr, Input{ToolName: "Bash", CWD: "/repo/wt", Command: "git commit -m x"})
 	if d.Deny {
 		t.Fatalf("expected allow: already inside a worktree, regardless of classifier health, got deny: %s", d.Reason)
 	}
@@ -69,7 +69,7 @@ func TestDecide_Bash_WorktreeWithDegradedClassifier_AllowedAndDegraded(t *testin
 func TestDecide_Bash_SC9_OpaqueScriptWritingClaudeSettingsFromPrimaryCheckout_Denied(t *testing.T) {
 	fs := primaryFS()
 	v := testVerbs(t)
-	d := Decide(fs.lstat, fs.readFile, v, nil, TrackingDocs{}, nil, Input{
+	d := Decide(fs.lstat, fs.readFile, v, nil, Input{
 		ToolName: "Bash", CWD: "/repo", Command: "./build.sh",
 	})
 	if !d.Deny {
@@ -311,72 +311,6 @@ func TestClassifyGit_LeadingGlobalOptionParity(t *testing.T) {
 				t.Errorf("classifyGit(%v) = %v, differs from classifyGit(%v) = %v", withOpt, got, verb, base)
 			}
 		}
-	}
-}
-
-// -- trackingdocs.json packaging integrity, mirroring verbs.json's own
-// non-triviality check above.
-
-func TestDefaultTrackingDocs_ShippedArtifactIsPopulatedAndValid(t *testing.T) {
-	td := testTrackingDocs(t)
-	want := []string{"design.md", "plan.json", "plan.md", "execution.json", "execution.md", "feedback.json", "feedback.md"}
-	for _, basename := range want {
-		if !td.has(basename) {
-			t.Errorf("expected %q among the shipped tracking-doc basenames, not found", basename)
-		}
-	}
-}
-
-// -- underProjectDir: containment at any depth, not a plain string prefix.
-
-func TestUnderProjectDir(t *testing.T) {
-	cases := []struct {
-		name       string
-		projectDir string
-		filePath   string
-		want       bool
-	}{
-		{"direct child", "/proj", "/proj/plan.json", true},
-		{"nested at any depth", "/proj", "/proj/.dat/some-effort/plan.json", true},
-		{"project dir unset", "", "/proj/plan.json", false},
-		{"outside the project dir", "/proj", "/otherrepo/plan.json", false},
-		{"same-prefix sibling is not contained", "/proj", "/proj-other/plan.json", false},
-	}
-	for _, c := range cases {
-		if got := underProjectDir(c.projectDir, c.filePath); got != c.want {
-			t.Errorf("%s: underProjectDir(%q, %q) = %v, want %v", c.name, c.projectDir, c.filePath, got, c.want)
-		}
-	}
-}
-
-// -- a corrupt tracking-doc artifact denies rather than fails open, for any
-// call the exemption could have covered.
-
-func TestDecide_Write_TrackingDocsDegradedArtifact_DeniedFailClosed(t *testing.T) {
-	fs := newFakeFS().dir("/proj/.dat/some-effort/.git")
-	tdErr := errors.New("worktree-gate: embedded trackingdocs.json is corrupt")
-	d := Decide(fs.lstat, fs.readFile, Verbs{}, nil, TrackingDocs{}, tdErr, Input{
-		ToolName: "Write", FilePath: "/proj/.dat/some-effort/plan.json", ProjectDir: "/proj",
-	})
-	if !d.Deny {
-		t.Fatal("expected deny: a degraded tracking-doc artifact could be masking a real write in scope of the exemption (fail closed, not fail open)")
-	}
-}
-
-func TestDecide_Write_TrackingDocsDegradedArtifact_IrrelevantOutsideProjectDir(t *testing.T) {
-	// A corrupt tracking-doc artifact only matters for calls the exemption
-	// could ever have covered -- outside the project dir it can't have, so
-	// the ordinary primary-checkout deny is unaffected by the defect.
-	fs := primaryFS()
-	tdErr := errors.New("worktree-gate: embedded trackingdocs.json is corrupt")
-	d := Decide(fs.lstat, fs.readFile, Verbs{}, nil, TrackingDocs{}, tdErr, Input{
-		ToolName: "Write", FilePath: "/repo/a.go", ProjectDir: "",
-	})
-	if !d.Deny {
-		t.Fatal("expected the ordinary primary-checkout deny to hold: no project dir means the corrupt artifact was never consulted")
-	}
-	if d.Degraded != "" {
-		t.Errorf("expected no Degraded report: the tracking-doc artifact was never consulted, got %q", d.Degraded)
 	}
 }
 

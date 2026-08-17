@@ -228,7 +228,7 @@ func TestSC16_UndecomposableBoundedByGovernedWord(t *testing.T) {
 	}
 	// "not denied" end-to-end: the same clean git commit is allowed from a worktree.
 	fs := worktreeFS()
-	d := Decide(fs.lstat, fs.readFile, v, nil, TrackingDocs{}, nil, Input{
+	d := Decide(fs.lstat, fs.readFile, v, nil, Input{
 		ToolName: "Bash", CWD: "/repo/wt", Command: `git commit -m "it's fine"`,
 	})
 	if d.Deny {
@@ -266,7 +266,7 @@ func TestSC16_LeniencyPair_NamedPathDestinationScope(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			d := Decide(fs.lstat, fs.readFile, v, nil, TrackingDocs{}, nil, Input{
+			d := Decide(fs.lstat, fs.readFile, v, nil, Input{
 				ToolName: "Bash", CWD: c.cwd, Command: c.command,
 			})
 			if d.Deny != c.wantDeny {
@@ -297,7 +297,7 @@ func TestSC16_HeredocOperatorLineTailStillClassified(t *testing.T) {
 				t.Errorf("ClassifyBash(%q) = %v, want ClassWrite (operator-line tail must not be swallowed)", cmd, got)
 			}
 			fs := primaryFS()
-			if d := Decide(fs.lstat, fs.readFile, v, nil, TrackingDocs{}, nil, Input{
+			if d := Decide(fs.lstat, fs.readFile, v, nil, Input{
 				ToolName: "Bash", CWD: "/repo", Command: cmd,
 			}); !d.Deny {
 				t.Errorf("Decide(%q) from a primary checkout = allow, want deny", cmd)
@@ -377,7 +377,7 @@ func TestSC22_ClassifierHasNoVarSkipButResolverComposes(t *testing.T) {
 	}
 	fs := primaryFS()
 	v := testVerbs(t)
-	d := Decide(fs.lstat, fs.readFile, v, nil, TrackingDocs{}, nil, Input{
+	d := Decide(fs.lstat, fs.readFile, v, nil, Input{
 		ToolName: "Bash", CWD: "/repo", Command: "VAR=1 cd /repo && /prov/git-tools merge b",
 	})
 	if !d.Deny {
@@ -391,7 +391,7 @@ func TestConnectorRegression_LoneAmpersandDeniesViaDecide(t *testing.T) {
 	fs := primaryFS()
 	v := testVerbs(t)
 	for _, cmd := range []string{"echo hi & git commit -m x", "echo hi & rm -rf notes"} {
-		d := Decide(fs.lstat, fs.readFile, v, nil, TrackingDocs{}, nil, Input{
+		d := Decide(fs.lstat, fs.readFile, v, nil, Input{
 			ToolName: "Bash", CWD: "/repo", Command: cmd,
 		})
 		if !d.Deny {

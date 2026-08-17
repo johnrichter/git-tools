@@ -28,7 +28,7 @@ func TestDecide_Bash_OQ19_Residual_Disclosed(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			d := Decide(fs.lstat, fs.readFile, v, nil, TrackingDocs{}, nil, Input{
+			d := Decide(fs.lstat, fs.readFile, v, nil, Input{
 				ToolName: "Bash", CWD: "/repo", Command: c.command,
 			})
 			if d.Deny {
@@ -56,8 +56,7 @@ func sc15MergePayload() string {
 // as parameters, every environment lookup returns empty, and the merge from a
 // primary checkout is allowed with no output. It also pins the no-regression
 // bound -- no environment override of the deleted merge-gate shape gates the
-// decision: the only key the gate may query is the tracking-doc exemption's
-// project dir, never a binary-selecting override.
+// decision: the gate queries no environment key at all.
 func TestRunGate_SC15Allow_ReadsNoEnvironment(t *testing.T) {
 	fs := newFakeFS().
 		dir("/repo/.git").
@@ -72,13 +71,10 @@ func TestRunGate_SC15Allow_ReadsNoEnvironment(t *testing.T) {
 	if code != 0 || out.Len() != 0 {
 		t.Fatalf("SC15 merge from a primary checkout: code=%d stdout=%q, want a silent allow", code, out.String())
 	}
-	// The only key the gate may ever query is the tracking-doc exemption's
-	// project dir; a binary-selecting override of any shape would show up here.
-	// That no such override name exists in source is the SC11 grep gate's job.
-	for _, key := range env.queried {
-		if key != ProjectDirEnvVar {
-			t.Errorf("SC15 decision queried environment variable %q; the allowance must key on argv only", key)
-		}
+	// A binary-selecting override of any shape would show up here as a queried
+	// key. That no such override name exists in source is the SC11 grep gate's job.
+	if len(env.queried) != 0 {
+		t.Errorf("SC15 decision queried environment variables %v; the allowance must key on argv only", env.queried)
 	}
 }
 

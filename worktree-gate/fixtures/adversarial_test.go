@@ -15,13 +15,9 @@ func TestAdversarialSuite_SatisfiesSCWorktree(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DefaultVerbs: %v", err)
 	}
-	trackingDocs, err := detect.DefaultTrackingDocs()
-	if err != nil {
-		t.Fatalf("DefaultTrackingDocs: %v", err)
-	}
 
 	cases := Set()
-	for _, f := range Verify(cases, verbs, nil, trackingDocs, nil) {
+	for _, f := range Verify(cases, verbs, nil) {
 		t.Error(f.String())
 	}
 

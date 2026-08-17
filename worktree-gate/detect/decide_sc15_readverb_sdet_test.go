@@ -34,7 +34,7 @@ func TestSDET_SC15ReadVerb_RepoFlagAgainstSiblingPath_Allowed(t *testing.T) {
 			fs := newFakeFS().dir("/repo/.git").dir("/sibling/.git").file(sc15Bin, sc15BinContent)
 			digest := hex.EncodeToString(sha256Sum(sc15BinContent))
 			v := testVerbs(t)
-			d := Decide(fs.lstat, fs.readFile, v, nil, TrackingDocs{}, nil, Input{
+			d := Decide(fs.lstat, fs.readFile, v, nil, Input{
 				ToolName: "Bash", CWD: "/repo", Command: sc15Bin + " " + p.verb + " --repo /sibling",
 				ProvisionedBinPath: sc15Bin, ProvisionedBinDigest: digest,
 			})
@@ -50,7 +50,7 @@ func TestSDET_SC15ReadVerb_BothArgvParamsEmpty_Denied(t *testing.T) {
 		t.Run(p.verb, func(t *testing.T) {
 			fs := newFakeFS().dir("/repo/.git").file(sc15Bin, sc15BinContent)
 			v := testVerbs(t)
-			d := Decide(fs.lstat, fs.readFile, v, nil, TrackingDocs{}, nil, Input{
+			d := Decide(fs.lstat, fs.readFile, v, nil, Input{
 				ToolName: "Bash", CWD: "/repo", Command: sc15Bin + " " + p.verb,
 				ProvisionedBinPath: "", ProvisionedBinDigest: "",
 			})
@@ -69,7 +69,7 @@ func TestSDET_SC15ReadVerb_UppercaseSubverb_NotRecognized_Denied(t *testing.T) {
 			fs := newFakeFS().dir("/repo/.git").file(sc15Bin, sc15BinContent)
 			digest := hex.EncodeToString(sha256Sum(sc15BinContent))
 			v := testVerbs(t)
-			d := Decide(fs.lstat, fs.readFile, v, nil, TrackingDocs{}, nil, Input{
+			d := Decide(fs.lstat, fs.readFile, v, nil, Input{
 				ToolName: "Bash", CWD: "/repo", Command: sc15Bin + " " + p.wrongCase,
 				ProvisionedBinPath: sc15Bin, ProvisionedBinDigest: digest,
 			})
@@ -88,7 +88,7 @@ func TestSDET_SC15ReadVerb_SequencedWithWriteAfterDenies(t *testing.T) {
 			fs := newFakeFS().dir("/repo/.git").file(sc15Bin, sc15BinContent)
 			digest := hex.EncodeToString(sha256Sum(sc15BinContent))
 			v := testVerbs(t)
-			d := Decide(fs.lstat, fs.readFile, v, nil, TrackingDocs{}, nil, Input{
+			d := Decide(fs.lstat, fs.readFile, v, nil, Input{
 				ToolName: "Bash", CWD: "/repo",
 				Command:            sc15Bin + " " + p.verb + " && git commit -m x",
 				ProvisionedBinPath: sc15Bin, ProvisionedBinDigest: digest,
@@ -108,7 +108,7 @@ func TestSDET_SC15ReadVerb_PipedIntoGrep_Allowed(t *testing.T) {
 			fs := newFakeFS().dir("/repo/.git").file(sc15Bin, sc15BinContent)
 			digest := hex.EncodeToString(sha256Sum(sc15BinContent))
 			v := testVerbs(t)
-			d := Decide(fs.lstat, fs.readFile, v, nil, TrackingDocs{}, nil, Input{
+			d := Decide(fs.lstat, fs.readFile, v, nil, Input{
 				ToolName: "Bash", CWD: "/repo",
 				Command:            sc15Bin + " " + p.verb + " | grep main",
 				ProvisionedBinPath: sc15Bin, ProvisionedBinDigest: digest,
@@ -129,7 +129,7 @@ func TestSDET_SC15ReadVerb_TruncatedDigestNeverMatches_Denied(t *testing.T) {
 			fullDigest := hex.EncodeToString(sha256Sum(sc15BinContent))
 			truncated := fullDigest[:len(fullDigest)-4]
 			v := testVerbs(t)
-			d := Decide(fs.lstat, fs.readFile, v, nil, TrackingDocs{}, nil, Input{
+			d := Decide(fs.lstat, fs.readFile, v, nil, Input{
 				ToolName: "Bash", CWD: "/repo", Command: sc15Bin + " " + p.verb,
 				ProvisionedBinPath: sc15Bin, ProvisionedBinDigest: truncated,
 			})
@@ -145,7 +145,7 @@ func TestSDET_SC15ReadVerb_UnreadableBinary_FallsClosed(t *testing.T) {
 		t.Run(p.verb, func(t *testing.T) {
 			fs := newFakeFS().dir("/repo/.git").errAt(sc15Bin, errors.New("EACCES"))
 			v := testVerbs(t)
-			d := Decide(fs.lstat, fs.readFile, v, nil, TrackingDocs{}, nil, Input{
+			d := Decide(fs.lstat, fs.readFile, v, nil, Input{
 				ToolName: "Bash", CWD: "/repo", Command: sc15Bin + " " + p.verb,
 				ProvisionedBinPath: sc15Bin, ProvisionedBinDigest: "irrelevant",
 			})
@@ -163,7 +163,7 @@ func TestSDET_SC15ReadVerb_DoesNotWidenWriteAllowanceRetargetVoid(t *testing.T) 
 	fs := newFakeFS().dir("/repo/.git").dir("/sibling/.git").file(sc15Bin, sc15BinContent)
 	digest := hex.EncodeToString(sha256Sum(sc15BinContent))
 	v := testVerbs(t)
-	d := Decide(fs.lstat, fs.readFile, v, nil, TrackingDocs{}, nil, Input{
+	d := Decide(fs.lstat, fs.readFile, v, nil, Input{
 		ToolName: "Bash", CWD: "/repo", Command: sc15Bin + " merge --repo /sibling main",
 		ProvisionedBinPath: sc15Bin, ProvisionedBinDigest: digest,
 	})

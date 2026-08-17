@@ -60,7 +60,7 @@ func TestSDET_SC15_BranchDelete_GateSanctionsButGuardStillRefuses(t *testing.T) 
 	fs := newFakeFS().dir(dir+"/.git").file(bin, string(binBytes))
 	v := testVerbs(t)
 	cmd := bin + " branch delete feature " + featureHead
-	d := Decide(fs.lstat, fs.readFile, v, nil, TrackingDocs{}, nil, Input{
+	d := Decide(fs.lstat, fs.readFile, v, nil, Input{
 		ToolName: "Bash", CWD: dir, Command: cmd,
 		ProvisionedBinPath: bin, ProvisionedBinDigest: digest,
 	})

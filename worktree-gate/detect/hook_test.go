@@ -87,22 +87,3 @@ func TestRun_UnparseablePayloadIsNoOp(t *testing.T) {
 		t.Errorf("Run() on an unparseable payload = code=%d stdout=%q, want a silent no-op", code, out.String())
 	}
 }
-
-// -- Run: the environment override is read here, not in Decide, so its
-// resolution is proven end to end.
-
-func envWith(values map[string]string) func(string) string {
-	return func(key string) string { return values[key] }
-}
-
-func TestRun_ProjectDirEnvVar_FeedsTrackingDocExemption(t *testing.T) {
-	fs := newFakeFS().dir("/proj/.dat/some-effort/.git")
-	in := strings.NewReader(`{"tool_name":"Write","tool_input":{"file_path":"/proj/.dat/some-effort/plan.json"}}`)
-	var out, errOut bytes.Buffer
-
-	code := Run(in, &out, &errOut, fs.lstat, fs.readFile, envWith(map[string]string{ProjectDirEnvVar: "/proj"}))
-
-	if code != 0 || out.Len() != 0 {
-		t.Errorf("Run() = code=%d stdout=%q, want an allowed tracking-doc write under the project dir", code, out.String())
-	}
-}

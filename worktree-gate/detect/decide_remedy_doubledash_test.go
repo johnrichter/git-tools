@@ -18,7 +18,7 @@ func TestAdversarial_CommandWithLiteralDashDash_RemedyStaysRecoverable(t *testin
 	fs := primaryFS()
 	v := testVerbs(t)
 	cmd := "somefroblecmd -- /repo/tracked.md"
-	d := Decide(fs.lstat, fs.readFile, v, nil, TrackingDocs{}, nil, Input{ToolName: "Bash", CWD: "/repo", Command: cmd})
+	d := Decide(fs.lstat, fs.readFile, v, nil, Input{ToolName: "Bash", CWD: "/repo", Command: cmd})
 	if !d.Deny {
 		t.Fatal("expected deny (fail-closed on unclassifiable command)")
 	}

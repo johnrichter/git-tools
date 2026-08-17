@@ -8,23 +8,12 @@ import (
 	"strings"
 )
 
-const (
-	// ProjectDirEnvVar names the project root the tracking-doc exemption
-	// checks a Write/Edit target against (see decideFileWrite).
-	ProjectDirEnvVar = "CLAUDE_PROJECT_DIR"
-)
-
-// Input is the subset of a PreToolUse payload the gate needs, plus the
-// environment signal its tracking-doc exemption reads.
+// Input is the subset of a PreToolUse payload the gate needs.
 type Input struct {
 	ToolName string // "Write", "Edit", or "Bash"
 	CWD      string // session working directory, used for Bash
 	FilePath string // Write/Edit target
 	Command  string // Bash command
-
-	// ProjectDir is CLAUDE_PROJECT_DIR, empty when unset. Feeds the
-	// tracking-doc exemption in decideFileWrite.
-	ProjectDir string
 
 	// ProvisionedBinPath and ProvisionedBinDigest carry SC15's landing-verb
 	// allowance inputs. Both arrive as ARGV -- never from the environment: the
@@ -92,7 +81,6 @@ const (
 	remedyReadablePath       = "clear the filesystem error that path reports, or name a path inside a worktree instead"
 	remedyProveMembership    = "clear whatever leaves that `.git` entry unreadable, or work in a worktree the gate can confirm as one"
 	remedyRestoreVerbData    = "reinstall the gate's plugin data to restore classification, or run the command from a worktree, which is allowed whatever state the classifier is in"
-	remedyRestoreDocData     = "reinstall the gate's plugin data to restore the tracking-doc set, or make this edit inside a worktree of the repository that contains the file"
 )
 
 // deny builds a denial whose Reason states what the gate found and then, after
@@ -105,18 +93,17 @@ func deny(situation, remedy string) Decision {
 }
 
 // Decide evaluates one PreToolUse call against the worktree-isolation
-// invariant: a repo-modifying write outside a worktree is denied, a call
-// this gate cannot resolve confidently is denied too (fail closed), and a
-// classifier or tracking-doc data-artifact defect that could have affected
-// the verdict denies as well rather than failing open. The one exception is
-// Decision.Degraded: a defect surfaced without changing the verdict, because
-// the call was already independently resolved. On the Bash axis the verdict
-// also judges the paths a write-class piece names, not just its effective cwd
-// (SC20), and exempts the digest-verified provisioned landing CLI (SC15).
-func Decide(lstat LstatFunc, readFile ReadFileFunc, verbs Verbs, verbsErr error, trackingDocs TrackingDocs, trackingDocsErr error, in Input) Decision {
+// invariant: a repo-modifying write outside a worktree is denied, and a call
+// this gate cannot resolve confidently is denied too (fail closed). The one
+// exception is Decision.Degraded: a classifier defect surfaced without
+// changing the verdict, because the call was already independently resolved.
+// On the Bash axis the verdict also judges the paths a write-class piece
+// names, not just its effective cwd (SC20), and exempts the digest-verified
+// provisioned landing CLI (SC15).
+func Decide(lstat LstatFunc, readFile ReadFileFunc, verbs Verbs, verbsErr error, in Input) Decision {
 	switch in.ToolName {
 	case "Write", "Edit":
-		return decideFileWrite(lstat, readFile, trackingDocs, trackingDocsErr, in)
+		return decideFileWrite(lstat, readFile, in)
 	case "Bash":
 		return decideBash(lstat, readFile, verbs, verbsErr, in)
 	default:
@@ -124,24 +111,10 @@ func Decide(lstat LstatFunc, readFile ReadFileFunc, verbs Verbs, verbsErr error,
 	}
 }
 
-func decideFileWrite(lstat LstatFunc, readFile ReadFileFunc, trackingDocs TrackingDocs, trackingDocsErr error, in Input) Decision {
+func decideFileWrite(lstat LstatFunc, readFile ReadFileFunc, in Input) Decision {
 	filePath := in.FilePath
 	if filePath == "" {
 		return Decision{}
-	}
-
-	if underProjectDir(in.ProjectDir, filePath) {
-		if trackingDocsErr != nil {
-			// Can't verify tracking-doc membership without the data
-			// artifact -- deny rather than risk allowing an unisolated
-			// write on a packaging defect.
-			return deny(fmt.Sprintf(
-				"cannot verify the tracking-doc exemption for %q, so the gate cannot tell an exempt tracking doc from repository content (%v)",
-				filePath, trackingDocsErr), remedyRestoreDocData)
-		}
-		if trackingDocs.has(filepath.Base(filePath)) {
-			return Decision{}
-		}
 	}
 
 	root, gitEntry, found, err := FindRepoRoot(lstat, filepath.Dir(filePath))
@@ -163,20 +136,6 @@ func decideFileWrite(lstat LstatFunc, readFile ReadFileFunc, trackingDocs Tracki
 		return deny(fmt.Sprintf(
 			"cannot determine whether %q is a worktree, so the gate cannot confirm a write to %q is isolated", root, filePath), remedyProveMembership)
 	}
-}
-
-// underProjectDir reports whether filePath sits at any depth under
-// projectDir. False when projectDir is empty (unset) or filePath resolves
-// outside it, including a same-prefix sibling directory.
-func underProjectDir(projectDir, filePath string) bool {
-	if projectDir == "" {
-		return false
-	}
-	rel, err := filepath.Rel(projectDir, filePath)
-	if err != nil {
-		return false
-	}
-	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 func decideBash(lstat LstatFunc, readFile ReadFileFunc, verbs Verbs, verbsErr error, in Input) Decision {
