@@ -4,14 +4,14 @@
 # Go's cross-compilation builds every GOOS/GOARCH cell from one Linux host.
 #
 # Triggers on a vX.Y.Z tag push (SC-VERSIONING: tag prefix == module path from repo root,
-# which is empty for this single, root-level module; guardrail's tag-prefix.sh enforces this
+# which is empty for this single, root-level module; build-test's own tag-validate step enforces this
 # in ci.yml on the same push). A manual workflow_dispatch run defaults to dry_run: true, so a
 # change to this file can be exercised without cutting a tag or touching GitHub Releases.
 #
-# This workflow re-runs tag-prefix.sh itself rather than trusting ci.yml's guardrail job: a
-# tag push fires both workflows independently, and neither GitHub Actions run gates the other,
-# so a malformed tag rejected by ci.yml would otherwise still reach `gh release create` here
-# undisturbed.
+# This workflow validates the tag itself rather than trusting ci.yml's build-test job: a
+# tag push fires both workflows independently, and neither GitHub Actions run gates the
+# other, so a malformed tag rejected by ci.yml would otherwise still reach `gh release
+# create` here undisturbed.
 #
 # All build output is written under $RUNNER_TEMP, never inside the checkout. Go's build info
 # reports vcs.modified=true whenever `git status --porcelain` is non-empty at build time, and an
@@ -62,9 +62,32 @@ jobs:
           set -euo pipefail
           echo "ARTIFACTS_DIR=${RUNNER_TEMP}/release-artifacts" >> "$GITHUB_ENV"
 
+      # Installs language-tools 2.1.0 from its own published GitHub release,
+      # verifying the downloaded archive's sha256 against that release's own
+      # checksums.txt and failing closed on a mismatch (CONTRACT-CI-LT-INSTALL).
+      # Runs only on a tag push, the same condition as the tag-validate step it
+      # feeds, so a workflow_dispatch run downloads nothing.
+      - name: Install language-tools (pinned release)
+        if: ${{ github.event_name == 'push' }}
+        env:
+          LANGUAGE_TOOLS_VERSION: "2.1.0"
+          LANGUAGE_TOOLS_REPO: johnrichter/language-tools
+        run: |
+          set -euo pipefail
+          archive="language-tools_${LANGUAGE_TOOLS_VERSION}_linux_amd64.tar.gz"
+          base_url="https://github.com/${LANGUAGE_TOOLS_REPO}/releases/download/v${LANGUAGE_TOOLS_VERSION}"
+          curl -fsSL -o "${archive}" "${base_url}/${archive}"
+          curl -fsSL -o checksums.txt "${base_url}/checksums.txt"
+          grep " ${archive}\$" checksums.txt | sha256sum -c -
+          mkdir -p "${HOME}/.local/bin"
+          tar -xzf "${archive}" -C "${HOME}/.local/bin" language-tools
+          chmod +x "${HOME}/.local/bin/language-tools"
+          echo "${HOME}/.local/bin" >> "$GITHUB_PATH"
+          rm -f "${archive}" checksums.txt
+
       - name: Tag conforms to SC-VERSIONING
         if: ${{ github.event_name == 'push' }}
-        run: bash release/guard/tag-prefix.sh "${GITHUB_REF_NAME}"
+        run: language-tools tag validate "${GITHUB_REF_NAME}" --module .
 
       - uses: actions/setup-go@v5
         with:
