@@ -42,7 +42,7 @@ invocation time, never a walk of history.
 Exit codes:
   0  success              ref advanced (or already matched) on the remote
   10 caveats              remote already has ref at this commit; no-op
-  30 precondition_unmet   working tree has tracked or staged changes
+  30 precondition_unmet   working tree has tracked or staged changes, or a content guardrail flagged a file
   40 not_found            ref is neither a local branch nor a local tag
   41 conflict             ref names a branch, but HEAD is not on it
   50 usage                --repo or --config was passed
@@ -84,6 +84,13 @@ Exit codes:
 				return finishDiagnostic(cmd, nil, clikit.NewPreconditionUnmet, "precondition_unmet.git.dirty_tree",
 					"the working tree has tracked modifications or staged changes relative to HEAD",
 					clikit.Manual("commit or stash the pending changes, then re-run"), nil)
+			}
+
+			// The content-guardrail scan runs before anything is published:
+			// push never retargets away from ".", so the gate scans the same
+			// working tree pushRef is about to advance on the remote.
+			if err := scanGate(cmd, cfg, ".", "push", nil); err != nil {
+				return err
 			}
 
 			isBranch, err := gitexec.RefExists(ctx, ".", "heads", ref)

@@ -26,6 +26,14 @@ func newRebaseCmd() *cobra.Command {
 				return repoErr
 			}
 
+			// The content-guardrail scan runs before the rebase touches
+			// anything: a rebase rewrites the checked-out branch in place,
+			// so a refusal here is what keeps a flagged commit from ever
+			// being replayed.
+			if err := scanGate(cmd, cfg, repo.Dir, "rebase", nil); err != nil {
+				return err
+			}
+
 			onto, _ := cmd.Flags().GetString("onto")
 			preserveMerges, _ := cmd.Flags().GetBool("preserve-merges")
 			dryRun, _ := cmd.Flags().GetBool("dry-run")

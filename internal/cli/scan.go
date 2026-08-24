@@ -7,6 +7,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/johnrichter/claude-shared-tooling/go/clikit"
 	"github.com/johnrichter/claude-shared-tooling/go/githooks"
 	"github.com/johnrichter/claude-shared-tooling/go/sysops"
 )
@@ -113,30 +114,11 @@ func newScanAllCmd() *cobra.Command {
 			}
 			staged, _ := cmd.Flags().GetBool("staged")
 
-			secrets, err := githooks.ScanSecrets(cfg.Repo, githooks.DefaultSkipRules)
+			outcome, err := scanTree(cmd.Context(), cfg.Repo, cfg, staged)
 			if err != nil {
-				return finishErr(cmd, nil, "internal.githooks.scan_secrets_failed", "scan for secrets", err)
+				return finishErr(cmd, nil, "internal.githooks.scan_failed", "run the content scan", err)
 			}
-			candidates, err := listCandidates(cmd.Context(), cfg.Repo, staged)
-			if err != nil {
-				return finishErr(cmd, nil, "internal.git.list_candidates_failed", "list candidate files", err)
-			}
-			rawBinary, err := githooks.ScanRawBinary(cfg.Repo, candidates, githooks.DefaultSkipRules, cfg.MaxBinaryBytes, lfsRouteChecker(cmd.Context(), cfg.Repo))
-			if err != nil {
-				return finishErr(cmd, nil, "internal.githooks.scan_raw_binary_failed", "scan for raw binaries", err)
-			}
-			failures, warnings, err := githooks.ScanPrivacy(cfg.Repo, tier, githooks.PrivacyOptions{SkipRules: githooks.DefaultSkipRules})
-			if err != nil {
-				return finishErr(cmd, nil, "internal.githooks.scan_privacy_failed", "scan for privacy violations", err)
-			}
-
-			return emitScan(cmd, githooks.ScanOutcome{
-				Secrets:         secrets,
-				RawBinary:       rawBinary,
-				PrivacyFailures: failures,
-				PrivacyWarnings: warnings,
-				Strict:          cfg.Strict,
-			})
+			return emitScan(cmd, outcome)
 		},
 	}
 	// --staged narrows only the raw-binary/LFS check, which is the one scan
@@ -157,6 +139,87 @@ func emitScan(cmd *cobra.Command, outcome githooks.ScanOutcome) error {
 		return finishErr(cmd, nil, "internal.result.build_failed", "build scan result", err)
 	}
 	return finishCode(code)
+}
+
+// scanTree runs every scanner over dir and folds the results into one
+// ScanOutcome — the single computation "scan all" and scanGate share, so a
+// rule added to any of the three underlying scanners covers every caller
+// without a second copy of the sequence to keep in sync. staged narrows only
+// the raw-binary candidate list to git's staged diff instead of the full
+// tracked tree; secrets and privacy always scan the full tracked tree
+// regardless (see newScanAllCmd's --staged flag help for why).
+func scanTree(ctx context.Context, dir string, cfg *Config, staged bool) (githooks.ScanOutcome, error) {
+	secrets, err := githooks.ScanSecrets(dir, githooks.DefaultSkipRules)
+	if err != nil {
+		return githooks.ScanOutcome{}, fmt.Errorf("scan for secrets: %w", err)
+	}
+	candidates, err := listCandidates(ctx, dir, staged)
+	if err != nil {
+		return githooks.ScanOutcome{}, fmt.Errorf("list candidate files: %w", err)
+	}
+	rawBinary, err := githooks.ScanRawBinary(dir, candidates, githooks.DefaultSkipRules, cfg.MaxBinaryBytes, lfsRouteChecker(ctx, dir))
+	if err != nil {
+		return githooks.ScanOutcome{}, fmt.Errorf("scan for raw binaries: %w", err)
+	}
+	failures, warnings, err := githooks.ScanPrivacy(dir, githooks.PrivacyTier(cfg.PrivacyTier), githooks.PrivacyOptions{SkipRules: githooks.DefaultSkipRules})
+	if err != nil {
+		return githooks.ScanOutcome{}, fmt.Errorf("scan for privacy violations: %w", err)
+	}
+	return githooks.ScanOutcome{
+		Secrets:         secrets,
+		RawBinary:       rawBinary,
+		PrivacyFailures: failures,
+		PrivacyWarnings: warnings,
+		Strict:          cfg.Strict,
+	}, nil
+}
+
+// scanGate runs scanTree over dir's full tracked tree — the content
+// guardrails an installed pre-commit hook already applies to every commit —
+// and refuses with a precondition_unmet result on any finding: merge, push
+// and rebase each call this one entry point before they act, rather than
+// each carrying its own copy of the scan, so a rule scanTree gains covers
+// all three write verbs at once. It scans the full tree rather than a staged
+// diff: none of the three write verbs acts against a pending index change,
+// they act on committed history that is about to be landed, published, or
+// replayed. verb names the action being gated ("merge", "push", "rebase")
+// for the refusal's remedy text; data seeds the refusal's result data. It
+// returns nil once the tree scans clean.
+func scanGate(cmd *cobra.Command, cfg *Config, dir, verb string, data map[string]any) error {
+	tier := githooks.PrivacyTier(cfg.PrivacyTier)
+	if !tier.Known() {
+		return finishUsage(cmd, data, "usage.cli.invalid_privacy_tier", fmt.Sprintf("--privacy-tier %q is not one of public, datadog, personal", cfg.PrivacyTier))
+	}
+
+	outcome, err := scanTree(cmd.Context(), dir, cfg, false)
+	if err != nil {
+		return finishErr(cmd, data, "internal.githooks.scan_failed", "run the content scan", err)
+	}
+	result, err := githooks.BuildHookResult(commandPath(cmd), outcome)
+	if err != nil {
+		return finishErr(cmd, data, "internal.result.build_failed", "build scan result", err)
+	}
+	if result.Status != clikit.StatusPreconditionUnmet {
+		return nil
+	}
+	finding, ok := result.Governing()
+	if !ok {
+		return nil
+	}
+	path, _ := finding.Context["path"].(string)
+	rule, _ := finding.Context["rule"].(string)
+	return finishDiagnostic(cmd, data, clikit.NewPreconditionUnmet, finding.Code, finding.Message,
+		clikit.Manual(fmt.Sprintf("fix or remove the flagged content at %s and re-run; nothing was %s", path, pastTense(verb))),
+		map[string]any{"path": path, "rule": rule, "findings": len(result.Errors)})
+}
+
+// pastTense renders verb ("merge", "push", "rebase") as the participle a
+// scanGate refusal reports nothing was.
+func pastTense(verb string) string {
+	if verb == "push" {
+		return "pushed"
+	}
+	return verb + "d"
 }
 
 // listCandidates enumerates the files a scan should consider: the full
