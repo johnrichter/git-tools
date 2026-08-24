@@ -126,59 +126,73 @@ Exit codes:
 				}
 			}
 
-			localSHA, err := localRefSHA(ctx, ".", fullRef)
-			if err != nil {
-				return finishErr(cmd, nil, "internal.git.resolve_ref_failed", fmt.Sprintf("resolve %s", fullRef), err)
-			}
-			remoteSHA, hadRemote, err := remoteRefSHA(ctx, ".", cfg.Remote, fullRef)
-			if err != nil {
-				return finishErr(cmd, nil, "internal.git.query_remote_failed", fmt.Sprintf("query %s on %s", fullRef, cfg.Remote), err)
-			}
-
-			dryRun, _ := cmd.Flags().GetBool("dry-run")
-			data := map[string]any{"ref": ref, "kind": refKind, "remote": cfg.Remote, "dry_run": dryRun}
-
-			if hadRemote && remoteSHA == localSHA {
-				data["head"] = localSHA
-				return finishCaveat(cmd, data, "caveats.git.push_already_current",
-					fmt.Sprintf("%s already matches %s at %s; nothing to push", fullRef, cfg.Remote, localSHA),
-					clikit.Manual("no action needed"), map[string]any{"ref": ref})
-			}
-
-			refspec := fullRef + ":" + fullRef
-			if dryRun {
-				data["would_push"] = refspec
-				clikitResult, buildErr := clikitSuccess(cmd, data)
-				if buildErr != nil {
-					return finishErr(cmd, nil, "internal.result.build_failed", "build result", buildErr)
-				}
-				return finish(cmd, clikitResult)
-			}
-
-			res, err := gitexec.RunGit(ctx, ".", "push", cfg.Remote, refspec)
-			if err != nil {
-				return finishErr(cmd, nil, "internal.git.push_failed", fmt.Sprintf("push %s to %s", fullRef, cfg.Remote), err)
-			}
-			if res.ExitCode != 0 {
-				return finishDiagnostic(cmd, nil, clikit.NewTransient, "transient.git.push_rejected",
-					strings.TrimSpace(string(res.Stderr)),
-					clikit.Reinvoke("git-tools", "push", ref),
-					map[string]any{"ref": ref, "remote": cfg.Remote})
-			}
-
-			if hadRemote {
-				data["old_head"] = remoteSHA
-			}
-			data["new_head"] = localSHA
-			clikitResult, buildErr := clikitSuccess(cmd, data)
-			if buildErr != nil {
-				return finishErr(cmd, nil, "internal.result.build_failed", "build result", buildErr)
-			}
-			return finish(cmd, clikitResult)
+			return pushRef(cmd, cfg, ref, refKind, fullRef)
 		},
 	}
 	cmd.Flags().Bool("dry-run", false, "report what would be pushed without pushing anything")
 	return cmd
+}
+
+// pushRef advances fullRef (refKind "branch" or "tag") on cfg.Remote to
+// ref's current local object id, or reports the no-op caveat when the
+// remote already matches — this is the one place in the package that runs
+// `git push`. push's own RunE drives it once it has resolved ref's kind and
+// confirmed HEAD, if a branch; "tag create" drives it directly for a tag it
+// just made, skipping straight past those branch-only checks. A caller
+// registering a "dry-run" bool flag gets dry-run reporting for free; one
+// that doesn't (as "tag create" doesn't) always performs the push.
+func pushRef(cmd *cobra.Command, cfg *Config, ref, refKind, fullRef string) error {
+	ctx := cmd.Context()
+
+	localSHA, err := localRefSHA(ctx, ".", fullRef)
+	if err != nil {
+		return finishErr(cmd, nil, "internal.git.resolve_ref_failed", fmt.Sprintf("resolve %s", fullRef), err)
+	}
+	remoteSHA, hadRemote, err := remoteRefSHA(ctx, ".", cfg.Remote, fullRef)
+	if err != nil {
+		return finishErr(cmd, nil, "internal.git.query_remote_failed", fmt.Sprintf("query %s on %s", fullRef, cfg.Remote), err)
+	}
+
+	dryRun, _ := cmd.Flags().GetBool("dry-run")
+	data := map[string]any{"ref": ref, "kind": refKind, "remote": cfg.Remote, "dry_run": dryRun}
+
+	if hadRemote && remoteSHA == localSHA {
+		data["head"] = localSHA
+		return finishCaveat(cmd, data, "caveats.git.push_already_current",
+			fmt.Sprintf("%s already matches %s at %s; nothing to push", fullRef, cfg.Remote, localSHA),
+			clikit.Manual("no action needed"), map[string]any{"ref": ref})
+	}
+
+	refspec := fullRef + ":" + fullRef
+	if dryRun {
+		data["would_push"] = refspec
+		clikitResult, buildErr := clikitSuccess(cmd, data)
+		if buildErr != nil {
+			return finishErr(cmd, nil, "internal.result.build_failed", "build result", buildErr)
+		}
+		return finish(cmd, clikitResult)
+	}
+
+	res, err := gitexec.RunGit(ctx, ".", "push", cfg.Remote, refspec)
+	if err != nil {
+		return finishErr(cmd, nil, "internal.git.push_failed", fmt.Sprintf("push %s to %s", fullRef, cfg.Remote), err)
+	}
+	if res.ExitCode != 0 {
+		return finishDiagnostic(cmd, nil, clikit.NewTransient, "transient.git.push_rejected",
+			strings.TrimSpace(string(res.Stderr)),
+			clikit.Reinvoke("git-tools", "push", ref),
+			map[string]any{"ref": ref, "remote": cfg.Remote})
+	}
+
+	if hadRemote {
+		data["old_head"] = remoteSHA
+	}
+	data["new_head"] = localSHA
+	clikitResult, buildErr := clikitSuccess(cmd, data)
+	if buildErr != nil {
+		return finishErr(cmd, nil, "internal.result.build_failed", "build result", buildErr)
+	}
+	return finish(cmd, clikitResult)
 }
 
 // openHere confirms "." is a git working tree, or finishes cmd with a
