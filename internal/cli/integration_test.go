@@ -553,6 +553,83 @@ func TestScanPrivacy_InvalidTier_IsUsageError(t *testing.T) {
 	}
 }
 
+// TestScanPrivacy_PrivacyMarkerExemptConfigExemptsOnlyNamedPath covers `scan
+// privacy`'s own githooks.ScanPrivacy call, which builds MarkerExemptRules
+// itself rather than through the scanTree that merge/push/rebase share — so
+// nothing about that shared path proves this one passes the exemption at
+// all. A marker-bearing file under the configured privacy_marker_exempt path
+// passes; an identical file outside it still fails in the same repository.
+func TestScanPrivacy_PrivacyMarkerExemptConfigExemptsOnlyNamedPath(t *testing.T) {
+	bin := buildCLI(t)
+	dir := initRepo(t)
+	writeConfig(t, dir, "privacy_marker_exempt:\n  - fixtures\n")
+	commitNestedFile(t, dir, "fixtures/sample.md", markerFrontmatter, "add fixture sample")
+
+	// Run with the process's cwd in dir rather than pointing --repo at it:
+	// loadConfigFile auto-discovers .git-tools.yaml from the cwd only (see
+	// TestScanGate_PrivacyMarkerExemptConfigNotLoadedFromRepoFlagTarget).
+	r, exit := runCLIIn(t, bin, dir, "scan", "privacy", "--privacy-tier", "public")
+	if r.Status != "success" || exit != 0 {
+		t.Fatalf("status=%s exit=%d, want success/0: %+v", r.Status, exit, r)
+	}
+
+	commitNestedFile(t, dir, "docs/real.md", markerFrontmatter, "add real doc")
+	r, exit = runCLIIn(t, bin, dir, "scan", "privacy", "--privacy-tier", "public")
+	if r.Status != "precondition_unmet" || exit != 30 {
+		t.Fatalf("out-of-scope marker: status=%s exit=%d, want precondition_unmet/30: %+v", r.Status, exit, r)
+	}
+	if got, _ := r.Data["privacy_violations_found"].(float64); int(got) != markerFrontmatterFindings {
+		t.Fatalf("privacy_violations_found=%v, want %d (docs/real.md alone) — fixtures/sample.md was flagged too, so its marker exemption did not hold: %+v", r.Data["privacy_violations_found"], markerFrontmatterFindings, r.Data)
+	}
+	for _, e := range r.Errors {
+		context, _ := e["context"].(map[string]any)
+		if path, _ := context["path"].(string); path == "fixtures/sample.md" {
+			t.Fatalf("exempted path is named by a reported error: %+v", e)
+		}
+	}
+}
+
+// TestScanPrivacy_MalformedPrivacyMarkerExemptIsUsageError is the
+// silent-disable guard at `scan privacy`'s own call site: a malformed glob
+// must refuse the invocation by name, not reach fsx.ClassifyPath, where an
+// uncompilable pattern is demoted to an always-match and would exempt the
+// whole repository from the marker check. Without the validation the planted
+// docs/real.md marker goes unreported and this command exits success/0.
+func TestScanPrivacy_MalformedPrivacyMarkerExemptIsUsageError(t *testing.T) {
+	bin := buildCLI(t)
+	dir := initRepo(t)
+	writeConfig(t, dir, "privacy_marker_exempt:\n  - \"fixtures[\"\n")
+	commitNestedFile(t, dir, "docs/real.md", markerFrontmatter, "add real doc")
+
+	r, exit := runCLIIn(t, bin, dir, "scan", "privacy", "--privacy-tier", "public")
+	if r.Status != "usage" || exit != 50 {
+		t.Fatalf("status=%s exit=%d, want usage/50: %+v", r.Status, exit, r)
+	}
+	if len(r.Errors) == 0 || !strings.Contains(r.Errors[0]["message"].(string), "fixtures[") {
+		t.Fatalf("usage error does not name the malformed pattern: %+v", r.Errors)
+	}
+}
+
+// TestScanAll_MalformedPrivacyMarkerExemptIsUsageError is the same guard at
+// `scan all`'s call site. Its scan is scanTree, the one merge/push/rebase
+// share, but its validation is its own statement: delete that statement and
+// only this test fails — `scan all` would exit success/0 on the planted
+// docs/real.md marker while every gate test stayed green.
+func TestScanAll_MalformedPrivacyMarkerExemptIsUsageError(t *testing.T) {
+	bin := buildCLI(t)
+	dir := initRepo(t)
+	writeConfig(t, dir, "privacy_marker_exempt:\n  - \"fixtures[\"\n")
+	commitNestedFile(t, dir, "docs/real.md", markerFrontmatter, "add real doc")
+
+	r, exit := runCLIIn(t, bin, dir, "scan", "all", "--privacy-tier", "public")
+	if r.Status != "usage" || exit != 50 {
+		t.Fatalf("status=%s exit=%d, want usage/50: %+v", r.Status, exit, r)
+	}
+	if len(r.Errors) == 0 || !strings.Contains(r.Errors[0]["message"].(string), "fixtures[") {
+		t.Fatalf("usage error does not name the malformed pattern: %+v", r.Errors)
+	}
+}
+
 func TestScanAll_CombinesEveryScanner(t *testing.T) {
 	bin := buildCLI(t)
 	dir := initRepo(t)

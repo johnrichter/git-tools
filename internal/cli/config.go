@@ -29,11 +29,12 @@ const defaultConfigFile = ".git-tools.yaml"
 // another needs, loaded once at the root so a config file or environment
 // only has to state a setting once for every subcommand to see it.
 type Config struct {
-	Repo           string `koanf:"repo"`
-	Remote         string `koanf:"remote"`
-	PrivacyTier    string `koanf:"privacy_tier"`
-	Strict         bool   `koanf:"strict"`
-	MaxBinaryBytes int64  `koanf:"max_binary_bytes"`
+	Repo                string   `koanf:"repo"`
+	Remote              string   `koanf:"remote"`
+	PrivacyTier         string   `koanf:"privacy_tier"`
+	Strict              bool     `koanf:"strict"`
+	MaxBinaryBytes      int64    `koanf:"max_binary_bytes"`
+	PrivacyMarkerExempt []string `koanf:"privacy_marker_exempt"`
 }
 
 // defaultConfig seeds koanf's lowest-precedence layer. Every key here must
@@ -42,11 +43,12 @@ type Config struct {
 // across default/file/env/flag layers.
 func defaultConfig() map[string]interface{} {
 	return map[string]interface{}{
-		"repo":             ".",
-		"remote":           "origin",
-		"privacy_tier":     "public",
-		"strict":           false,
-		"max_binary_bytes": githooks.DefaultMaxBytes,
+		"repo":                  ".",
+		"remote":                "origin",
+		"privacy_tier":          "public",
+		"strict":                false,
+		"max_binary_bytes":      githooks.DefaultMaxBytes,
+		"privacy_marker_exempt": []string{},
 	}
 }
 

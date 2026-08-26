@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/bmatcuk/doublestar/v4"
 	"github.com/spf13/cobra"
 
 	"github.com/johnrichter/claude-shared-tooling/go/clikit"
+	"github.com/johnrichter/claude-shared-tooling/go/fsx"
 	"github.com/johnrichter/claude-shared-tooling/go/githooks"
 	"github.com/johnrichter/claude-shared-tooling/go/sysops"
 )
@@ -87,7 +89,13 @@ func newScanPrivacyCmd() *cobra.Command {
 			if !tier.Known() {
 				return finishUsage(cmd, nil, "usage.cli.invalid_privacy_tier", fmt.Sprintf("--privacy-tier %q is not one of public, datadog, personal", cfg.PrivacyTier))
 			}
-			failures, warnings, err := githooks.ScanPrivacy(cfg.Repo, tier, githooks.PrivacyOptions{SkipRules: githooks.DefaultSkipRules})
+			if bad, ok := malformedPrivacyMarkerExempt(cfg.PrivacyMarkerExempt); ok {
+				return finishUsage(cmd, nil, "usage.cli.invalid_privacy_marker_exempt", fmt.Sprintf("privacy_marker_exempt entry %q is not a valid glob pattern", bad))
+			}
+			failures, warnings, err := githooks.ScanPrivacy(cfg.Repo, tier, githooks.PrivacyOptions{
+				SkipRules:         githooks.DefaultSkipRules,
+				MarkerExemptRules: privacyMarkerExemptRules(cfg.PrivacyMarkerExempt),
+			})
 			if err != nil {
 				return finishErr(cmd, nil, "internal.githooks.scan_privacy_failed", "scan for privacy violations", err)
 			}
@@ -112,6 +120,9 @@ func newScanAllCmd() *cobra.Command {
 			if !tier.Known() {
 				return finishUsage(cmd, nil, "usage.cli.invalid_privacy_tier", fmt.Sprintf("--privacy-tier %q is not one of public, datadog, personal", cfg.PrivacyTier))
 			}
+			if bad, ok := malformedPrivacyMarkerExempt(cfg.PrivacyMarkerExempt); ok {
+				return finishUsage(cmd, nil, "usage.cli.invalid_privacy_marker_exempt", fmt.Sprintf("privacy_marker_exempt entry %q is not a valid glob pattern", bad))
+			}
 			staged, _ := cmd.Flags().GetBool("staged")
 
 			outcome, err := scanTree(cmd.Context(), cfg.Repo, cfg, staged)
@@ -129,6 +140,44 @@ func newScanAllCmd() *cobra.Command {
 	// every commit, not just the one that introduced it.
 	cmd.Flags().Bool("staged", false, "scan only staged files for the raw-binary check instead of the full tracked tree")
 	return cmd
+}
+
+// malformedPrivacyMarkerExempt reports the first configured
+// privacy_marker_exempt entry that does not compile as a doublestar glob, so
+// a caller can refuse the invocation outright. fsx.ClassifyPath treats an
+// unparseable pattern as an always-match rather than dropping it — correct
+// for a SkipRules-style ruleset, where "matched" means "be careful here", but
+// backwards for MarkerExemptRules, where "matched" means "skip the marker
+// check": a malformed entry would silently exempt every path in the repo
+// instead of none, so it must fail loudly here instead of ever reaching
+// ClassifyPath.
+func malformedPrivacyMarkerExempt(prefixes []string) (string, bool) {
+	for _, p := range prefixes {
+		if !doublestar.ValidatePattern(strings.TrimSuffix(p, "/")) {
+			return p, true
+		}
+	}
+	return "", false
+}
+
+// privacyMarkerExemptRules converts cfg's privacy_marker_exempt path-prefix
+// list into the fsx.Rule ruleset githooks.PrivacyOptions.MarkerExemptRules
+// expects. Each prefix exempts both itself, as a single named file, and
+// everything under it, as a directory — a consuming repo's test/eval fixture
+// path can name either shape without knowing which glob githooks needs. This
+// only ever feeds MarkerExemptRules, never SkipRules: an exempt path still
+// gets the secret and internal-identifier scan, just not the frontmatter-
+// marker check.
+func privacyMarkerExemptRules(prefixes []string) []fsx.Rule {
+	var rules []fsx.Rule
+	for _, p := range prefixes {
+		trimmed := strings.TrimSuffix(p, "/")
+		rules = append(rules,
+			fsx.Rule{Pattern: trimmed, Class: githooks.SkipClass},
+			fsx.Rule{Pattern: trimmed + "/**", Class: githooks.SkipClass},
+		)
+	}
+	return rules
 }
 
 // emitScan hands outcome to githooks' own result-builder, which produces the
@@ -161,7 +210,10 @@ func scanTree(ctx context.Context, dir string, cfg *Config, staged bool) (githoo
 	if err != nil {
 		return githooks.ScanOutcome{}, fmt.Errorf("scan for raw binaries: %w", err)
 	}
-	failures, warnings, err := githooks.ScanPrivacy(dir, githooks.PrivacyTier(cfg.PrivacyTier), githooks.PrivacyOptions{SkipRules: githooks.DefaultSkipRules})
+	failures, warnings, err := githooks.ScanPrivacy(dir, githooks.PrivacyTier(cfg.PrivacyTier), githooks.PrivacyOptions{
+		SkipRules:         githooks.DefaultSkipRules,
+		MarkerExemptRules: privacyMarkerExemptRules(cfg.PrivacyMarkerExempt),
+	})
 	if err != nil {
 		return githooks.ScanOutcome{}, fmt.Errorf("scan for privacy violations: %w", err)
 	}
@@ -189,6 +241,9 @@ func scanGate(cmd *cobra.Command, cfg *Config, dir, verb string, data map[string
 	tier := githooks.PrivacyTier(cfg.PrivacyTier)
 	if !tier.Known() {
 		return finishUsage(cmd, data, "usage.cli.invalid_privacy_tier", fmt.Sprintf("--privacy-tier %q is not one of public, datadog, personal", cfg.PrivacyTier))
+	}
+	if bad, ok := malformedPrivacyMarkerExempt(cfg.PrivacyMarkerExempt); ok {
+		return finishUsage(cmd, data, "usage.cli.invalid_privacy_marker_exempt", fmt.Sprintf("privacy_marker_exempt entry %q is not a valid glob pattern", bad))
 	}
 
 	outcome, err := scanTree(cmd.Context(), dir, cfg, false)

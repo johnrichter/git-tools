@@ -3,6 +3,7 @@ module github.com/johnrichter/git-tools
 go 1.26
 
 require (
+	github.com/bmatcuk/doublestar/v4 v4.10.0
 	github.com/gofrs/flock v0.13.0
 	github.com/johnrichter/claude-shared-tooling/go/clikit v0.1.0
 	github.com/johnrichter/claude-shared-tooling/go/fsx v0.1.0
@@ -20,7 +21,6 @@ require (
 )
 
 require (
-	github.com/bmatcuk/doublestar/v4 v4.10.0 // indirect
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
 	github.com/go-viper/mapstructure/v2 v2.4.0 // indirect
 	github.com/google/renameio/v2 v2.0.2 // indirect
