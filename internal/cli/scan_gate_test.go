@@ -470,6 +470,83 @@ func TestScanGate_ValidPrivacyMarkerExemptStillWorksAlongsideValidation(t *testi
 	}
 }
 
+// plantUntrackedFile writes a file under dir without adding or committing
+// it — the shape of a nested Claude Code worktree's content, which the
+// primary checkout's own .gitignore excludes from version control but a raw
+// filesystem walk (what the content-guardrail scanners run) still visits.
+func plantUntrackedFile(t *testing.T, dir, name, content string) {
+	t.Helper()
+	full := filepath.Join(dir, name)
+	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// awsExampleKeySecret is AWS's own well-known documentation placeholder
+// access key — the exact false-positive shape a test fixture in an unrelated
+// nested worktree tripped the secret scanner on.
+const awsExampleKeySecret = "aws_access_key_id = AKIAIOSFODNN7EXAMPLE\n"
+
+// awsExampleKeyFindings is how many findings one non-exempt
+// awsExampleKeySecret file accounts for: ScanSecrets and ScanPrivacy both
+// independently check the same closed set of secret signatures, so a single
+// AWS-key-shaped file fires once from each scanner. Like
+// markerFrontmatterFindings above, this is the per-file unit the scoping
+// assertion counts in.
+const awsExampleKeyFindings = 2
+
+// TestScanGate_NestedWorktreeSecretIsSkipped reproduces the bug directly: a
+// secret-shaped fixture planted at .claude/worktrees/<slug>/..., exactly
+// where this fleet's own governance convention creates a linked worktree
+// inside the primary checkout, must not block a merge — that content belongs
+// to a different, unrelated branch's working tree, not to the repo being
+// scanned.
+func TestScanGate_NestedWorktreeSecretIsSkipped(t *testing.T) {
+	bin := buildCLI(t)
+	dir := signingRepo(t)
+	plantUntrackedFile(t, dir, ".claude/worktrees/harness-worktree-native/internal/cli/integration_test.go", awsExampleKeySecret)
+	runGit(t, dir, "branch", "feature")
+	runGit(t, dir, "checkout", "-q", "feature")
+	tip := commitFile(t, dir, "feature.txt", "feature\n", "feature work")
+	runGit(t, dir, "checkout", "-q", "main")
+
+	r, exit := runCLI(t, bin, "--repo", dir, "merge", "feature")
+	if r.Status != "success" || exit != 0 {
+		t.Fatalf("status=%s exit=%d, want success/0 (nested worktree content must not be scanned): %+v", r.Status, exit, r)
+	}
+	if got := runGit(t, dir, "rev-parse", "HEAD"); got != tip {
+		t.Fatalf("main did not fast-forward to feature tip: got %s want %s", got, tip)
+	}
+}
+
+// TestScanGate_NestedWorktreeSkipDoesNotHideARealFinding proves the skip
+// rule is scoped to .claude/worktrees/ and does not disable secret scanning
+// generally: a secret planted in the scanned repo's own tracked tree still
+// refuses the merge, in the same run as an identical secret sitting inert
+// under .claude/worktrees/.
+func TestScanGate_NestedWorktreeSkipDoesNotHideARealFinding(t *testing.T) {
+	bin := buildCLI(t)
+	dir := initRepo(t)
+	plantUntrackedFile(t, dir, ".claude/worktrees/harness-worktree-native/internal/cli/integration_test.go", awsExampleKeySecret)
+	head := commitNestedFile(t, dir, "config/prod.env", awsExampleKeySecret, "add prod config")
+	runGit(t, dir, "branch", "feature")
+	runGit(t, dir, "checkout", "-q", "feature")
+	commitFile(t, dir, "feature.txt", "feature\n", "feature work")
+	runGit(t, dir, "checkout", "-q", "main")
+
+	r, exit := runCLI(t, bin, "--repo", dir, "merge", "feature")
+	if r.Status != "precondition_unmet" || exit != 30 {
+		t.Fatalf("status=%s exit=%d, want precondition_unmet/30: %+v", r.Status, exit, r)
+	}
+	assertRefusalNamesOnlyFinding(t, r, "config/prod.env", ".claude/worktrees/harness-worktree-native/internal/cli/integration_test.go", awsExampleKeyFindings)
+	if got := runGit(t, dir, "rev-parse", "HEAD"); got != head {
+		t.Fatalf("HEAD moved from %s to %s — merge landed despite the guardrail finding", head, got)
+	}
+}
+
 // TestScanGate_AllThreeWriteVerbsCallTheSharedEntryPoint pins the "one
 // shared scan entry point, not three copies" requirement at the source
 // level: each write verb's own file calls scanGate exactly once, and none

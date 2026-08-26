@@ -14,6 +14,22 @@ import (
 	"github.com/johnrichter/claude-shared-tooling/go/sysops"
 )
 
+// gitToolsSkipRules layers one git-tools-specific exclusion on top of
+// githooks.DefaultSkipRules: nested Claude Code worktrees at
+// .claude/worktrees/<slug>/, created at a repo's root by this fleet's own
+// governance convention for isolated feature-branch work inside the primary
+// checkout. That directory's content belongs to whatever unrelated,
+// in-progress branch each nested worktree happens to be on — not to "this
+// repo's tree" for scanning purposes — so every scanner skips it entirely,
+// the same way DefaultSkipRules already skips .git internals. The pattern is
+// anchored to the scanned root (no leading "**/") so it can only ever match
+// the literal .claude/worktrees/ prefix, never an unrelated worktrees/
+// directory that happens to be legitimately tracked elsewhere in the tree.
+var gitToolsSkipRules = append(append([]fsx.Rule(nil), githooks.DefaultSkipRules...), fsx.Rule{
+	Pattern: ".claude/worktrees/**",
+	Class:   githooks.SkipClass,
+})
+
 func newScanCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "scan",
@@ -37,7 +53,7 @@ func newScanSecretsCmd() *cobra.Command {
 			if err != nil {
 				return finishErr(cmd, nil, "internal.config.load_failed", "load configuration", err)
 			}
-			findings, err := githooks.ScanSecrets(cfg.Repo, githooks.DefaultSkipRules)
+			findings, err := githooks.ScanSecrets(cfg.Repo, gitToolsSkipRules)
 			if err != nil {
 				return finishErr(cmd, nil, "internal.githooks.scan_secrets_failed", "scan for secrets", err)
 			}
@@ -63,7 +79,7 @@ func newScanLFSCmd() *cobra.Command {
 			if err != nil {
 				return finishErr(cmd, nil, "internal.git.list_candidates_failed", "list candidate files", err)
 			}
-			findings, err := githooks.ScanRawBinary(cfg.Repo, candidates, githooks.DefaultSkipRules, cfg.MaxBinaryBytes, lfsRouteChecker(cmd.Context(), cfg.Repo))
+			findings, err := githooks.ScanRawBinary(cfg.Repo, candidates, gitToolsSkipRules, cfg.MaxBinaryBytes, lfsRouteChecker(cmd.Context(), cfg.Repo))
 			if err != nil {
 				return finishErr(cmd, nil, "internal.githooks.scan_raw_binary_failed", "scan for raw binaries", err)
 			}
@@ -93,7 +109,7 @@ func newScanPrivacyCmd() *cobra.Command {
 				return finishUsage(cmd, nil, "usage.cli.invalid_privacy_marker_exempt", fmt.Sprintf("privacy_marker_exempt entry %q is not a valid glob pattern", bad))
 			}
 			failures, warnings, err := githooks.ScanPrivacy(cfg.Repo, tier, githooks.PrivacyOptions{
-				SkipRules:         githooks.DefaultSkipRules,
+				SkipRules:         gitToolsSkipRules,
 				MarkerExemptRules: privacyMarkerExemptRules(cfg.PrivacyMarkerExempt),
 			})
 			if err != nil {
@@ -198,7 +214,7 @@ func emitScan(cmd *cobra.Command, outcome githooks.ScanOutcome) error {
 // tracked tree; secrets and privacy always scan the full tracked tree
 // regardless (see newScanAllCmd's --staged flag help for why).
 func scanTree(ctx context.Context, dir string, cfg *Config, staged bool) (githooks.ScanOutcome, error) {
-	secrets, err := githooks.ScanSecrets(dir, githooks.DefaultSkipRules)
+	secrets, err := githooks.ScanSecrets(dir, gitToolsSkipRules)
 	if err != nil {
 		return githooks.ScanOutcome{}, fmt.Errorf("scan for secrets: %w", err)
 	}
@@ -206,12 +222,12 @@ func scanTree(ctx context.Context, dir string, cfg *Config, staged bool) (githoo
 	if err != nil {
 		return githooks.ScanOutcome{}, fmt.Errorf("list candidate files: %w", err)
 	}
-	rawBinary, err := githooks.ScanRawBinary(dir, candidates, githooks.DefaultSkipRules, cfg.MaxBinaryBytes, lfsRouteChecker(ctx, dir))
+	rawBinary, err := githooks.ScanRawBinary(dir, candidates, gitToolsSkipRules, cfg.MaxBinaryBytes, lfsRouteChecker(ctx, dir))
 	if err != nil {
 		return githooks.ScanOutcome{}, fmt.Errorf("scan for raw binaries: %w", err)
 	}
 	failures, warnings, err := githooks.ScanPrivacy(dir, githooks.PrivacyTier(cfg.PrivacyTier), githooks.PrivacyOptions{
-		SkipRules:         githooks.DefaultSkipRules,
+		SkipRules:         gitToolsSkipRules,
 		MarkerExemptRules: privacyMarkerExemptRules(cfg.PrivacyMarkerExempt),
 	})
 	if err != nil {
