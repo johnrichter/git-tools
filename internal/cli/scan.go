@@ -330,13 +330,17 @@ func scanGate(cmd *cobra.Command, cfg *Config, dir, verb string, data map[string
 		map[string]any{"path": path, "rule": rule, "findings": len(result.Errors)})
 }
 
-// pastTense renders verb ("merge", "push", "rebase") as the participle a
-// scanGate refusal reports nothing was.
+// pastTense renders verb ("merge", "push", "rebase", "tag") as the participle
+// a scanGate refusal reports nothing was.
 func pastTense(verb string) string {
-	if verb == "push" {
+	switch verb {
+	case "push":
 		return "pushed"
+	case "tag":
+		return "tagged"
+	default:
+		return verb + "d"
 	}
-	return verb + "d"
 }
 
 // listCandidates enumerates the files a scan should consider: the full

@@ -22,8 +22,11 @@ const envPrefix = "GITTOOLS_"
 
 // defaultConfigFile is the config file loadConfig looks for when the caller
 // does not pass --config. Its absence is not an error: a config file is an
-// optional way to stop repeating flags, never a requirement.
-const defaultConfigFile = ".git-tools.yaml"
+// optional way to stop repeating flags, never a requirement. Named without a
+// leading dot on purpose: it is ordinary, reviewed repo content, not a
+// hidden dotfile, and its own presence is a signal a reader should be able
+// to see without passing -a to ls.
+const defaultConfigFile = "git-tools.yaml"
 
 // Config is git-tools' resolved settings: every field a value one command or
 // another needs, loaded once at the root so a config file or environment

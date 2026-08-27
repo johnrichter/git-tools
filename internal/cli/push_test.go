@@ -91,7 +91,7 @@ func TestPush_Refusals(t *testing.T) {
 		{
 			name:        "--config retargeting flag",
 			setup:       func(t *testing.T, dir string) {},
-			args:        []string{"push", "main", "--config", ".git-tools.yaml"},
+			args:        []string{"push", "main", "--config", "git-tools.yaml"},
 			wantStatus:  "usage",
 			wantExit:    50,
 			wantMessage: "--repo/--config are refused",

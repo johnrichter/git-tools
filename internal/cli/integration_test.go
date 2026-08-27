@@ -521,7 +521,7 @@ func TestScanSecrets_SecretScanExemptConfigExemptsOnlyNamedPath(t *testing.T) {
 	commitNestedFile(t, dir, "fixtures/sample.env", secretFixtureSecret, "add fixture sample")
 
 	// Run with the process's cwd in dir rather than pointing --repo at it:
-	// loadConfigFile auto-discovers .git-tools.yaml from the cwd only (see
+	// loadConfigFile auto-discovers git-tools.yaml from the cwd only (see
 	// TestScanGate_PrivacyMarkerExemptConfigNotLoadedFromRepoFlagTarget).
 	r, exit := runCLIIn(t, bin, dir, "scan", "secrets")
 	if r.Status != "success" || exit != 0 {
@@ -635,7 +635,7 @@ func TestScanPrivacy_SecretScanExemptConfigExemptsOnlySecretFinding(t *testing.T
 	commitNestedFile(t, dir, "fixtures/sample.md", secretExemptMarkerFixture, "add fixture sample")
 
 	// Run with the process's cwd in dir rather than pointing --repo at it:
-	// loadConfigFile auto-discovers .git-tools.yaml from the cwd only (see
+	// loadConfigFile auto-discovers git-tools.yaml from the cwd only (see
 	// TestScanGate_PrivacyMarkerExemptConfigNotLoadedFromRepoFlagTarget).
 	r, exit := runCLIIn(t, bin, dir, "scan", "privacy", "--privacy-tier", "public", "--strict")
 	if r.Status != "precondition_unmet" || exit != 30 {
@@ -681,7 +681,7 @@ func TestScanPrivacy_PrivacyMarkerExemptConfigExemptsOnlyNamedPath(t *testing.T)
 	commitNestedFile(t, dir, "fixtures/sample.md", markerFrontmatter, "add fixture sample")
 
 	// Run with the process's cwd in dir rather than pointing --repo at it:
-	// loadConfigFile auto-discovers .git-tools.yaml from the cwd only (see
+	// loadConfigFile auto-discovers git-tools.yaml from the cwd only (see
 	// TestScanGate_PrivacyMarkerExemptConfigNotLoadedFromRepoFlagTarget).
 	r, exit := runCLIIn(t, bin, dir, "scan", "privacy", "--privacy-tier", "public")
 	if r.Status != "success" || exit != 0 {

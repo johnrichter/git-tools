@@ -70,6 +70,9 @@ directory: --repo/--config would retarget it, so both are refused.
 
 Exit codes:
   0  success              the tag was created and pushed
+  30 precondition_unmet   the content-guardrail scan found a marker, an
+                           internal identifier, or a secret at the commit
+                           being tagged; nothing was tagged
   40 not_found            the working directory is not a git working tree
   41 conflict             a local tag by that derived name already exists
   50 usage                <version> or --shape is missing or malformed, or
@@ -123,6 +126,15 @@ Exit codes:
 					fmt.Sprintf("tag %s already exists locally; create never overwrites or force-pushes an existing tag", tagName),
 					clikit.Manual(fmt.Sprintf("choose a new version, or delete %s locally and on the remote first if it was made in error", tagName)),
 					map[string]any{"tag": tagName})
+			}
+
+			// The content-guardrail scan is the last read-only precondition
+			// before create writes anything: a tag can point at a commit that
+			// never itself went through a scanned merge or push (tagging a
+			// branch directly), so create carries its own gate rather than
+			// depending on some earlier verb having already run one.
+			if err := scanGate(cmd, cfg, ".", "tag", map[string]any{"tag": tagName}); err != nil {
+				return err
 			}
 
 			// -s, not -a: an explicit --annotate on the command line overrides

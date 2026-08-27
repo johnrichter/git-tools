@@ -83,7 +83,7 @@ func TestTagCreate_RetargetingFlagsRefused(t *testing.T) {
 
 	for _, args := range [][]string{
 		{"tag", "create", "1.2.3", "--shape", "vX.Y.Z", "--repo", "."},
-		{"tag", "create", "1.2.3", "--shape", "vX.Y.Z", "--config", ".git-tools.yaml"},
+		{"tag", "create", "1.2.3", "--shape", "vX.Y.Z", "--config", "git-tools.yaml"},
 	} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			dir := initRepo(t)
@@ -314,6 +314,17 @@ func TestTagCreate_ExitCodeTable(t *testing.T) {
 			},
 			args:     []string{"tag", "create", "1.0.0", "--shape", "vX.Y.Z"},
 			wantExit: 40,
+		},
+		{
+			name: "precondition_unmet: content-guardrail finding at the commit being tagged",
+			setup: func(t *testing.T) string {
+				dir := initRepo(t)
+				newBareRemote(t, dir)
+				commitNestedFile(t, dir, "fixtures/sample.md", markerFrontmatter, "add fixture sample")
+				return dir
+			},
+			args:     []string{"tag", "create", "1.0.0", "--shape", "vX.Y.Z"},
+			wantExit: 30,
 		},
 		{
 			name: "conflict: tag already exists",

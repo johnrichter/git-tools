@@ -210,12 +210,12 @@ const markerFrontmatter = "---\nprivacy: internal\n---\n\nfixture body\n"
 // multiple of it rather than as an opaque number.
 const markerFrontmatterFindings = 2
 
-// writeConfig writes a .git-tools.yaml into dir, the shape loadConfigFile
+// writeConfig writes a git-tools.yaml into dir, the shape loadConfigFile
 // auto-discovers from the invoking process's own working directory when no
 // --config flag is passed.
 func writeConfig(t *testing.T, dir, content string) {
 	t.Helper()
-	if err := os.WriteFile(filepath.Join(dir, ".git-tools.yaml"), []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "git-tools.yaml"), []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -278,7 +278,7 @@ func TestScanGate_MarkerBlocksCleanMergeAndPush(t *testing.T) {
 
 // TestScanGate_PrivacyMarkerExemptConfigAllowsMergeAndPush proves the fix: the
 // identical marker-bearing fixture from the bug reproduction above no longer
-// blocks merge or push once a .git-tools.yaml in the scanned repo names its
+// blocks merge or push once a git-tools.yaml in the scanned repo names its
 // path under privacy_marker_exempt.
 func TestScanGate_PrivacyMarkerExemptConfigAllowsMergeAndPush(t *testing.T) {
 	t.Run("merge", func(t *testing.T) {
@@ -315,6 +315,50 @@ func TestScanGate_PrivacyMarkerExemptConfigAllowsMergeAndPush(t *testing.T) {
 			t.Fatalf("remote main = %s, want %s", got, tip)
 		}
 	})
+}
+
+// TestScanGate_MarkerBlocksTagCreate proves create carries its own scan gate
+// rather than depending on some earlier merge or push having already run
+// one: a marker-bearing commit that never went through either still refuses
+// a tag pointed straight at it.
+func TestScanGate_MarkerBlocksTagCreate(t *testing.T) {
+	bin := buildCLI(t)
+	dir := initRepo(t)
+	newBareRemote(t, dir)
+	head := commitNestedFile(t, dir, "fixtures/sample.md", markerFrontmatter, "add fixture sample")
+
+	r, exit := runCLIIn(t, bin, dir, "tag", "create", "1.0.0", "--shape", "vX.Y.Z")
+	if r.Status != "precondition_unmet" || exit != 30 {
+		t.Fatalf("status=%s exit=%d, want precondition_unmet/30: %+v", r.Status, exit, r)
+	}
+	assertRefusalNamesFinding(t, r, "fixtures/sample.md")
+	if tags := localTags(t, dir); tags != "" {
+		t.Fatalf("refused tag create left a local tag behind: %q", tags)
+	}
+	if got := runGit(t, dir, "rev-parse", "HEAD"); got != head {
+		t.Fatalf("HEAD moved from %s to %s — a refused tag create must not touch HEAD", head, got)
+	}
+}
+
+// TestScanGate_PrivacyMarkerExemptConfigAllowsTagCreate proves the identical
+// exemption merge and push honor also releases create's own gate.
+func TestScanGate_PrivacyMarkerExemptConfigAllowsTagCreate(t *testing.T) {
+	bin := buildCLI(t)
+	dir := initRepo(t)
+	writeConfig(t, dir, "privacy_marker_exempt:\n  - fixtures\n")
+	newBareRemote(t, dir)
+	tip := commitNestedFile(t, dir, "fixtures/sample.md", markerFrontmatter, "add fixture sample")
+
+	r, exit := runCLIIn(t, bin, dir, "tag", "create", "1.0.0", "--shape", "vX.Y.Z")
+	if r.Status != "success" || exit != 0 {
+		t.Fatalf("status=%s exit=%d, want success/0: %+v", r.Status, exit, r)
+	}
+	// v1.0.0 is a signed, annotated tag: rev-parse alone returns the tag
+	// object's own SHA, not the commit it points to, so ^{commit} dereferences
+	// it before comparing against the fixture commit's SHA.
+	if got := runGit(t, dir, "rev-parse", "v1.0.0^{commit}"); got != tip {
+		t.Fatalf("tag v1.0.0 points at %s, want %s", got, tip)
+	}
 }
 
 // TestScanGate_PrivacyMarkerExemptConfigStaysScoped proves the exemption
@@ -371,7 +415,7 @@ func TestScanGate_PrivacyMarkerExemptConfigStaysScoped(t *testing.T) {
 // TestScanGate_PrivacyMarkerExemptConfigNotLoadedFromRepoFlagTarget documents
 // a known, intentional-for-now gap: when merge --repo names a directory
 // other than the invoking process's own working directory, the
-// .git-tools.yaml auto-discovered by loadConfigFile still comes from the
+// git-tools.yaml auto-discovered by loadConfigFile still comes from the
 // process's cwd, not from --repo's target. A config file placed inside the
 // --repo directory is not picked up, so the marker exemption does not apply
 // and the merge still refuses.
@@ -386,10 +430,10 @@ func TestScanGate_PrivacyMarkerExemptConfigNotLoadedFromRepoFlagTarget(t *testin
 	runGit(t, dir, "checkout", "-q", "main")
 
 	// No cmd.Dir override here: the process's cwd stays wherever `go test`
-	// runs it, which is not dir, so dir's .git-tools.yaml is never read.
+	// runs it, which is not dir, so dir's git-tools.yaml is never read.
 	r, exit := runCLI(t, bin, "--repo", dir, "merge", "feature")
 	if r.Status != "precondition_unmet" || exit != 30 {
-		t.Fatalf("status=%s exit=%d, want precondition_unmet/30 (the --repo target's .git-tools.yaml is not loaded from the process's own cwd): %+v", r.Status, exit, r)
+		t.Fatalf("status=%s exit=%d, want precondition_unmet/30 (the --repo target's git-tools.yaml is not loaded from the process's own cwd): %+v", r.Status, exit, r)
 	}
 	assertRefusalNamesFinding(t, r, "fixtures/sample.md")
 	if got := runGit(t, dir, "rev-parse", "HEAD"); got != head {
@@ -552,7 +596,7 @@ func TestScanGate_NestedWorktreeSkipDoesNotHideARealFinding(t *testing.T) {
 
 // TestScanGate_SecretScanExemptConfigAllowsMergeAndPush proves secret_scan_exempt
 // releases a merge/push that would otherwise refuse on a secret-shaped
-// fixture, once the exact fixture path is named in .git-tools.yaml.
+// fixture, once the exact fixture path is named in git-tools.yaml.
 func TestScanGate_SecretScanExemptConfigAllowsMergeAndPush(t *testing.T) {
 	t.Run("merge", func(t *testing.T) {
 		bin := buildCLI(t)
