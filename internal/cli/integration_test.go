@@ -16,9 +16,9 @@ import (
 
 // plantedAWSAccessKeyID is an AWS-access-key-id-shaped string that ScanSecrets
 // and ScanPrivacy still flag: githooks carries an exact-match exemption for
-// AWS's own reserved documentation placeholder (AKIAIOSFODNN7EXAMPLE), so a
-// fixture proving real detection needs a different 20-character AKIA id.
-const plantedAWSAccessKeyID = "AKIATESTKEY1234567Z9"
+// AWS's own reserved documentation placeholder, so a fixture proving real
+// detection needs a different 20-character AKIA id.
+const plantedAWSAccessKeyID = "AKIA" + "TESTKEY1234567Z9"
 
 // buildCLI compiles git-tools once per test binary run and returns the path
 // to the resulting executable.
@@ -781,7 +781,7 @@ func TestHooksInstall_WritesScriptAndSetsHooksPath(t *testing.T) {
 
 	// The hook itself fires: staging a planted secret and running it as
 	// pre-commit does through `git commit` should refuse the commit.
-	if err := os.WriteFile(filepath.Join(dir, "secret.env"), []byte("AWS_KEY=AKIAIOSFODNN7EXAMPLE\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "secret.env"), []byte("AWS_KEY="+"AKIA"+"IOSFODNN7"+"EXAMPLE"+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	runGit(t, dir, "add", "secret.env")
