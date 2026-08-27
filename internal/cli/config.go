@@ -35,6 +35,7 @@ type Config struct {
 	Strict              bool     `koanf:"strict"`
 	MaxBinaryBytes      int64    `koanf:"max_binary_bytes"`
 	PrivacyMarkerExempt []string `koanf:"privacy_marker_exempt"`
+	SecretScanExempt    []string `koanf:"secret_scan_exempt"`
 }
 
 // defaultConfig seeds koanf's lowest-precedence layer. Every key here must
@@ -49,6 +50,7 @@ func defaultConfig() map[string]interface{} {
 		"strict":                false,
 		"max_binary_bytes":      githooks.DefaultMaxBytes,
 		"privacy_marker_exempt": []string{},
+		"secret_scan_exempt":    []string{},
 	}
 }
 

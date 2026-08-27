@@ -485,18 +485,21 @@ func plantUntrackedFile(t *testing.T, dir, name, content string) {
 	}
 }
 
-// awsExampleKeySecret is AWS's own well-known documentation placeholder
-// access key — the exact false-positive shape a test fixture in an unrelated
-// nested worktree tripped the secret scanner on.
-const awsExampleKeySecret = "aws_access_key_id = AKIAIOSFODNN7EXAMPLE\n"
+// secretFixtureSecret is a GitHub-personal-access-token-shaped string: a
+// secret signature ScanSecrets and ScanPrivacy always flag, with none of the
+// exact-match exemptions githooks carries for a vendor's own reserved
+// documentation placeholder (e.g. AWS's EXAMPLE access-key id) — the closest
+// shape a test fixture can embed while still exercising a real, disqualified
+// finding.
+const secretFixtureSecret = "github_pat = ghp_1234567890abcdefghijklmnopqrstuvwxyz12\n"
 
-// awsExampleKeyFindings is how many findings one non-exempt
-// awsExampleKeySecret file accounts for: ScanSecrets and ScanPrivacy both
+// secretFixtureFindings is how many findings one non-exempt
+// secretFixtureSecret file accounts for: ScanSecrets and ScanPrivacy both
 // independently check the same closed set of secret signatures, so a single
-// AWS-key-shaped file fires once from each scanner. Like
+// secret-shaped file fires once from each scanner. Like
 // markerFrontmatterFindings above, this is the per-file unit the scoping
 // assertion counts in.
-const awsExampleKeyFindings = 2
+const secretFixtureFindings = 2
 
 // TestScanGate_NestedWorktreeSecretIsSkipped reproduces the bug directly: a
 // secret-shaped fixture planted at .claude/worktrees/<slug>/..., exactly
@@ -507,7 +510,7 @@ const awsExampleKeyFindings = 2
 func TestScanGate_NestedWorktreeSecretIsSkipped(t *testing.T) {
 	bin := buildCLI(t)
 	dir := signingRepo(t)
-	plantUntrackedFile(t, dir, ".claude/worktrees/harness-worktree-native/internal/cli/integration_test.go", awsExampleKeySecret)
+	plantUntrackedFile(t, dir, ".claude/worktrees/harness-worktree-native/internal/cli/integration_test.go", secretFixtureSecret)
 	runGit(t, dir, "branch", "feature")
 	runGit(t, dir, "checkout", "-q", "feature")
 	tip := commitFile(t, dir, "feature.txt", "feature\n", "feature work")
@@ -530,8 +533,8 @@ func TestScanGate_NestedWorktreeSecretIsSkipped(t *testing.T) {
 func TestScanGate_NestedWorktreeSkipDoesNotHideARealFinding(t *testing.T) {
 	bin := buildCLI(t)
 	dir := initRepo(t)
-	plantUntrackedFile(t, dir, ".claude/worktrees/harness-worktree-native/internal/cli/integration_test.go", awsExampleKeySecret)
-	head := commitNestedFile(t, dir, "config/prod.env", awsExampleKeySecret, "add prod config")
+	plantUntrackedFile(t, dir, ".claude/worktrees/harness-worktree-native/internal/cli/integration_test.go", secretFixtureSecret)
+	head := commitNestedFile(t, dir, "config/prod.env", secretFixtureSecret, "add prod config")
 	runGit(t, dir, "branch", "feature")
 	runGit(t, dir, "checkout", "-q", "feature")
 	commitFile(t, dir, "feature.txt", "feature\n", "feature work")
@@ -541,9 +544,207 @@ func TestScanGate_NestedWorktreeSkipDoesNotHideARealFinding(t *testing.T) {
 	if r.Status != "precondition_unmet" || exit != 30 {
 		t.Fatalf("status=%s exit=%d, want precondition_unmet/30: %+v", r.Status, exit, r)
 	}
-	assertRefusalNamesOnlyFinding(t, r, "config/prod.env", ".claude/worktrees/harness-worktree-native/internal/cli/integration_test.go", awsExampleKeyFindings)
+	assertRefusalNamesOnlyFinding(t, r, "config/prod.env", ".claude/worktrees/harness-worktree-native/internal/cli/integration_test.go", secretFixtureFindings)
 	if got := runGit(t, dir, "rev-parse", "HEAD"); got != head {
 		t.Fatalf("HEAD moved from %s to %s — merge landed despite the guardrail finding", head, got)
+	}
+}
+
+// TestScanGate_SecretScanExemptConfigAllowsMergeAndPush proves secret_scan_exempt
+// releases a merge/push that would otherwise refuse on a secret-shaped
+// fixture, once the exact fixture path is named in .git-tools.yaml.
+func TestScanGate_SecretScanExemptConfigAllowsMergeAndPush(t *testing.T) {
+	t.Run("merge", func(t *testing.T) {
+		bin := buildCLI(t)
+		dir := signingRepo(t)
+		writeConfig(t, dir, "secret_scan_exempt:\n  - fixtures/sample.env\n")
+		commitNestedFile(t, dir, "fixtures/sample.env", secretFixtureSecret, "add fixture sample")
+		runGit(t, dir, "branch", "feature")
+		runGit(t, dir, "checkout", "-q", "feature")
+		tip := commitFile(t, dir, "feature.txt", "feature\n", "feature work")
+		runGit(t, dir, "checkout", "-q", "main")
+
+		r, exit := runCLIIn(t, bin, dir, "merge", "feature")
+		if r.Status != "success" || exit != 0 {
+			t.Fatalf("status=%s exit=%d, want success/0: %+v", r.Status, exit, r)
+		}
+		if got := runGit(t, dir, "rev-parse", "HEAD"); got != tip {
+			t.Fatalf("main did not fast-forward to feature tip: got %s want %s", got, tip)
+		}
+	})
+
+	t.Run("push", func(t *testing.T) {
+		bin := buildCLI(t)
+		dir := initRepo(t)
+		writeConfig(t, dir, "secret_scan_exempt:\n  - fixtures/sample.env\n")
+		bare := newBareRemote(t, dir)
+		tip := commitNestedFile(t, dir, "fixtures/sample.env", secretFixtureSecret, "add fixture sample")
+
+		r, exit := runCLIIn(t, bin, dir, "push", "main")
+		if r.Status != "success" || exit != 0 {
+			t.Fatalf("status=%s exit=%d, want success/0: %+v", r.Status, exit, r)
+		}
+		if got := runGit(t, bare, "rev-parse", "refs/heads/main"); got != tip {
+			t.Fatalf("remote main = %s, want %s", got, tip)
+		}
+	})
+}
+
+// TestScanGate_SecretScanExemptConfigStaysScoped proves the exemption applies
+// only to the exact path named: an identical secret-shaped fixture at a
+// different path, in the same run, still refuses the merge/push — so the
+// exemption cannot be mistaken for a blanket suppression of the secret scan.
+func TestScanGate_SecretScanExemptConfigStaysScoped(t *testing.T) {
+	t.Run("merge", func(t *testing.T) {
+		bin := buildCLI(t)
+		dir := initRepo(t)
+		writeConfig(t, dir, "secret_scan_exempt:\n  - fixtures/sample.env\n")
+		commitNestedFile(t, dir, "fixtures/sample.env", secretFixtureSecret, "add fixture sample")
+		head := commitNestedFile(t, dir, "config/prod.env", secretFixtureSecret, "add prod config")
+		runGit(t, dir, "branch", "feature")
+		runGit(t, dir, "checkout", "-q", "feature")
+		commitFile(t, dir, "feature.txt", "feature\n", "feature work")
+		runGit(t, dir, "checkout", "-q", "main")
+
+		r, exit := runCLIIn(t, bin, dir, "merge", "feature")
+		if r.Status != "precondition_unmet" || exit != 30 {
+			t.Fatalf("status=%s exit=%d, want precondition_unmet/30: %+v", r.Status, exit, r)
+		}
+		assertRefusalNamesOnlyFinding(t, r, "config/prod.env", "fixtures/sample.env", secretFixtureFindings)
+		if got := runGit(t, dir, "rev-parse", "HEAD"); got != head {
+			t.Fatalf("HEAD moved from %s to %s — merge landed despite the out-of-scope finding", head, got)
+		}
+	})
+
+	t.Run("push", func(t *testing.T) {
+		bin := buildCLI(t)
+		dir := initRepo(t)
+		writeConfig(t, dir, "secret_scan_exempt:\n  - fixtures/sample.env\n")
+		bare := newBareRemote(t, dir)
+		before := runGit(t, bare, "rev-parse", "refs/heads/main")
+		commitNestedFile(t, dir, "fixtures/sample.env", secretFixtureSecret, "add fixture sample")
+		commitNestedFile(t, dir, "config/prod.env", secretFixtureSecret, "add prod config")
+
+		r, exit := runCLIIn(t, bin, dir, "push", "main")
+		if r.Status != "precondition_unmet" || exit != 30 {
+			t.Fatalf("status=%s exit=%d, want precondition_unmet/30: %+v", r.Status, exit, r)
+		}
+		assertRefusalNamesOnlyFinding(t, r, "config/prod.env", "fixtures/sample.env", secretFixtureFindings)
+		if got := runGit(t, bare, "rev-parse", "refs/heads/main"); got != before {
+			t.Fatalf("remote main moved from %s to %s — push published despite the out-of-scope finding", before, got)
+		}
+	})
+}
+
+// secretExemptMarkerFixture is a single file that trips all three
+// independent checks at once: a forbidden frontmatter marker (and its
+// declares-but-not-public pair), a secret-pattern signature, and an
+// internal-hostname mention. It exists to prove secret_scan_exempt's
+// narrowness — that naming this path only silences the secret-pattern
+// finding, and leaves the other two intact.
+const secretExemptMarkerFixture = "---\nprivacy: internal\n---\n\nfixture body\n" +
+	secretFixtureSecret +
+	"see http://build.corp/status for the runbook\n"
+
+// TestScanGate_SecretScanExemptStillCatchesMarkerAndInternalIdentifier is the
+// proof the old, SkipRules-routed secret_scan_exempt could never make: naming
+// a path under secret_scan_exempt silences only its secret-pattern finding.
+// The same file's forbidden-marker violation and internal-identifier mention
+// are still reported — scan all --strict escalates the internal-identifier
+// warning to a failing error so both show up in the same errors list as the
+// marker finding, alongside the secret finding's absence.
+func TestScanGate_SecretScanExemptStillCatchesMarkerAndInternalIdentifier(t *testing.T) {
+	bin := buildCLI(t)
+	dir := initRepo(t)
+	writeConfig(t, dir, "secret_scan_exempt:\n  - fixtures/sample.md\n")
+	commitNestedFile(t, dir, "fixtures/sample.md", secretExemptMarkerFixture, "add fixture sample")
+
+	r, exit := runCLIIn(t, bin, dir, "scan", "all", "--strict")
+	if r.Status != "precondition_unmet" || exit != 30 {
+		t.Fatalf("status=%s exit=%d, want precondition_unmet/30: %+v", r.Status, exit, r)
+	}
+
+	var sawMarker, sawInternalID, sawSecret bool
+	for _, e := range r.Errors {
+		context, _ := e["context"].(map[string]any)
+		if path, _ := context["path"].(string); path != "fixtures/sample.md" {
+			continue
+		}
+		switch context["rule"] {
+		case "forbidden_marker":
+			sawMarker = true
+		case "internal_identifier":
+			sawInternalID = true
+		case "github_token":
+			sawSecret = true
+		}
+	}
+	if !sawMarker {
+		t.Fatalf("secret_scan_exempt also suppressed the frontmatter-marker check: %+v", r.Errors)
+	}
+	if !sawInternalID {
+		t.Fatalf("secret_scan_exempt also suppressed the internal-identifier check: %+v", r.Errors)
+	}
+	if sawSecret {
+		t.Fatalf("secret_scan_exempt did not suppress the secret-pattern check: %+v", r.Errors)
+	}
+}
+
+// TestScanGate_SecretScanExemptDoesNotExemptRawBinary proves secret_scan_exempt
+// is scoped to secret-pattern detection, not a general path exclusion: an
+// executable file with a NUL byte at the exact secret-exempt path still
+// refuses the merge on the raw-binary rule, in the same run as a
+// secret-pattern fixture at that same path going unreported.
+//
+// Raw-binary detection never shares any signature with secret detection, so
+// it is never handed the secret_scan_exempt list and is provably unaffected.
+func TestScanGate_SecretScanExemptDoesNotExemptRawBinary(t *testing.T) {
+	bin := buildCLI(t)
+	dir := initRepo(t)
+	writeConfig(t, dir, "secret_scan_exempt:\n  - fixtures/payload.sh\n")
+	if err := os.MkdirAll(filepath.Join(dir, "fixtures"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	head := commitFileMode(t, dir, "fixtures/payload.sh", nulByteExecutable, 0o755, "add payload")
+	runGit(t, dir, "branch", "feature")
+	runGit(t, dir, "checkout", "-q", "feature")
+	commitFile(t, dir, "feature.txt", "feature\n", "feature work")
+	runGit(t, dir, "checkout", "-q", "main")
+
+	r, exit := runCLI(t, bin, "--repo", dir, "merge", "feature")
+	if r.Status != "precondition_unmet" || exit != 30 {
+		t.Fatalf("status=%s exit=%d, want precondition_unmet/30 (secret_scan_exempt must not silence the raw-binary check): %+v", r.Status, exit, r)
+	}
+	assertRefusalNamesFinding(t, r, "fixtures/payload.sh")
+	if got := runGit(t, dir, "rev-parse", "HEAD"); got != head {
+		t.Fatalf("HEAD moved from %s to %s — merge landed despite the guardrail finding", head, got)
+	}
+}
+
+// TestScanGate_MalformedSecretScanExemptRefusesBeforeScanning proves a
+// malformed secret_scan_exempt glob fails the merge with a usage error naming
+// the bad pattern, before scanGate ever runs a scan — mirroring
+// TestScanGate_MalformedPrivacyMarkerExemptRefusesBeforeScanning for the new,
+// higher-risk exemption key.
+func TestScanGate_MalformedSecretScanExemptRefusesBeforeScanning(t *testing.T) {
+	bin := buildCLI(t)
+	dir := initRepo(t)
+	writeConfig(t, dir, "secret_scan_exempt:\n  - \"fixtures[\"\n")
+	head := commitNestedFile(t, dir, "config/prod.env", secretFixtureSecret, "add prod config")
+	runGit(t, dir, "branch", "feature")
+	runGit(t, dir, "checkout", "-q", "feature")
+	commitFile(t, dir, "feature.txt", "feature\n", "feature work")
+	runGit(t, dir, "checkout", "-q", "main")
+
+	r, exit := runCLIIn(t, bin, dir, "merge", "feature")
+	if r.Status != "usage" || exit != 50 {
+		t.Fatalf("status=%s exit=%d, want usage/50: %+v", r.Status, exit, r)
+	}
+	if len(r.Errors) == 0 || !strings.Contains(r.Errors[0]["message"].(string), "fixtures[") {
+		t.Fatalf("usage error does not name the malformed pattern: %+v", r.Errors)
+	}
+	if got := runGit(t, dir, "rev-parse", "HEAD"); got != head {
+		t.Fatalf("HEAD moved from %s to %s — merge attempted a scan despite the malformed config", head, got)
 	}
 }
 

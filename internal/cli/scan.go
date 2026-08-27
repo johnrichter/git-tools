@@ -53,7 +53,10 @@ func newScanSecretsCmd() *cobra.Command {
 			if err != nil {
 				return finishErr(cmd, nil, "internal.config.load_failed", "load configuration", err)
 			}
-			findings, err := githooks.ScanSecrets(cfg.Repo, gitToolsSkipRules)
+			if bad, ok := malformedSecretScanExempt(cfg.SecretScanExempt); ok {
+				return finishUsage(cmd, nil, "usage.cli.invalid_secret_scan_exempt", fmt.Sprintf("secret_scan_exempt entry %q is not a valid glob pattern", bad))
+			}
+			findings, err := githooks.ScanSecrets(cfg.Repo, gitToolsSkipRules, secretExemptRules(cfg.SecretScanExempt))
 			if err != nil {
 				return finishErr(cmd, nil, "internal.githooks.scan_secrets_failed", "scan for secrets", err)
 			}
@@ -108,9 +111,13 @@ func newScanPrivacyCmd() *cobra.Command {
 			if bad, ok := malformedPrivacyMarkerExempt(cfg.PrivacyMarkerExempt); ok {
 				return finishUsage(cmd, nil, "usage.cli.invalid_privacy_marker_exempt", fmt.Sprintf("privacy_marker_exempt entry %q is not a valid glob pattern", bad))
 			}
+			if bad, ok := malformedSecretScanExempt(cfg.SecretScanExempt); ok {
+				return finishUsage(cmd, nil, "usage.cli.invalid_secret_scan_exempt", fmt.Sprintf("secret_scan_exempt entry %q is not a valid glob pattern", bad))
+			}
 			failures, warnings, err := githooks.ScanPrivacy(cfg.Repo, tier, githooks.PrivacyOptions{
 				SkipRules:         gitToolsSkipRules,
 				MarkerExemptRules: privacyMarkerExemptRules(cfg.PrivacyMarkerExempt),
+				SecretExemptRules: secretExemptRules(cfg.SecretScanExempt),
 			})
 			if err != nil {
 				return finishErr(cmd, nil, "internal.githooks.scan_privacy_failed", "scan for privacy violations", err)
@@ -138,6 +145,9 @@ func newScanAllCmd() *cobra.Command {
 			}
 			if bad, ok := malformedPrivacyMarkerExempt(cfg.PrivacyMarkerExempt); ok {
 				return finishUsage(cmd, nil, "usage.cli.invalid_privacy_marker_exempt", fmt.Sprintf("privacy_marker_exempt entry %q is not a valid glob pattern", bad))
+			}
+			if bad, ok := malformedSecretScanExempt(cfg.SecretScanExempt); ok {
+				return finishUsage(cmd, nil, "usage.cli.invalid_secret_scan_exempt", fmt.Sprintf("secret_scan_exempt entry %q is not a valid glob pattern", bad))
 			}
 			staged, _ := cmd.Flags().GetBool("staged")
 
@@ -196,6 +206,38 @@ func privacyMarkerExemptRules(prefixes []string) []fsx.Rule {
 	return rules
 }
 
+// malformedSecretScanExempt reports the first configured secret_scan_exempt
+// entry that does not compile as a doublestar glob, so a caller can refuse
+// the invocation outright rather than let fsx.ClassifyPath's fail-closed
+// treatment of a broken pattern quietly hand the (unrelated, SkipRules-style)
+// meaning of "match everything" to a rule meant to name one exact file. See
+// malformedPrivacyMarkerExempt for the same failure this mirrors.
+func malformedSecretScanExempt(paths []string) (string, bool) {
+	for _, p := range paths {
+		if !doublestar.ValidatePattern(p) {
+			return p, true
+		}
+	}
+	return "", false
+}
+
+// secretExemptRules converts cfg's secret_scan_exempt entries into the
+// fsx.Rule ruleset githooks.ScanSecrets' secretExemptRules parameter and
+// githooks.PrivacyOptions.SecretExemptRules both expect. Unlike
+// privacyMarkerExemptRules, each entry is used verbatim, with no implicit
+// "+ /**" directory expansion: bypassing secret detection is a higher-risk
+// exemption than skipping the privacy-marker check, so naming one file must
+// exempt only that file. A config author who does want a whole directory has
+// to write that glob out explicitly, rather than have the scope silently
+// widen past the path they named.
+func secretExemptRules(paths []string) []fsx.Rule {
+	var rules []fsx.Rule
+	for _, p := range paths {
+		rules = append(rules, fsx.Rule{Pattern: p, Class: githooks.SkipClass})
+	}
+	return rules
+}
+
 // emitScan hands outcome to githooks' own result-builder, which produces the
 // full clikit envelope (success/caveats/precondition_unmet) in one call.
 func emitScan(cmd *cobra.Command, outcome githooks.ScanOutcome) error {
@@ -214,7 +256,7 @@ func emitScan(cmd *cobra.Command, outcome githooks.ScanOutcome) error {
 // tracked tree; secrets and privacy always scan the full tracked tree
 // regardless (see newScanAllCmd's --staged flag help for why).
 func scanTree(ctx context.Context, dir string, cfg *Config, staged bool) (githooks.ScanOutcome, error) {
-	secrets, err := githooks.ScanSecrets(dir, gitToolsSkipRules)
+	secrets, err := githooks.ScanSecrets(dir, gitToolsSkipRules, secretExemptRules(cfg.SecretScanExempt))
 	if err != nil {
 		return githooks.ScanOutcome{}, fmt.Errorf("scan for secrets: %w", err)
 	}
@@ -229,6 +271,7 @@ func scanTree(ctx context.Context, dir string, cfg *Config, staged bool) (githoo
 	failures, warnings, err := githooks.ScanPrivacy(dir, githooks.PrivacyTier(cfg.PrivacyTier), githooks.PrivacyOptions{
 		SkipRules:         gitToolsSkipRules,
 		MarkerExemptRules: privacyMarkerExemptRules(cfg.PrivacyMarkerExempt),
+		SecretExemptRules: secretExemptRules(cfg.SecretScanExempt),
 	})
 	if err != nil {
 		return githooks.ScanOutcome{}, fmt.Errorf("scan for privacy violations: %w", err)
@@ -260,6 +303,9 @@ func scanGate(cmd *cobra.Command, cfg *Config, dir, verb string, data map[string
 	}
 	if bad, ok := malformedPrivacyMarkerExempt(cfg.PrivacyMarkerExempt); ok {
 		return finishUsage(cmd, data, "usage.cli.invalid_privacy_marker_exempt", fmt.Sprintf("privacy_marker_exempt entry %q is not a valid glob pattern", bad))
+	}
+	if bad, ok := malformedSecretScanExempt(cfg.SecretScanExempt); ok {
+		return finishUsage(cmd, data, "usage.cli.invalid_secret_scan_exempt", fmt.Sprintf("secret_scan_exempt entry %q is not a valid glob pattern", bad))
 	}
 
 	outcome, err := scanTree(cmd.Context(), dir, cfg, false)

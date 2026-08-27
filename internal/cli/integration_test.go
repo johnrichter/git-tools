@@ -14,6 +14,12 @@ import (
 	"testing"
 )
 
+// plantedAWSAccessKeyID is an AWS-access-key-id-shaped string that ScanSecrets
+// and ScanPrivacy still flag: githooks carries an exact-match exemption for
+// AWS's own reserved documentation placeholder (AKIAIOSFODNN7EXAMPLE), so a
+// fixture proving real detection needs a different 20-character AKIA id.
+const plantedAWSAccessKeyID = "AKIATESTKEY1234567Z9"
+
 // buildCLI compiles git-tools once per test binary run and returns the path
 // to the resulting executable.
 func buildCLI(t *testing.T) string {
@@ -480,7 +486,7 @@ func TestRebase_ReplaysCommitsOntoUpstream(t *testing.T) {
 func TestScanSecrets_DetectsPlantedAWSKey(t *testing.T) {
 	bin := buildCLI(t)
 	dir := initRepo(t)
-	commitFile(t, dir, "config.env", "AWS_KEY=AKIAIOSFODNN7EXAMPLE\n", "add config")
+	commitFile(t, dir, "config.env", "AWS_KEY="+plantedAWSAccessKeyID+"\n", "add config")
 
 	r, exit := runCLI(t, bin, "--repo", dir, "scan", "secrets")
 	if r.Status != "precondition_unmet" || exit != 30 {
@@ -497,6 +503,67 @@ func TestScanSecrets_CleanTreeSucceeds(t *testing.T) {
 	r, exit := runCLI(t, bin, "--repo", dir, "scan", "secrets")
 	if r.Status != "success" || exit != 0 {
 		t.Fatalf("status=%s exit=%d, want success/0: %+v", r.Status, exit, r)
+	}
+}
+
+// TestScanSecrets_SecretScanExemptConfigExemptsOnlyNamedPath covers `scan
+// secrets`' own githooks.ScanSecrets call — a third call site that builds its
+// secret-exempt ruleset itself, sharing neither the scanTree that
+// merge/push/rebase use nor `scan privacy`'s ScanPrivacy call, so no test of
+// either proves this verb passes the exemption at all. The exact path named
+// under secret_scan_exempt passes; an identical secret-shaped file at another
+// path still fails in the same repository, so the exemption is not a blanket
+// disable of the verb.
+func TestScanSecrets_SecretScanExemptConfigExemptsOnlyNamedPath(t *testing.T) {
+	bin := buildCLI(t)
+	dir := initRepo(t)
+	writeConfig(t, dir, "secret_scan_exempt:\n  - fixtures/sample.env\n")
+	commitNestedFile(t, dir, "fixtures/sample.env", secretFixtureSecret, "add fixture sample")
+
+	// Run with the process's cwd in dir rather than pointing --repo at it:
+	// loadConfigFile auto-discovers .git-tools.yaml from the cwd only (see
+	// TestScanGate_PrivacyMarkerExemptConfigNotLoadedFromRepoFlagTarget).
+	r, exit := runCLIIn(t, bin, dir, "scan", "secrets")
+	if r.Status != "success" || exit != 0 {
+		t.Fatalf("status=%s exit=%d, want success/0: %+v", r.Status, exit, r)
+	}
+
+	commitNestedFile(t, dir, "config/prod.env", secretFixtureSecret, "add prod config")
+	r, exit = runCLIIn(t, bin, dir, "scan", "secrets")
+	if r.Status != "precondition_unmet" || exit != 30 {
+		t.Fatalf("out-of-scope secret: status=%s exit=%d, want precondition_unmet/30: %+v", r.Status, exit, r)
+	}
+	if got, _ := r.Data["secrets_found"].(float64); int(got) != 1 {
+		t.Fatalf("secrets_found=%v, want 1 (config/prod.env alone) — fixtures/sample.env was flagged too, so its secret exemption did not hold: %+v", r.Data["secrets_found"], r.Data)
+	}
+	for _, e := range r.Errors {
+		context, _ := e["context"].(map[string]any)
+		if path, _ := context["path"].(string); path == "fixtures/sample.env" {
+			t.Fatalf("exempted path is named by a reported error: %+v", e)
+		}
+	}
+}
+
+// TestScanSecrets_MalformedSecretScanExemptIsUsageError is the silent-disable
+// guard at `scan secrets`' own call site: a malformed glob must refuse the
+// invocation by name rather than reach fsx.ClassifyPath, where an
+// uncompilable pattern is demoted to an always-match and would exempt the
+// whole repository from secret detection. githooks v0.4.0 rejects such a
+// pattern too, so the failure is loud either way — but only this check makes
+// it the caller's usage error naming the bad config entry instead of an
+// opaque internal scan failure.
+func TestScanSecrets_MalformedSecretScanExemptIsUsageError(t *testing.T) {
+	bin := buildCLI(t)
+	dir := initRepo(t)
+	writeConfig(t, dir, "secret_scan_exempt:\n  - \"fixtures[\"\n")
+	commitNestedFile(t, dir, "config/prod.env", secretFixtureSecret, "add prod config")
+
+	r, exit := runCLIIn(t, bin, dir, "scan", "secrets")
+	if r.Status != "usage" || exit != 50 {
+		t.Fatalf("status=%s exit=%d, want usage/50: %+v", r.Status, exit, r)
+	}
+	if len(r.Errors) == 0 || !strings.Contains(r.Errors[0]["message"].(string), "fixtures[") {
+		t.Fatalf("usage error does not name the malformed pattern: %+v", r.Errors)
 	}
 }
 
@@ -550,6 +617,54 @@ func TestScanPrivacy_InvalidTier_IsUsageError(t *testing.T) {
 	r, exit := runCLI(t, bin, "--repo", dir, "scan", "privacy", "--privacy-tier", "nonsense")
 	if r.Status != "usage" || exit != 50 {
 		t.Fatalf("status=%s exit=%d, want usage/50: %+v", r.Status, exit, r)
+	}
+}
+
+// TestScanPrivacy_SecretScanExemptConfigExemptsOnlySecretFinding covers `scan
+// privacy`'s own githooks.ScanPrivacy call — which builds SecretExemptRules
+// itself rather than through the scanTree that merge/push/rebase share, so
+// TestScanGate_SecretScanExemptStillCatchesMarkerAndInternalIdentifier proves
+// nothing about this call site — using the same all-three-checks-at-once
+// fixture: naming its path under secret_scan_exempt must silence only its
+// secret-pattern finding, leaving its forbidden-marker and internal-identifier
+// findings intact in the same `scan privacy --strict` run.
+func TestScanPrivacy_SecretScanExemptConfigExemptsOnlySecretFinding(t *testing.T) {
+	bin := buildCLI(t)
+	dir := initRepo(t)
+	writeConfig(t, dir, "secret_scan_exempt:\n  - fixtures/sample.md\n")
+	commitNestedFile(t, dir, "fixtures/sample.md", secretExemptMarkerFixture, "add fixture sample")
+
+	// Run with the process's cwd in dir rather than pointing --repo at it:
+	// loadConfigFile auto-discovers .git-tools.yaml from the cwd only (see
+	// TestScanGate_PrivacyMarkerExemptConfigNotLoadedFromRepoFlagTarget).
+	r, exit := runCLIIn(t, bin, dir, "scan", "privacy", "--privacy-tier", "public", "--strict")
+	if r.Status != "precondition_unmet" || exit != 30 {
+		t.Fatalf("status=%s exit=%d, want precondition_unmet/30: %+v", r.Status, exit, r)
+	}
+
+	var sawMarker, sawInternalID, sawSecret bool
+	for _, e := range r.Errors {
+		context, _ := e["context"].(map[string]any)
+		if path, _ := context["path"].(string); path != "fixtures/sample.md" {
+			continue
+		}
+		switch context["rule"] {
+		case "forbidden_marker":
+			sawMarker = true
+		case "internal_identifier":
+			sawInternalID = true
+		case "github_token":
+			sawSecret = true
+		}
+	}
+	if !sawMarker {
+		t.Fatalf("secret_scan_exempt also suppressed the frontmatter-marker check: %+v", r.Errors)
+	}
+	if !sawInternalID {
+		t.Fatalf("secret_scan_exempt also suppressed the internal-identifier check: %+v", r.Errors)
+	}
+	if sawSecret {
+		t.Fatalf("secret_scan_exempt did not suppress the secret-pattern check: %+v", r.Errors)
 	}
 }
 
@@ -633,7 +748,7 @@ func TestScanAll_MalformedPrivacyMarkerExemptIsUsageError(t *testing.T) {
 func TestScanAll_CombinesEveryScanner(t *testing.T) {
 	bin := buildCLI(t)
 	dir := initRepo(t)
-	commitFile(t, dir, "config.env", "AWS_KEY=AKIAIOSFODNN7EXAMPLE\n", "add config")
+	commitFile(t, dir, "config.env", "AWS_KEY="+plantedAWSAccessKeyID+"\n", "add config")
 
 	r, exit := runCLI(t, bin, "--repo", dir, "scan", "all", "--staged")
 	if r.Status != "precondition_unmet" || exit != 30 {
@@ -829,7 +944,7 @@ func TestOtherVerbs_DataMaps_DoNotCarryMergeDataKeys(t *testing.T) {
 
 	t.Run("scan secrets precondition_unmet", func(t *testing.T) {
 		dir := initRepo(t)
-		commitFile(t, dir, "config.env", "AWS_KEY=AKIAIOSFODNN7EXAMPLE\n", "add config")
+		commitFile(t, dir, "config.env", "AWS_KEY="+plantedAWSAccessKeyID+"\n", "add config")
 		r, exit := runCLI(t, bin, "--repo", dir, "scan", "secrets")
 		if r.Status != "precondition_unmet" || exit != 30 {
 			t.Fatalf("status=%s exit=%d, want precondition_unmet/30: %+v", r.Status, exit, r)
