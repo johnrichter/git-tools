@@ -40,7 +40,7 @@ func newTagCmd() *cobra.Command {
 func newTagCreateCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "create <version> --shape <pattern>",
-		Short: "Create and push an annotated release tag, refusing a version --shape rejects",
+		Short: "Create and push a signed release tag, refusing a version --shape rejects",
 		Long: `create derives the tag it makes from --shape and <version>: --shape is the
 exact one-line pattern "language-tools tag shape" prints for a module
 ("vX.Y.Z" for a root module, "<path>/vX.Y.Z" for a monorepo one), and
@@ -54,12 +54,16 @@ placeholder shape, --shape must actually carry the "X.Y.Z" placeholder, and
 the derived tag must not already exist locally. Any failure there is a
 clean refusal — no tag is created, nothing is pushed.
 
-On acceptance create makes an annotated tag at the derived name and pushes
-it through the same remote-advance path "git-tools push" uses on a tag:
-never force, never overwriting an existing ref. Re-running create against a
-tag it already made is refused at the local-existence check, not retried as
-a push — the clean retry for a push that failed after the tag was already
-made is "git-tools push <tag>", not create again.
+On acceptance create makes a signed, annotated tag at the derived name and
+pushes it through the same remote-advance path "git-tools push" uses on a
+tag: never force, never overwriting an existing ref. The tag always signs
+("git tag -s"), regardless of any ambient tag.forceSignAnnotated setting —
+an explicit --annotate on the command line overrides that setting per
+git-config(1), so create signs explicitly rather than relying on it.
+Re-running create against a tag it already made is refused at the
+local-existence check, not retried as a push — the clean retry for a push
+that failed after the tag was already made is "git-tools push <tag>", not
+create again.
 
 Like push, create always operates on the invoking process's own working
 directory: --repo/--config would retarget it, so both are refused.
@@ -121,7 +125,11 @@ Exit codes:
 					map[string]any{"tag": tagName})
 			}
 
-			res, err := gitexec.RunGit(ctx, ".", "tag", "-a", tagName, "-m", tagName)
+			// -s, not -a: an explicit --annotate on the command line overrides
+			// tag.forceSignAnnotated (git-config(1)), so relying on ambient
+			// config to sign a release tag silently produces an unsigned one.
+			// -s implies -a and always signs, regardless of ambient config.
+			res, err := gitexec.RunGit(ctx, ".", "tag", "-s", tagName, "-m", tagName)
 			if err != nil {
 				return finishErr(cmd, nil, "internal.git.tag_create_failed", fmt.Sprintf("create tag %s", tagName), err)
 			}

@@ -123,6 +123,34 @@ func TestTagCreate_BareShape_CreatesAndPushes(t *testing.T) {
 	}
 }
 
+// TestTagCreate_SignsRegardlessOfForceSignAnnotated proves create's tag
+// always signs, even when tag.forceSignAnnotated is unset. An explicit
+// --annotate on the git command line overrides that config (git-config(1)),
+// so a create that passed "-a" instead of "-s" would silently produce an
+// unsigned tag on a host that relies on the config to sign for it — exactly
+// the defect this test guards against.
+func TestTagCreate_SignsRegardlessOfForceSignAnnotated(t *testing.T) {
+	bin := buildCLI(t)
+	dir := signingRepo(t)
+	newBareRemote(t, dir)
+	// signingRepo sets commit.gpgsign but never touches the tag namespace —
+	// tag.forceSignAnnotated is absent here, exactly the state that must not
+	// matter to create's own signing.
+
+	r, exit := runCLIIn(t, bin, dir, "tag", "create", "1.4.0", "--shape", "vX.Y.Z")
+	if r.Status != "success" || exit != 0 {
+		t.Fatalf("status=%s exit=%d, want success/0: %+v", r.Status, exit, r)
+	}
+
+	out, err := exec.Command("git", "-C", dir, "tag", "-v", "v1.4.0").CombinedOutput()
+	if err != nil {
+		t.Fatalf("git tag -v v1.4.0: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "Good \"git\" signature") {
+		t.Fatalf("tag v1.4.0 did not carry a verifying signature:\n%s", out)
+	}
+}
+
 func TestTagCreate_PrefixedShape_CreatesAndPushes(t *testing.T) {
 	bin := buildCLI(t)
 	dir := initRepo(t)
