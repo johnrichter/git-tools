@@ -15,7 +15,7 @@ links:
   - project:git-governance-gates-and-signing:design
   - project:git-tools-merge-signing-and-release-provenance:design
   - project:harness-followup:register
-updated: 2026-08-27T18:09:54Z
+updated: 2026-08-27T18:14:14Z
 ---
 
 # Residue record — git-tools-gate-classification-and-path-resolution
@@ -102,3 +102,4 @@ harness-followup's FB6 raises one item this reconciliation does not close: **`gi
 - Cross-repo source for §1's P2 attribution: `marketplace/.dat/git-tools-merge-signing-and-release-provenance/design.md` (D8, D9, §D — the citations that shorthand `git-governance-gates-and-signing` as "P2") and `marketplace/.dat/archive/git-governance-gates-and-signing/design.md` (§S1/§S1b, the absorption record) and its `execution.json` (tasks `M1.P2.T2`, `M2.P1.T1`, `M2.P2.T1`, `M2.P2.T2`, `M2.P2.T3`, `M2.P4.T1`, all `status:done`) — read for cross-check only, not modified, not part of this repo's `file_surface`.
 - Cross-repo source for §3: `marketplace/.dat/harness-followup/feedback.json` (FB4, FB6), read for reconciliation only — not modified, not part of this repo's `file_surface`.
 - Verification performed 2026-08-12 in this worktree: `go build ./...`, `go test ./...`, and direct line citations against `worktree-gate/detect/{bash,decide}.go`, their test files, `worktree-gate/detect/testdata/decide-bash-corpus.json`, and `internal/cli/worktree.go` / `internal/worktreeclean/worktreeclean.go`.
+- Retag addendum, 2026-08-27: this file and `design.md` moved from `privacy:internal`/`owner:operator` to `privacy:public`/`owner:public`, closing the marketplace `git-tools-privacy-scan-scope-bug` fix plan's own closing verification step for this repo. `git-tools scan privacy` on `main` now reports zero violations. A bridge-free merge and push, with no `--privacy-tier` override, now succeed here too.
