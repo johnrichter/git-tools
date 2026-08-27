@@ -491,7 +491,7 @@ func plantUntrackedFile(t *testing.T, dir, name, content string) {
 // documentation placeholder (e.g. AWS's EXAMPLE access-key id) — the closest
 // shape a test fixture can embed while still exercising a real, disqualified
 // finding.
-const secretFixtureSecret = "github_pat = ghp_1234567890abcdefghijklmnopqrstuvwxyz12\n"
+const secretFixtureSecret = "github_pat = " + "ghp_" + "1234567890abcdefghijklmnopqrstuvwxyz12" + "\n"
 
 // secretFixtureFindings is how many findings one non-exempt
 // secretFixtureSecret file accounts for: ScanSecrets and ScanPrivacy both
