@@ -8,14 +8,14 @@ tags:
   - topic:tooling
   - team:psa
   - status:complete
-  - privacy:internal
-  - owner:operator
+  - privacy:public
+  - owner:public
 links:
   - project:git-tools-gate-classification-and-path-resolution:design
   - project:git-governance-gates-and-signing:design
   - project:git-tools-merge-signing-and-release-provenance:design
   - project:harness-followup:register
-updated: 2026-08-12T00:00:00Z
+updated: 2026-08-27T18:09:54Z
 ---
 
 # Residue record — git-tools-gate-classification-and-path-resolution

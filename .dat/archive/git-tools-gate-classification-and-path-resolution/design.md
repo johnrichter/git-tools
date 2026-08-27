@@ -8,13 +8,13 @@ tags:
   - topic:git-governance
   - team:psa
   - status:complete
-  - privacy:internal
-  - owner:operator
+  - privacy:public
+  - owner:public
 links:
   - project:git-governance-emergency-followup:design
   - project:git-governance-emergency-followup:feedback-review-record
   - project:dat-single-workspace-plans-and-programs:design
-updated: 2026-08-08T22:31:00Z
+updated: 2026-08-27T18:09:54Z
 ---
 
 # git-tools — Gate Classification Layer + Relative-Path Resolution
