@@ -26,6 +26,18 @@ const envPrefix = "GITTOOLS_"
 // leading dot on purpose: it is ordinary, reviewed repo content, not a
 // hidden dotfile, and its own presence is a signal a reader should be able
 // to see without passing -a to ls.
+//
+// Known, accepted residual: loadConfigFile reads this file from disk exactly
+// as it sits at scan time, with no requirement that it be tracked or clean.
+// An uncommitted, untracked, or dirty edit to it therefore takes effect
+// immediately, silently widening privacy_marker_exempt/secret_scan_exempt
+// for whatever merge/push/tag create runs next, with no diagnostic naming
+// the file or its state. A tracked-and-clean requirement was considered and
+// rejected: it would reverse a design internal/cli/scan_gate_test.go's own
+// writeConfig helper deliberately asserts (an untracked config file taking
+// effect), and needs its own design decision plus a rewritten test suite,
+// not a drive-by change here. See marketplace's own
+// .dat/reports/git-tools-privacy-scan-scope-bug.md for the full record.
 const defaultConfigFile = "git-tools.yaml"
 
 // Config is git-tools' resolved settings: every field a value one command or
