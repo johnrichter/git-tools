@@ -49,7 +49,7 @@ func TestAC1_NoRolloutEnvSurface(t *testing.T) {
 func TestAC2_Bash_VerbsErr_MustDeny(t *testing.T) {
 	fs := primaryFS()
 	verbsErr := errors.New("verbs.json is corrupt")
-	d := Decide(fs.lstat, fs.readFile, Verbs{}, verbsErr, Input{
+	d := Decide(fs.lstat, fs.readFile, nil, Verbs{}, verbsErr, Input{
 		ToolName: "Bash", CWD: "/repo", Command: "rm -rf build",
 	})
 	if !d.Deny {
@@ -65,7 +65,7 @@ func TestAC2_Bash_VerbsErr_MustDeny(t *testing.T) {
 func TestAC4_DecideBash_UsesEffectiveCWD_NotSessionCWDAlone(t *testing.T) {
 	fs := newFakeFS().dir("/repo/.git").file("/repo/wt/.git", "gitdir: /repo/.git/worktrees/wt\n")
 	v := testVerbs(t)
-	d := Decide(fs.lstat, fs.readFile, v, nil, Input{
+	d := Decide(fs.lstat, fs.readFile, nil, v, nil, Input{
 		ToolName: "Bash", CWD: "/repo", Command: "cd /repo/wt && rm -rf build",
 	})
 	if d.Deny {

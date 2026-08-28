@@ -100,7 +100,7 @@ func runDecideBashCase(t *testing.T, v Verbs, correctDigest string, c decideBash
 		argDigest = c.ArgDigest
 	}
 
-	return Decide(fs.lstat, fs.readFile, v, nil, Input{
+	return Decide(fs.lstat, fs.readFile, nil, v, nil, Input{
 		ToolName:             "Bash",
 		CWD:                  c.CWD,
 		Command:              c.Command,

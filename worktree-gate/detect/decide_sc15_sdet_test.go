@@ -80,7 +80,7 @@ func TestSC15_SDET_AdversarialProbe(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			fs := newFS()
-			d := Decide(fs.lstat, fs.readFile, v, nil, Input{
+			d := Decide(fs.lstat, fs.readFile, nil, v, nil, Input{
 				ToolName:             "Bash",
 				CWD:                  "/repo",
 				Command:              c.command,

@@ -13,7 +13,7 @@ import "testing"
 func TestSDET_Decide_GitDashCStatus_AllowedAtPrimary(t *testing.T) {
 	fs := primaryFS()
 	v := testVerbs(t)
-	d := Decide(fs.lstat, fs.readFile, v, nil, Input{
+	d := Decide(fs.lstat, fs.readFile, nil, v, nil, Input{
 		ToolName: "Bash", CWD: "/repo", Command: "git -C /repo status",
 	})
 	if d.Deny {
@@ -25,7 +25,7 @@ func TestSDET_Decide_GitDashCStatus_AllowedAtPrimary(t *testing.T) {
 func TestSDET_Decide_GitMergeBase_AllowedAtPrimary(t *testing.T) {
 	fs := primaryFS()
 	v := testVerbs(t)
-	d := Decide(fs.lstat, fs.readFile, v, nil, Input{
+	d := Decide(fs.lstat, fs.readFile, nil, v, nil, Input{
 		ToolName: "Bash", CWD: "/repo", Command: "git merge-base main feature",
 	})
 	if d.Deny {
@@ -45,7 +45,7 @@ func TestSDET_Decide_GitWriteForms_DeniedAtPrimary(t *testing.T) {
 	}
 	for _, cmd := range cases {
 		fs := primaryFS()
-		d := Decide(fs.lstat, fs.readFile, v, nil, Input{
+		d := Decide(fs.lstat, fs.readFile, nil, v, nil, Input{
 			ToolName: "Bash", CWD: "/repo", Command: cmd,
 		})
 		if !d.Deny {
@@ -77,7 +77,7 @@ func TestSDET_Decide_GitReadForms_AllowedAtPrimary(t *testing.T) {
 	}
 	for _, cmd := range cases {
 		fs := primaryFS()
-		d := Decide(fs.lstat, fs.readFile, v, nil, Input{
+		d := Decide(fs.lstat, fs.readFile, nil, v, nil, Input{
 			ToolName: "Bash", CWD: "/repo", Command: cmd,
 		})
 		if d.Deny {

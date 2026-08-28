@@ -99,19 +99,23 @@ func deny(situation, remedy string) Decision {
 // changing the verdict, because the call was already independently resolved.
 // On the Bash axis the verdict also judges the paths a write-class piece
 // names, not just its effective cwd (SC20), and exempts the digest-verified
-// provisioned landing CLI (SC15).
-func Decide(lstat LstatFunc, readFile ReadFileFunc, verbs Verbs, verbsErr error, in Input) Decision {
+// provisioned landing CLI (SC15). gitIgnored carries SC23's narrower
+// exception: a target already covered by a `.gitignore` rule committed in
+// its own repository is exempt from KindPrimary too, on both axes -- see
+// gitignoreExempt. A nil gitIgnored simply disables the exception, never
+// widening a verdict on its own.
+func Decide(lstat LstatFunc, readFile ReadFileFunc, gitIgnored GitIgnoredFunc, verbs Verbs, verbsErr error, in Input) Decision {
 	switch in.ToolName {
 	case "Write", "Edit":
-		return decideFileWrite(lstat, readFile, in)
+		return decideFileWrite(lstat, readFile, gitIgnored, in)
 	case "Bash":
-		return decideBash(lstat, readFile, verbs, verbsErr, in)
+		return decideBash(lstat, readFile, gitIgnored, verbs, verbsErr, in)
 	default:
 		return Decision{}
 	}
 }
 
-func decideFileWrite(lstat LstatFunc, readFile ReadFileFunc, in Input) Decision {
+func decideFileWrite(lstat LstatFunc, readFile ReadFileFunc, gitIgnored GitIgnoredFunc, in Input) Decision {
 	filePath := in.FilePath
 	if filePath == "" {
 		return Decision{}
@@ -130,6 +134,9 @@ func decideFileWrite(lstat LstatFunc, readFile ReadFileFunc, in Input) Decision 
 	case KindWorktree:
 		return Decision{}
 	case KindPrimary:
+		if gitignoreExempt(gitIgnored, root, filePath) {
+			return Decision{}
+		}
 		return deny(fmt.Sprintf(
 			"%q writes into the primary checkout of %q, not a worktree", filePath, root), remedyTargetRepoWorktree)
 	default:
@@ -138,7 +145,7 @@ func decideFileWrite(lstat LstatFunc, readFile ReadFileFunc, in Input) Decision 
 	}
 }
 
-func decideBash(lstat LstatFunc, readFile ReadFileFunc, verbs Verbs, verbsErr error, in Input) Decision {
+func decideBash(lstat LstatFunc, readFile ReadFileFunc, gitIgnored GitIgnoredFunc, verbs Verbs, verbsErr error, in Input) Decision {
 	if strings.TrimSpace(in.Command) == "" {
 		return Decision{}
 	}
@@ -158,7 +165,7 @@ func decideBash(lstat LstatFunc, readFile ReadFileFunc, verbs Verbs, verbsErr er
 		// shadowing it here would make any future deny() call added inside this
 		// block fail to compile.
 		var scanDenial *Decision
-		class, scanDenial = scanBash(lstat, readFile, verbs, in.ProvisionedBinPath, in.ProvisionedBinDigest, in.Command, cwd, cwdUnresolvable, 0)
+		class, scanDenial = scanBash(lstat, readFile, gitIgnored, verbs, in.ProvisionedBinPath, in.ProvisionedBinDigest, in.Command, cwd, cwdUnresolvable, 0)
 		if scanDenial != nil {
 			return *scanDenial
 		}
@@ -237,7 +244,7 @@ func decideBash(lstat LstatFunc, readFile ReadFileFunc, verbs Verbs, verbsErr er
 // found; unlike ClassifyBash it does not stop at the first write, since a later
 // piece may name a primary-checkout path the rule must still catch (the
 // allowances are per piece, never per command).
-func scanBash(lstat LstatFunc, readFile ReadFileFunc, verbs Verbs, sc15Path, sc15Digest, command, cwd string, cwdUnresolvable bool, depth int) (BashClass, *Decision) {
+func scanBash(lstat LstatFunc, readFile ReadFileFunc, gitIgnored GitIgnoredFunc, verbs Verbs, sc15Path, sc15Digest, command, cwd string, cwdUnresolvable bool, depth int) (BashClass, *Decision) {
 	worst := ClassRead
 	for _, p := range decompose(command) {
 		// SC15's exemption waives only this piece's own class tally and
@@ -264,7 +271,7 @@ func scanBash(lstat LstatFunc, readFile ReadFileFunc, verbs Verbs, sc15Path, sc1
 				pc = ClassRead
 			}
 			if pc == ClassWrite {
-				if d := namedPathDenial(lstat, readFile, p, cwd, cwdUnresolvable); d != nil {
+				if d := namedPathDenial(lstat, readFile, gitIgnored, p, cwd, cwdUnresolvable); d != nil {
 					return ClassWrite, d
 				}
 			}
@@ -274,7 +281,7 @@ func scanBash(lstat LstatFunc, readFile ReadFileFunc, verbs Verbs, sc15Path, sc1
 			continue
 		}
 		for _, interior := range decomposableInteriors(p.raw) {
-			ic, d := scanBash(lstat, readFile, verbs, sc15Path, sc15Digest, interior, cwd, cwdUnresolvable, depth+1)
+			ic, d := scanBash(lstat, readFile, gitIgnored, verbs, sc15Path, sc15Digest, interior, cwd, cwdUnresolvable, depth+1)
 			if d != nil {
 				return ClassWrite, d
 			}
@@ -298,7 +305,7 @@ func scanBash(lstat LstatFunc, readFile ReadFileFunc, verbs Verbs, sc15Path, sc1
 // target that resolves into a primary checkout but sits under its worktree
 // home (FB7) is exempted as gate-managed scratch rather than denied -- see
 // isWorktreeHomeScratch.
-func namedPathDenial(lstat LstatFunc, readFile ReadFileFunc, p piece, cwd string, cwdUnresolvable bool) *Decision {
+func namedPathDenial(lstat LstatFunc, readFile ReadFileFunc, gitIgnored GitIgnoredFunc, p piece, cwd string, cwdUnresolvable bool) *Decision {
 	for _, raw := range namedPaths(p) {
 		t := stripQuotes(raw)
 		if t == "" {
@@ -331,8 +338,8 @@ func namedPathDenial(lstat LstatFunc, readFile ReadFileFunc, p piece, cwd string
 		case KindWorktree:
 			continue // writing into a worktree is already isolated
 		case KindPrimary:
-			if isWorktreeHomeScratch(root, abs) {
-				continue // FB7: gate-managed scratch under the worktree home, not repository content
+			if isWorktreeHomeScratch(root, abs) || gitignoreExempt(gitIgnored, root, abs) {
+				continue // FB7 scratch, or SC23's committed-gitignore exception
 			}
 			d := deny(fmt.Sprintf(
 				"this command writes into the primary checkout of %q via %q, not a worktree", root, abs), remedyTargetRepoWorktree)
@@ -367,6 +374,34 @@ func isWorktreeHomeScratch(root, absPath string) bool {
 		return false
 	}
 	return rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// GitIgnoredFunc reports whether absPath matches a `.gitignore` pattern
+// already committed at HEAD in the repository rooted at repoRoot (SC23). The
+// whole exception rests on such a path having no entry in git history, so no
+// worktree being able to hold it; an implementation must therefore answer
+// false whenever that premise does not hold. That means false when the match
+// traces only to `.git/info/exclude` or a global core.excludesFile (neither is
+// committed repository content), when the matching `.gitignore` file itself
+// carries an uncommitted change, when a negating rule re-includes the path so
+// git does not really ignore it, and when the path is tracked in the
+// repository anyway (a force-added path under an ignore rule is history a
+// worktree does hold, so the ordinary remedy applies to it). Answering false
+// on anything uncertain is what lets a caller fold this into an existing
+// KindPrimary deny without turning a fail-closed path into a fail-open one.
+// The real, git-shelling implementation lives outside this hermetic package
+// (see cmd/worktree-gate/main.go); Decide only ever calls it through this type.
+type GitIgnoredFunc func(repoRoot, absPath string) (bool, error)
+
+// gitignoreExempt treats a nil gitIgnored, or any error it returns, the same
+// as "not covered" -- SC23's exception can only narrow a deny, never widen
+// one on a primitive that failed to answer.
+func gitignoreExempt(gitIgnored GitIgnoredFunc, repoRoot, absPath string) bool {
+	if gitIgnored == nil {
+		return false
+	}
+	ok, err := gitIgnored(repoRoot, absPath)
+	return err == nil && ok
 }
 
 // namedPaths returns the paths a write-class piece actually writes to: its

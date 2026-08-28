@@ -44,6 +44,6 @@ func VerifyWith(cases []Case, decide func(Case) detect.Decision) []Failure {
 func Verify(cases []Case, verbs detect.Verbs, verbsErr error) []Failure {
 	return VerifyWith(cases, func(c Case) detect.Decision {
 		lstat, readFile := buildFS(c)
-		return detect.Decide(lstat, readFile, verbs, verbsErr, c.toInput())
+		return detect.Decide(lstat, readFile, nil, verbs, verbsErr, c.toInput())
 	})
 }

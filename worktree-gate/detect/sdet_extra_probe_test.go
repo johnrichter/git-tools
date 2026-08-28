@@ -15,7 +15,7 @@ func TestSDET_FormerExemptPaths_AllDeny(t *testing.T) {
 	}
 	for _, p := range cases {
 		fs := newFakeFS().dir("/repo/.git")
-		d := Decide(fs.lstat, fs.readFile, Verbs{}, nil, Input{
+		d := Decide(fs.lstat, fs.readFile, nil, Verbs{}, nil, Input{
 			ToolName: "Write",
 			FilePath: p,
 		})
@@ -34,7 +34,7 @@ func TestSDET_FormerExemptPaths_AllowInsideWorktree(t *testing.T) {
 	}
 	for _, p := range cases {
 		fs := newFakeFS().dir("/repo/.git").file("/repo/.claude/worktrees/wt1/.git", "gitdir: /repo/.git/worktrees/wt1\n")
-		d := Decide(fs.lstat, fs.readFile, Verbs{}, nil, Input{
+		d := Decide(fs.lstat, fs.readFile, nil, Verbs{}, nil, Input{
 			ToolName: "Write",
 			FilePath: p,
 			CWD:      "/repo/.claude/worktrees/wt1",

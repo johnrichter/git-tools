@@ -13,7 +13,7 @@ import (
 
 func TestDecide_Write_EmptyFilePath_NoOp(t *testing.T) {
 	fs := primaryFS()
-	d := Decide(fs.lstat, fs.readFile, Verbs{}, nil, Input{ToolName: "Write", FilePath: ""})
+	d := Decide(fs.lstat, fs.readFile, nil, Verbs{}, nil, Input{ToolName: "Write", FilePath: ""})
 	if d.Deny || d.Degraded != "" {
 		t.Errorf("expected no-op for an empty file path, got %+v", d)
 	}
@@ -24,7 +24,7 @@ func TestDecide_Write_IndeterminateGitEntry_DeniedFailClosed(t *testing.T) {
 	// redirect file (e.g. corrupted or an unrecognized type) -- must deny,
 	// never guess it's safely inside a worktree.
 	fs := newFakeFS().file("/repo/.git", "not a gitdir line\n")
-	d := Decide(fs.lstat, fs.readFile, Verbs{}, nil, Input{ToolName: "Write", FilePath: "/repo/a.go"})
+	d := Decide(fs.lstat, fs.readFile, nil, Verbs{}, nil, Input{ToolName: "Write", FilePath: "/repo/a.go"})
 	if !d.Deny {
 		t.Fatal("expected deny when the .git entry's kind can't be classified (fail closed on uncertainty)")
 	}
@@ -32,7 +32,7 @@ func TestDecide_Write_IndeterminateGitEntry_DeniedFailClosed(t *testing.T) {
 
 func TestDecide_Write_IndeterminateRepoMembership_DeniedFailClosed(t *testing.T) {
 	fs := newFakeFS().errAt("/repo/.git", errors.New("permission denied"))
-	d := Decide(fs.lstat, fs.readFile, Verbs{}, nil, Input{ToolName: "Write", FilePath: "/repo/a.go"})
+	d := Decide(fs.lstat, fs.readFile, nil, Verbs{}, nil, Input{ToolName: "Write", FilePath: "/repo/a.go"})
 	if !d.Deny {
 		t.Fatal("expected deny when repo membership can't be resolved for a Write (fail closed on uncertainty)")
 	}
@@ -40,7 +40,7 @@ func TestDecide_Write_IndeterminateRepoMembership_DeniedFailClosed(t *testing.T)
 
 func TestDecide_Edit_SameRulesAsWrite(t *testing.T) {
 	fs := primaryFS()
-	d := Decide(fs.lstat, fs.readFile, Verbs{}, nil, Input{ToolName: "Edit", FilePath: "/repo/a.go"})
+	d := Decide(fs.lstat, fs.readFile, nil, Verbs{}, nil, Input{ToolName: "Edit", FilePath: "/repo/a.go"})
 	if !d.Deny {
 		t.Fatal("expected Edit outside a worktree to deny, same as Write")
 	}
@@ -51,7 +51,7 @@ func TestDecide_Edit_SameRulesAsWrite(t *testing.T) {
 func TestDecide_Bash_WorktreeWithDegradedClassifier_AllowedAndDegraded(t *testing.T) {
 	fs := worktreeFS()
 	verbsErr := errors.New("worktree-gate: embedded verbs.json is corrupt")
-	d := Decide(fs.lstat, fs.readFile, Verbs{}, verbsErr, Input{ToolName: "Bash", CWD: "/repo/wt", Command: "git commit -m x"})
+	d := Decide(fs.lstat, fs.readFile, nil, Verbs{}, verbsErr, Input{ToolName: "Bash", CWD: "/repo/wt", Command: "git commit -m x"})
 	if d.Deny {
 		t.Fatalf("expected allow: already inside a worktree, regardless of classifier health, got deny: %s", d.Reason)
 	}
@@ -69,7 +69,7 @@ func TestDecide_Bash_WorktreeWithDegradedClassifier_AllowedAndDegraded(t *testin
 func TestDecide_Bash_SC9_OpaqueScriptWritingClaudeSettingsFromPrimaryCheckout_Denied(t *testing.T) {
 	fs := primaryFS()
 	v := testVerbs(t)
-	d := Decide(fs.lstat, fs.readFile, v, nil, Input{
+	d := Decide(fs.lstat, fs.readFile, nil, v, nil, Input{
 		ToolName: "Bash", CWD: "/repo", Command: "./build.sh",
 	})
 	if !d.Deny {
@@ -324,7 +324,7 @@ func TestRun_DegradedClassifierNeverDeniesAndReportsOnlyOnStderr(t *testing.T) {
 	fs := worktreeFS()
 	in := strings.NewReader(`{"tool_name":"Bash","cwd":"/repo/wt","tool_input":{"command":"git commit -m x"}}`)
 	var out, errOut bytes.Buffer
-	code := Run(in, &out, &errOut, fs.lstat, fs.readFile, noEnv)
+	code := Run(in, &out, &errOut, fs.lstat, fs.readFile, nil, noEnv)
 	if code != 0 || out.Len() != 0 {
 		t.Errorf("Run() = code=%d stdout=%q, want a silent allow inside an already-isolated worktree", code, out.String())
 	}
@@ -334,7 +334,7 @@ func TestRun_MissingFilePathOnWrite_NoOp(t *testing.T) {
 	in := strings.NewReader(`{"tool_name":"Write","tool_input":{}}`)
 	var out, errOut bytes.Buffer
 	fs := primaryFS()
-	code := Run(in, &out, &errOut, fs.lstat, fs.readFile, noEnv)
+	code := Run(in, &out, &errOut, fs.lstat, fs.readFile, nil, noEnv)
 	if code != 0 || out.Len() != 0 {
 		t.Errorf("Run() with no file_path = code=%d stdout=%q, want no-op", code, out.String())
 	}
@@ -344,7 +344,7 @@ func TestRun_BashEmptyCommand_NoOp(t *testing.T) {
 	in := strings.NewReader(`{"tool_name":"Bash","cwd":"/repo","tool_input":{"command":""}}`)
 	var out, errOut bytes.Buffer
 	fs := primaryFS()
-	code := Run(in, &out, &errOut, fs.lstat, fs.readFile, noEnv)
+	code := Run(in, &out, &errOut, fs.lstat, fs.readFile, nil, noEnv)
 	if code != 0 || out.Len() != 0 {
 		t.Errorf("Run() with empty command = code=%d stdout=%q, want no-op", code, out.String())
 	}
@@ -358,7 +358,7 @@ func TestRun_DenyAlwaysCarriesNonEmptyReason(t *testing.T) {
 	fs := primaryFS()
 	in := strings.NewReader(`{"tool_name":"Write","tool_input":{"file_path":"/repo/a.go"}}`)
 	var out, errOut bytes.Buffer
-	Run(in, &out, &errOut, fs.lstat, fs.readFile, noEnv)
+	Run(in, &out, &errOut, fs.lstat, fs.readFile, nil, noEnv)
 
 	var resp response
 	if err := json.Unmarshal(out.Bytes(), &resp); err != nil {

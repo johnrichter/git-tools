@@ -28,7 +28,7 @@ func TestSDET_FB7_LiveWorktreeUnderHome_UnaffectedByExemption(t *testing.T) {
 	// classification.
 	for _, cwd := range []string{"/tmp", "/repo/.claude/worktrees/live"} {
 		t.Run("cwd="+cwd, func(t *testing.T) {
-			d := Decide(fs.lstat, fs.readFile, v, nil, Input{
+			d := Decide(fs.lstat, fs.readFile, nil, v, nil, Input{
 				ToolName: "Bash",
 				CWD:      cwd,
 				Command:  "rm /repo/.claude/worktrees/live",
@@ -40,7 +40,7 @@ func TestSDET_FB7_LiveWorktreeUnderHome_UnaffectedByExemption(t *testing.T) {
 	}
 
 	t.Run("cwd=/repo (denied by the cwd leg, not the target)", func(t *testing.T) {
-		d := Decide(fs.lstat, fs.readFile, v, nil, Input{
+		d := Decide(fs.lstat, fs.readFile, nil, v, nil, Input{
 			ToolName: "Bash",
 			CWD:      "/repo",
 			Command:  "rm /repo/.claude/worktrees/live",
@@ -107,7 +107,7 @@ func TestSDET_FB7_ScratchExemption_Boundaries(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			d := Decide(fs.lstat, fs.readFile, v, nil, Input{
+			d := Decide(fs.lstat, fs.readFile, nil, v, nil, Input{
 				ToolName: "Bash",
 				CWD:      c.cwd,
 				Command:  "rm " + c.target,
@@ -129,7 +129,7 @@ func TestSDET_FB7_WriteFileTool_NotExempted(t *testing.T) {
 		dir("/repo/.git").
 		file("/repo/tracked.md", "tracked\n")
 
-	d := Decide(fs.lstat, fs.readFile, testVerbs(t), nil, Input{
+	d := Decide(fs.lstat, fs.readFile, nil, testVerbs(t), nil, Input{
 		ToolName: "Write",
 		FilePath: "/repo/.claude/worktrees/scratch-thing",
 	})

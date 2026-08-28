@@ -60,7 +60,7 @@ func TestDecide_Bash_EffectiveCWD_DrivesVerdict_NotSessionCWD(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			d := Decide(fs.lstat, fs.readFile, v, nil, Input{
+			d := Decide(fs.lstat, fs.readFile, nil, v, nil, Input{
 				ToolName: "Bash", CWD: c.sessionCWD, Command: c.command,
 			})
 			if d.Deny != c.wantDeny {
@@ -90,7 +90,7 @@ func TestDecide_Bash_SC9_Variants(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			d := Decide(fs.lstat, fs.readFile, v, nil, Input{
+			d := Decide(fs.lstat, fs.readFile, nil, v, nil, Input{
 				ToolName: "Bash", CWD: "/repo", Command: c.command,
 			})
 			if !d.Deny {

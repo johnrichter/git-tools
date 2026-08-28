@@ -28,7 +28,7 @@ func TestDecide_Bash_OQ19_Residual_Disclosed(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			d := Decide(fs.lstat, fs.readFile, v, nil, Input{
+			d := Decide(fs.lstat, fs.readFile, nil, v, nil, Input{
 				ToolName: "Bash", CWD: "/repo", Command: c.command,
 			})
 			if d.Deny {
@@ -66,7 +66,7 @@ func TestRunGate_SC15Allow_ReadsNoEnvironment(t *testing.T) {
 
 	env := &recordingEnv{}
 	var out, errOut bytes.Buffer
-	code := RunGate(strings.NewReader(sc15MergePayload()), &out, &errOut, fs.lstat, fs.readFile, env.get, "/plugin-data/bin/git-tools", digest)
+	code := RunGate(strings.NewReader(sc15MergePayload()), &out, &errOut, fs.lstat, fs.readFile, nil, env.get, "/plugin-data/bin/git-tools", digest)
 
 	if code != 0 || out.Len() != 0 {
 		t.Fatalf("SC15 merge from a primary checkout: code=%d stdout=%q, want a silent allow", code, out.String())
@@ -100,7 +100,7 @@ func TestRunGate_SC15_ArgvAbsence_Denies(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			var out, errOut bytes.Buffer
-			RunGate(strings.NewReader(sc15MergePayload()), &out, &errOut, fs.lstat, fs.readFile, noEnv, c.path, c.digest)
+			RunGate(strings.NewReader(sc15MergePayload()), &out, &errOut, fs.lstat, fs.readFile, nil, noEnv, c.path, c.digest)
 			if out.Len() == 0 {
 				t.Fatalf("SC15 merge with %s must DENY (argv parameter absent), got a silent allow", c.name)
 			}

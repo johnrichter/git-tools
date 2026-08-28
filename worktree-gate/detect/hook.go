@@ -32,8 +32,8 @@ type response struct {
 // disabled: it delegates to RunGate with no provisioned-binary parameters, so
 // no landing verb is exempted. It is the call surface used where the SC15
 // argv inputs are not supplied.
-func Run(r io.Reader, stdout, errOut io.Writer, lstat LstatFunc, readFile ReadFileFunc, getenv func(string) string) int {
-	return RunGate(r, stdout, errOut, lstat, readFile, getenv, "", "")
+func Run(r io.Reader, stdout, errOut io.Writer, lstat LstatFunc, readFile ReadFileFunc, gitIgnored GitIgnoredFunc, getenv func(string) string) int {
+	return RunGate(r, stdout, errOut, lstat, readFile, gitIgnored, getenv, "", "")
 }
 
 // RunGate implements the PreToolUse gate as a hook process: it reads one
@@ -43,9 +43,10 @@ func Run(r io.Reader, stdout, errOut io.Writer, lstat LstatFunc, readFile ReadFi
 // reported on errOut only, never on stdout, so it never becomes part of the
 // tool-call decision. provisionedBinPath and provisionedBinDigest carry
 // SC15's allowance inputs, supplied by the invoking wrapper as ARGV, never
-// read from the environment here. It returns the process exit code the
-// caller should use.
-func RunGate(r io.Reader, stdout, errOut io.Writer, lstat LstatFunc, readFile ReadFileFunc, getenv func(string) string, provisionedBinPath, provisionedBinDigest string) int {
+// read from the environment here. gitIgnored carries SC23's committed-
+// gitignore exception; a nil value disables it. It returns the process exit
+// code the caller should use.
+func RunGate(r io.Reader, stdout, errOut io.Writer, lstat LstatFunc, readFile ReadFileFunc, gitIgnored GitIgnoredFunc, getenv func(string) string, provisionedBinPath, provisionedBinDigest string) int {
 	var p payload
 	if err := json.NewDecoder(r).Decode(&p); err != nil {
 		// An unparseable payload isn't this gate's call to make.
@@ -58,7 +59,7 @@ func RunGate(r io.Reader, stdout, errOut io.Writer, lstat LstatFunc, readFile Re
 	}
 
 	verbs, verbsErr := DefaultVerbs()
-	decision := Decide(lstat, readFile, verbs, verbsErr, Input{
+	decision := Decide(lstat, readFile, gitIgnored, verbs, verbsErr, Input{
 		ToolName:             p.ToolName,
 		CWD:                  p.CWD,
 		FilePath:             p.ToolInput.FilePath,

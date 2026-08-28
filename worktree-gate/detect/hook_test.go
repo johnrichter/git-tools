@@ -12,7 +12,7 @@ func TestRun_DeniesWriteOutsideWorktree(t *testing.T) {
 	in := strings.NewReader(`{"tool_name":"Write","tool_input":{"file_path":"/repo/a.go"}}`)
 	var out, errOut bytes.Buffer
 
-	code := Run(in, &out, &errOut, fs.lstat, fs.readFile, noEnv)
+	code := Run(in, &out, &errOut, fs.lstat, fs.readFile, nil, noEnv)
 
 	if code != 0 {
 		t.Fatalf("Run() exit code = %d, want 0 (the deny is carried in stdout JSON, not the exit code)", code)
@@ -31,7 +31,7 @@ func TestRun_AllowsWriteInsideWorktree_NoOutput(t *testing.T) {
 	in := strings.NewReader(`{"tool_name":"Write","tool_input":{"file_path":"/repo/wt/a.go"}}`)
 	var out, errOut bytes.Buffer
 
-	code := Run(in, &out, &errOut, fs.lstat, fs.readFile, noEnv)
+	code := Run(in, &out, &errOut, fs.lstat, fs.readFile, nil, noEnv)
 
 	if code != 0 || out.Len() != 0 {
 		t.Errorf("Run() = code=%d stdout=%q, want code=0 and no stdout for an allowed call", code, out.String())
@@ -43,7 +43,7 @@ func TestRun_DeniesUncertainBashInPrimaryCheckout(t *testing.T) {
 	in := strings.NewReader(`{"tool_name":"Bash","cwd":"/repo","tool_input":{"command":"some-unlisted-tool"}}`)
 	var out, errOut bytes.Buffer
 
-	Run(in, &out, &errOut, fs.lstat, fs.readFile, noEnv)
+	Run(in, &out, &errOut, fs.lstat, fs.readFile, nil, noEnv)
 
 	var resp response
 	if err := json.Unmarshal(out.Bytes(), &resp); err != nil {
@@ -59,7 +59,7 @@ func TestRun_ReadBashNeverTrips(t *testing.T) {
 	in := strings.NewReader(`{"tool_name":"Bash","cwd":"/repo","tool_input":{"command":"git status"}}`)
 	var out, errOut bytes.Buffer
 
-	code := Run(in, &out, &errOut, fs.lstat, fs.readFile, noEnv)
+	code := Run(in, &out, &errOut, fs.lstat, fs.readFile, nil, noEnv)
 
 	if code != 0 || out.Len() != 0 {
 		t.Errorf("Run() = code=%d stdout=%q, want no-op for a read command", code, out.String())
@@ -71,7 +71,7 @@ func TestRun_UnrecognizedToolIsNoOp(t *testing.T) {
 	var out, errOut bytes.Buffer
 	fs := primaryFS()
 
-	code := Run(in, &out, &errOut, fs.lstat, fs.readFile, noEnv)
+	code := Run(in, &out, &errOut, fs.lstat, fs.readFile, nil, noEnv)
 
 	if code != 0 || out.Len() != 0 || errOut.Len() != 0 {
 		t.Errorf("Run() on an ungoverned tool = code=%d stdout=%q stderr=%q, want a silent no-op", code, out.String(), errOut.String())
@@ -81,7 +81,7 @@ func TestRun_UnrecognizedToolIsNoOp(t *testing.T) {
 func TestRun_UnparseablePayloadIsNoOp(t *testing.T) {
 	in := strings.NewReader(`not json`)
 	var out, errOut bytes.Buffer
-	code := Run(in, &out, &errOut, primaryFS().lstat, primaryFS().readFile, noEnv)
+	code := Run(in, &out, &errOut, primaryFS().lstat, primaryFS().readFile, nil, noEnv)
 
 	if code != 0 || out.Len() != 0 {
 		t.Errorf("Run() on an unparseable payload = code=%d stdout=%q, want a silent no-op", code, out.String())
