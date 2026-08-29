@@ -1,8 +1,10 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/knadh/koanf/parsers/yaml"
@@ -14,6 +16,7 @@ import (
 	"github.com/spf13/pflag"
 
 	"github.com/johnrichter/claude-shared-tooling/go/githooks"
+	"github.com/johnrichter/claude-shared-tooling/go/sysops"
 )
 
 // envPrefix selects which environment variables loadConfig reads, e.g.
@@ -30,13 +33,14 @@ const envPrefix = "GITTOOLS_"
 // Known, accepted residual: loadConfigFile reads this file from disk exactly
 // as it sits at scan time, with no requirement that it be tracked or clean.
 // An uncommitted, untracked, or dirty edit to it therefore takes effect
-// immediately, silently widening privacy_marker_exempt/secret_scan_exempt
-// for whatever merge/push/tag create runs next, with no diagnostic naming
-// the file or its state. A tracked-and-clean requirement was considered and
-// rejected: it would reverse a design internal/cli/scan_gate_test.go's own
-// writeConfig helper deliberately asserts (an untracked config file taking
-// effect), and needs its own design decision plus a rewritten test suite,
-// not a drive-by change here. See marketplace's own
+// immediately, potentially widening privacy_marker_exempt/secret_scan_exempt
+// for whatever merge/push/tag create runs next. warnIfConfigTampered flags
+// this loudly (a stderr warning naming the file and its state) but does not
+// block it: a tracked-and-clean requirement was considered and rejected, as
+// it would reverse a design internal/cli/scan_gate_test.go's own writeConfig
+// helper deliberately asserts (an untracked config file taking effect), and
+// needs its own design decision plus a rewritten test suite, not a drive-by
+// change here. See marketplace's own
 // .dat/reports/git-tools-privacy-scan-scope-bug.md for the full record.
 const defaultConfigFile = "git-tools.yaml"
 
@@ -51,6 +55,22 @@ type Config struct {
 	MaxBinaryBytes      int64    `koanf:"max_binary_bytes"`
 	PrivacyMarkerExempt []string `koanf:"privacy_marker_exempt"`
 	SecretScanExempt    []string `koanf:"secret_scan_exempt"`
+	// EmployeeEmailDomains turns on the public tier's optional employee-email
+	// internal-identifier check for the domains it names (e.g. an
+	// organization's own mail domains). Empty by default, which leaves the
+	// check off, matching githooks' own off-by-default
+	// PrivacyOptions.EmployeeEmail. Deliberately a per-repo config key and
+	// nothing else: which domains identify an organization's own people is
+	// that organization's value, so it belongs in the repo that needs it, not
+	// in this CLI's shared source, which serves any repo and ships publicly.
+	EmployeeEmailDomains []string `koanf:"employee_email_domains"`
+	// EmployeeEmailAllowlist exempts individual addresses from
+	// EmployeeEmailDomains' check by their full text, for the public role
+	// addresses anyone external is meant to reach. Each entry is one exact
+	// address; there is no wildcard or domain-wide form (see
+	// githooks.EmployeeEmailCheck.Allowlist). Ignored when
+	// EmployeeEmailDomains is empty, since the check is then off.
+	EmployeeEmailAllowlist []string `koanf:"employee_email_allowlist"`
 }
 
 // defaultConfig seeds koanf's lowest-precedence layer. Every key here must
@@ -59,13 +79,15 @@ type Config struct {
 // across default/file/env/flag layers.
 func defaultConfig() map[string]interface{} {
 	return map[string]interface{}{
-		"repo":                  ".",
-		"remote":                "origin",
-		"privacy_tier":          "public",
-		"strict":                false,
-		"max_binary_bytes":      githooks.DefaultMaxBytes,
-		"privacy_marker_exempt": []string{},
-		"secret_scan_exempt":    []string{},
+		"repo":                     ".",
+		"remote":                   "origin",
+		"privacy_tier":             "public",
+		"strict":                   false,
+		"max_binary_bytes":         githooks.DefaultMaxBytes,
+		"privacy_marker_exempt":    []string{},
+		"secret_scan_exempt":       []string{},
+		"employee_email_domains":   []string{},
+		"employee_email_allowlist": []string{},
 	}
 }
 
@@ -113,12 +135,17 @@ func loadConfig(fs *pflag.FlagSet) (*Config, error) {
 
 // loadConfigFile loads the YAML config named by --config, or defaultConfigFile
 // if present and --config was not given. An explicitly named file that does
-// not exist is an error; an implicit default that does not exist is not.
+// not exist is an error; an implicit default that does not exist is not. The
+// implicit default is resolved against --repo's own target directory, not
+// the invoking process's cwd — a caller running git-tools against a
+// different repo than the one it happens to be sitting in must still pick up
+// that repo's own git-tools.yaml, not silently fall back to no config (or,
+// worse, an unrelated git-tools.yaml the cwd happens to carry).
 func loadConfigFile(k *koanf.Koanf, fs *pflag.FlagSet) error {
 	explicit := fs.Changed("config")
 	path, _ := fs.GetString("config")
 	if path == "" {
-		path = defaultConfigFile
+		path = filepath.Join(repoDirForConfig(fs), defaultConfigFile)
 	}
 
 	if _, err := os.Stat(path); err != nil {
@@ -131,5 +158,54 @@ func loadConfigFile(k *koanf.Koanf, fs *pflag.FlagSet) error {
 	if err := k.Load(file.Provider(path), yaml.Parser()); err != nil {
 		return fmt.Errorf("cli: load config file %s: %w", path, err)
 	}
+	warnIfConfigTampered(path)
 	return nil
+}
+
+// repoDirForConfig resolves --repo's own target directory using only what is
+// available before loadConfigFile runs: fs's already-parsed flags and the
+// GITTOOLS_REPO environment variable, in the same flag-beats-env-beats-
+// default precedence loadConfig applies to every other setting. It cannot
+// wait for the full koanf resolution in loadConfig, since that resolution
+// itself needs loadConfigFile to run first.
+func repoDirForConfig(fs *pflag.FlagSet) string {
+	if fs.Changed("repo") {
+		if v, err := fs.GetString("repo"); err == nil && v != "" {
+			return v
+		}
+	}
+	if v := os.Getenv(envPrefix + "REPO"); v != "" {
+		return v
+	}
+	return "."
+}
+
+// warnIfConfigTampered emits a stderr warning naming path when the config
+// file just loaded is untracked or differs from the version committed at
+// HEAD — the same repository state a caller relying on git-tools' scan to
+// gate a merge, push, or tag create should be told about, since either state
+// means the exemptions just loaded were never reviewed as part of that
+// commit history. It never blocks the operation: a caller wanting to fail
+// closed on this needs a separate, explicit choice this flag set does not
+// yet offer (see defaultConfigFile's own doc comment). Any failure to run
+// git at all (path outside a repository, git missing, or the directory
+// housing path is not the git-tools.yaml's own repo) is silently treated as
+// "nothing to warn about" — this diagnostic is a courtesy on top of the
+// scan, not a scan of its own that must itself fail loudly.
+func warnIfConfigTampered(path string) {
+	dir := filepath.Dir(path)
+	rel := filepath.Base(path)
+	res, err := sysops.Run(context.Background(), "git", []string{"status", "--porcelain", "--", rel}, sysops.Options{Dir: dir})
+	if err != nil || res.ExitCode != 0 {
+		return
+	}
+	status := strings.TrimSpace(string(res.Stdout))
+	if status == "" {
+		return
+	}
+	state := "locally modified (differs from the committed HEAD version)"
+	if strings.HasPrefix(status, "??") {
+		state = "untracked"
+	}
+	fmt.Fprintf(os.Stderr, "warning: config file %s is %s; an uncommitted or locally modified git-tools.yaml is in effect\n", path, state)
 }

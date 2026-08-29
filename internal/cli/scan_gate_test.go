@@ -210,9 +210,11 @@ const markerFrontmatter = "---\nprivacy: internal\n---\n\nfixture body\n"
 // multiple of it rather than as an opaque number.
 const markerFrontmatterFindings = 2
 
-// writeConfig writes a git-tools.yaml into dir, the shape loadConfigFile
-// auto-discovers from the invoking process's own working directory when no
-// --config flag is passed.
+// writeConfig writes an untracked git-tools.yaml into dir, the shape
+// loadConfigFile auto-discovers from --repo's own target directory when no
+// --config flag is passed. Untracked on purpose: a config file takes effect
+// without being committed — loadConfigFile warns but does not block — which
+// is the behavior these gate tests rely on to configure a scratch repo.
 func writeConfig(t *testing.T, dir, content string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(dir, "git-tools.yaml"), []byte(content), 0o644); err != nil {
@@ -412,32 +414,31 @@ func TestScanGate_PrivacyMarkerExemptConfigStaysScoped(t *testing.T) {
 	})
 }
 
-// TestScanGate_PrivacyMarkerExemptConfigNotLoadedFromRepoFlagTarget documents
-// a known, intentional-for-now gap: when merge --repo names a directory
-// other than the invoking process's own working directory, the
-// git-tools.yaml auto-discovered by loadConfigFile still comes from the
-// process's cwd, not from --repo's target. A config file placed inside the
-// --repo directory is not picked up, so the marker exemption does not apply
-// and the merge still refuses.
-func TestScanGate_PrivacyMarkerExemptConfigNotLoadedFromRepoFlagTarget(t *testing.T) {
+// TestScanGate_PrivacyMarkerExemptConfigLoadedFromRepoFlagTarget proves the
+// directory-mismatch fix: when merge --repo names a directory other than the
+// invoking process's own working directory, the git-tools.yaml auto-
+// discovered by loadConfigFile is resolved against --repo's own target, not
+// the process's cwd, so a config file placed inside the --repo directory is
+// picked up and its exemption applies.
+func TestScanGate_PrivacyMarkerExemptConfigLoadedFromRepoFlagTarget(t *testing.T) {
 	bin := buildCLI(t)
-	dir := initRepo(t)
+	dir := signingRepo(t)
 	writeConfig(t, dir, "privacy_marker_exempt:\n  - fixtures\n")
-	head := commitNestedFile(t, dir, "fixtures/sample.md", markerFrontmatter, "add fixture sample")
+	commitNestedFile(t, dir, "fixtures/sample.md", markerFrontmatter, "add fixture sample")
 	runGit(t, dir, "branch", "feature")
 	runGit(t, dir, "checkout", "-q", "feature")
-	commitFile(t, dir, "feature.txt", "feature\n", "feature work")
+	tip := commitFile(t, dir, "feature.txt", "feature\n", "feature work")
 	runGit(t, dir, "checkout", "-q", "main")
 
 	// No cmd.Dir override here: the process's cwd stays wherever `go test`
-	// runs it, which is not dir, so dir's git-tools.yaml is never read.
+	// runs it, which is not dir — proving the config is found via --repo,
+	// not via the process's own cwd.
 	r, exit := runCLI(t, bin, "--repo", dir, "merge", "feature")
-	if r.Status != "precondition_unmet" || exit != 30 {
-		t.Fatalf("status=%s exit=%d, want precondition_unmet/30 (the --repo target's git-tools.yaml is not loaded from the process's own cwd): %+v", r.Status, exit, r)
+	if r.Status != "success" || exit != 0 {
+		t.Fatalf("status=%s exit=%d, want success/0 (the --repo target's git-tools.yaml must be loaded from --repo, not the process's own cwd): %+v", r.Status, exit, r)
 	}
-	assertRefusalNamesFinding(t, r, "fixtures/sample.md")
-	if got := runGit(t, dir, "rev-parse", "HEAD"); got != head {
-		t.Fatalf("HEAD moved from %s to %s — merge landed despite the guardrail finding", head, got)
+	if got := runGit(t, dir, "rev-parse", "HEAD"); got != tip {
+		t.Fatalf("main did not fast-forward to feature tip: got %s want %s", got, tip)
 	}
 }
 

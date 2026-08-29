@@ -8,7 +8,7 @@ require (
 	github.com/johnrichter/claude-shared-tooling/go/clikit v0.1.0
 	github.com/johnrichter/claude-shared-tooling/go/fsx v0.1.0
 	github.com/johnrichter/claude-shared-tooling/go/git v0.3.0
-	github.com/johnrichter/claude-shared-tooling/go/githooks v0.4.0
+	github.com/johnrichter/claude-shared-tooling/go/githooks v0.5.0
 	github.com/johnrichter/claude-shared-tooling/go/sysops v0.1.0
 	github.com/knadh/koanf/parsers/yaml v1.1.0
 	github.com/knadh/koanf/providers/confmap v1.0.0

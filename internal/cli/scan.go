@@ -98,7 +98,7 @@ func newScanPrivacyCmd() *cobra.Command {
 		Use:     "privacy",
 		Short:   "Scan for forbidden privacy markers and internal-identifier mentions",
 		Args:    cobra.NoArgs,
-		Example: "  git-tools scan privacy --privacy-tier datadog",
+		Example: "  git-tools scan privacy --privacy-tier confidential",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadConfig(cmd.Flags())
 			if err != nil {
@@ -106,7 +106,7 @@ func newScanPrivacyCmd() *cobra.Command {
 			}
 			tier := githooks.PrivacyTier(cfg.PrivacyTier)
 			if !tier.Known() {
-				return finishUsage(cmd, nil, "usage.cli.invalid_privacy_tier", fmt.Sprintf("--privacy-tier %q is not one of public, datadog, personal", cfg.PrivacyTier))
+				return finishUsage(cmd, nil, "usage.cli.invalid_privacy_tier", fmt.Sprintf("--privacy-tier %q is not one of public, confidential, private", cfg.PrivacyTier))
 			}
 			if bad, ok := malformedPrivacyMarkerExempt(cfg.PrivacyMarkerExempt); ok {
 				return finishUsage(cmd, nil, "usage.cli.invalid_privacy_marker_exempt", fmt.Sprintf("privacy_marker_exempt entry %q is not a valid glob pattern", bad))
@@ -118,6 +118,7 @@ func newScanPrivacyCmd() *cobra.Command {
 				SkipRules:         gitToolsSkipRules,
 				MarkerExemptRules: privacyMarkerExemptRules(cfg.PrivacyMarkerExempt),
 				SecretExemptRules: secretExemptRules(cfg.SecretScanExempt),
+				EmployeeEmail:     employeeEmailCheck(cfg),
 			})
 			if err != nil {
 				return finishErr(cmd, nil, "internal.githooks.scan_privacy_failed", "scan for privacy violations", err)
@@ -141,7 +142,7 @@ func newScanAllCmd() *cobra.Command {
 			}
 			tier := githooks.PrivacyTier(cfg.PrivacyTier)
 			if !tier.Known() {
-				return finishUsage(cmd, nil, "usage.cli.invalid_privacy_tier", fmt.Sprintf("--privacy-tier %q is not one of public, datadog, personal", cfg.PrivacyTier))
+				return finishUsage(cmd, nil, "usage.cli.invalid_privacy_tier", fmt.Sprintf("--privacy-tier %q is not one of public, confidential, private", cfg.PrivacyTier))
 			}
 			if bad, ok := malformedPrivacyMarkerExempt(cfg.PrivacyMarkerExempt); ok {
 				return finishUsage(cmd, nil, "usage.cli.invalid_privacy_marker_exempt", fmt.Sprintf("privacy_marker_exempt entry %q is not a valid glob pattern", bad))
@@ -238,6 +239,26 @@ func secretExemptRules(paths []string) []fsx.Rule {
 	return rules
 }
 
+// employeeEmailCheck converts cfg's employee_email_domains and
+// employee_email_allowlist entries into the githooks.EmployeeEmailCheck
+// PrivacyOptions.EmployeeEmail expects, turning the public tier's optional
+// employee-email check on for exactly the domains a repo's own git-tools.yaml
+// names. With no domains configured — the default — it returns the zero value
+// and the check stays off, the same posture githooks itself ships: this CLI
+// serves any repo and ships as public source, so it holds no organization's
+// domains of its own to fall back on.
+func employeeEmailCheck(cfg *Config) githooks.EmployeeEmailCheck {
+	check := githooks.EmployeeEmailCheck{Domains: cfg.EmployeeEmailDomains}
+	if len(cfg.EmployeeEmailAllowlist) == 0 {
+		return check
+	}
+	check.Allowlist = make(map[string]bool, len(cfg.EmployeeEmailAllowlist))
+	for _, addr := range cfg.EmployeeEmailAllowlist {
+		check.Allowlist[addr] = true
+	}
+	return check
+}
+
 // emitScan hands outcome to githooks' own result-builder, which produces the
 // full clikit envelope (success/caveats/precondition_unmet) in one call.
 func emitScan(cmd *cobra.Command, outcome githooks.ScanOutcome) error {
@@ -272,6 +293,7 @@ func scanTree(ctx context.Context, dir string, cfg *Config, staged bool) (githoo
 		SkipRules:         gitToolsSkipRules,
 		MarkerExemptRules: privacyMarkerExemptRules(cfg.PrivacyMarkerExempt),
 		SecretExemptRules: secretExemptRules(cfg.SecretScanExempt),
+		EmployeeEmail:     employeeEmailCheck(cfg),
 	})
 	if err != nil {
 		return githooks.ScanOutcome{}, fmt.Errorf("scan for privacy violations: %w", err)
@@ -299,7 +321,7 @@ func scanTree(ctx context.Context, dir string, cfg *Config, staged bool) (githoo
 func scanGate(cmd *cobra.Command, cfg *Config, dir, verb string, data map[string]any) error {
 	tier := githooks.PrivacyTier(cfg.PrivacyTier)
 	if !tier.Known() {
-		return finishUsage(cmd, data, "usage.cli.invalid_privacy_tier", fmt.Sprintf("--privacy-tier %q is not one of public, datadog, personal", cfg.PrivacyTier))
+		return finishUsage(cmd, data, "usage.cli.invalid_privacy_tier", fmt.Sprintf("--privacy-tier %q is not one of public, confidential, private", cfg.PrivacyTier))
 	}
 	if bad, ok := malformedPrivacyMarkerExempt(cfg.PrivacyMarkerExempt); ok {
 		return finishUsage(cmd, data, "usage.cli.invalid_privacy_marker_exempt", fmt.Sprintf("privacy_marker_exempt entry %q is not a valid glob pattern", bad))

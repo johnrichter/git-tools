@@ -20,8 +20,8 @@ func initScratchRepo(t *testing.T) string {
 }
 
 func TestRenderScript_EmbedsBinaryTierAndStrict(t *testing.T) {
-	script := RenderScript("git-tools", "datadog", true)
-	if got := "exec 'git-tools' scan all --staged --privacy-tier 'datadog' --strict\n"; !containsLine(script, got) {
+	script := RenderScript("git-tools", "confidential", true)
+	if got := "exec 'git-tools' scan all --staged --privacy-tier 'confidential' --strict\n"; !containsLine(script, got) {
 		t.Errorf("script = %q, want it to contain %q", script, got)
 	}
 }
