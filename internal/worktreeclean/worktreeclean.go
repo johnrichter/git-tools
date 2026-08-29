@@ -186,25 +186,26 @@ func Cleanup(ctx context.Context, repo *git.Repo, target string, opts Options) (
 }
 
 // landingUnresolvedMessage composes the standalone path's landing-target
-// refusal. By the time it is called, resolveLandingTarget has already tried
-// --landing-target (if given), the branch's own upstream, and the local
-// record of the remote's default branch, in that order, and none of them
-// resolved -- so the message names every source actually tried and states
-// plainly that the repository has no upstream configured, rather than
-// pointing at one flag with no explanation of why it is needed.
+// refusal, naming only the sources resolveLandingTarget actually tried for
+// this call. An explicit --landing-target short-circuits that resolution, so
+// when one was given it is the only source to name, and the failure is that
+// the named ref does not exist locally -- not a missing upstream. With no
+// flag, every fallback really was tried, and naming them plainly is what
+// tells the operator a missing upstream is the cause.
 func landingUnresolvedMessage(entry *git.WorktreeInfo, opts Options) string {
 	label := shortRef(entry.Branch)
 	if label == "" {
 		label = "the detached worktree"
+	}
+	if opts.LandingTarget != "" {
+		return fmt.Sprintf("cannot resolve a landing target for %s: --landing-target %s does not resolve from local refs; name a ref this repository already has",
+			label, opts.LandingTarget)
 	}
 	remote := opts.Remote
 	if remote == "" {
 		remote = "origin"
 	}
 	var tried []string
-	if opts.LandingTarget != "" {
-		tried = append(tried, fmt.Sprintf("--landing-target %s", opts.LandingTarget))
-	}
 	if entry.Branch != "" {
 		tried = append(tried, fmt.Sprintf("%s's upstream", label))
 	}
@@ -247,9 +248,10 @@ type landingRef struct {
 // resolveLandingTarget resolves the ref the target's work must already be
 // reachable from, using only local refs. On the merge path it is the branch the
 // merge landed onto (the branch checked out in repo.Dir). On the standalone
-// path it is the explicit LandingTarget, else the branch's upstream, else the
-// local record of the remote's default branch. ok is false when none
-// resolves -- a refusal, not an error.
+// path it is the explicit LandingTarget, else the branch's upstream (a
+// detached target has no branch, so it has no upstream to try), else the local
+// record of the remote's default branch. ok is false when none resolves -- a
+// refusal, not an error.
 func resolveLandingTarget(ctx context.Context, repo *git.Repo, entry *git.WorktreeInfo, opts Options) (landingRef, bool, error) {
 	if opts.MergedBranches != nil {
 		branch, err := gitexec.CurrentBranch(ctx, repo.Dir)
@@ -266,11 +268,17 @@ func resolveLandingTarget(ctx context.Context, repo *git.Repo, entry *git.Worktr
 		sha, ok, err := RevParseLocal(ctx, repo.Dir, opts.LandingTarget)
 		return landingRef{name: opts.LandingTarget, sha: sha}, ok, err
 	}
-	branch := shortRef(entry.Branch)
-	if sha, ok, err := RevParseLocal(ctx, repo.Dir, branch+"@{upstream}"); err != nil {
-		return landingRef{}, false, err
-	} else if ok {
-		return landingRef{name: branch + "@{upstream}", sha: sha}, true, nil
+	// Only a branch has an upstream. A detached target must skip this step: a
+	// bare "@{upstream}" is git's shorthand for the upstream of whatever branch
+	// repo.Dir happens to have checked out, a ref with no relation to the
+	// worktree being removed, and measuring a detached commit's reachability
+	// against it would prove nothing about the target.
+	if branch := shortRef(entry.Branch); branch != "" {
+		if sha, ok, err := RevParseLocal(ctx, repo.Dir, branch+"@{upstream}"); err != nil {
+			return landingRef{}, false, err
+		} else if ok {
+			return landingRef{name: branch + "@{upstream}", sha: sha}, true, nil
+		}
 	}
 	remote := opts.Remote
 	if remote == "" {

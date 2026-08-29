@@ -135,6 +135,66 @@ func TestRefusalStrings_LiveRenderMatchesTemplate(t *testing.T) {
 	})
 }
 
+// TestLandingUnresolved_NamedTargetBlamesTheRefNotAMissingUpstream pins the
+// other half of LED-146's second gap: an explicit --landing-target
+// short-circuits resolveLandingTarget, so a refusal after one was given must
+// blame the named ref and must not claim the fallbacks were tried or that the
+// repository has no upstream -- neither is true on that path, and a repo with
+// a perfectly good upstream reaches it on nothing worse than a typo.
+func TestLandingUnresolved_NamedTargetBlamesTheRefNotAMissingUpstream(t *testing.T) {
+	dir, repo := cleanupFixture(t)
+	wt := addWorktreeBranch(t, dir, "feature", "main")
+
+	out, err := Cleanup(context.Background(), repo, wt, Options{LandingTarget: "mian"})
+	if err != nil {
+		t.Fatalf("Cleanup: %v", err)
+	}
+	if out.RefusalKind != RefusalLandingUnresolved || out.Removed {
+		t.Fatalf("want landing-unresolved refusal, got kind=%d removed=%v", out.RefusalKind, out.Removed)
+	}
+	want := "cannot resolve a landing target for feature: --landing-target mian does not resolve from local refs; name a ref this repository already has"
+	if out.Refusal != want {
+		t.Fatalf("refusal = %q, want %q", out.Refusal, want)
+	}
+}
+
+// TestDetachedTarget_NoLandingTargetIgnoresThePrimaryCheckoutsUpstream is the
+// safety regression for FB5's new detached path: with no --landing-target, a
+// detached target has no branch and therefore no upstream to fall back to.
+// Resolution must skip that step rather than resolve a bare "@{upstream}",
+// which git reads as the upstream of whatever branch the primary checkout has
+// out -- an unrelated ref. Here main tracks origin/main and there is no
+// origin/HEAD record, so a bare "@{upstream}" is the only thing that could
+// resolve: if the worktree removes, the commit was measured against a ref the
+// operator never named, and a detached commit has no other ref to survive by.
+func TestDetachedTarget_NoLandingTargetIgnoresThePrimaryCheckoutsUpstream(t *testing.T) {
+	dir, repo := cleanupFixture(t)
+	cgit(t, dir, "remote", "add", "origin", dir)
+	cgit(t, dir, "update-ref", "refs/remotes/origin/main", cgit(t, dir, "rev-parse", "refs/heads/main"))
+	cgit(t, dir, "branch", "--set-upstream-to=origin/main", "main")
+	if _, ok, err := RevParseLocal(context.Background(), dir, "@{upstream}"); err != nil || !ok {
+		t.Fatalf(`fixture precondition: bare "@{upstream}" must resolve for this test to mean anything (ok=%v err=%v)`, ok, err)
+	}
+
+	wt := filepath.Join(t.TempDir(), "detached")
+	cgit(t, dir, "worktree", "add", "-q", "--detach", wt, "main")
+
+	out, err := Cleanup(context.Background(), repo, wt, Options{})
+	if err != nil {
+		t.Fatalf("Cleanup: %v", err)
+	}
+	if out.RefusalKind != RefusalLandingUnresolved || out.Removed {
+		t.Fatalf("want landing-unresolved refusal, got kind=%d removed=%v refusal=%q", out.RefusalKind, out.Removed, out.Refusal)
+	}
+	want := "cannot resolve a landing target for the detached worktree: tried origin's recorded default branch, and none resolved -- this repository has no upstream configured; pass --landing-target to name one"
+	if out.Refusal != want {
+		t.Fatalf("refusal = %q, want %q", out.Refusal, want)
+	}
+	if _, statErr := os.Stat(wt); statErr != nil {
+		t.Fatalf("worktree %s was removed against an unrelated ref: %v", wt, statErr)
+	}
+}
+
 // --- package-local refusal-kind coverage, against real scratch repos -------
 //
 // Mirrors internal/cli's coverage (which now exercises this package's
