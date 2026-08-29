@@ -136,6 +136,73 @@ func TestDecide_Bash_InteriorCdUnresolvable_DeniesFailClosed(t *testing.T) {
 	}
 }
 
+// TestDecide_Bash_InteriorCdRelativeTarget_ComposedOntoOuterCWD covers
+// composeInteriorCWD's relative-join branch, which every case above misses by
+// using only absolute interior targets. Both directions, so the assertion
+// pins real path composition rather than a target that happens to match: the
+// same `..`-style spelling denies or allows purely on where the join lands.
+func TestDecide_Bash_InteriorCdRelativeTarget_ComposedOntoOuterCWD(t *testing.T) {
+	v := testVerbs(t)
+
+	fs := sc24FS()
+	cmd := `$(cd ../../other && git commit -am fix)`
+	d := Decide(fs.lstat, fs.readFile, nil, v, nil, Input{ToolName: "Bash", CWD: "/repo/wt", Command: cmd})
+	if !d.Deny {
+		t.Fatalf("Decide(cmd=%q) from /repo/wt = allow, want deny (relative interior cd joins onto the outer cwd and lands in /other, a primary checkout)", cmd)
+	}
+	if !containsAll(d.Reason, "/other") {
+		t.Errorf("Decide(cmd=%q) reason %q does not name the joined target /other", cmd, d.Reason)
+	}
+
+	fs = sc24FS().dir("/repo/wt/sub")
+	cmd = `$(cd .. && git commit -am fix)`
+	d = Decide(fs.lstat, fs.readFile, nil, v, nil, Input{ToolName: "Bash", CWD: "/repo/wt/sub", Command: cmd})
+	if d.Deny {
+		t.Fatalf("Decide(cmd=%q) from /repo/wt/sub = deny, want allow (the join lands back in the caller's own worktree /repo/wt): %s", cmd, d.Reason)
+	}
+}
+
+// TestDecide_Bash_InteriorCd_RelativeNamedPath_ResolvesAgainstInteriorCWD
+// pins the OTHER half of threading the interior cwd through the recursion:
+// SC20's named-path rule resolves a relative destination against that same
+// composed cwd, so a write that DOES name a path is caught in the interior
+// too. Without the threading this resolved against the caller's own worktree
+// and allowed, and nothing else in this file would catch that regression --
+// every other case here reaches the path-blind leg instead.
+func TestDecide_Bash_InteriorCd_RelativeNamedPath_ResolvesAgainstInteriorCWD(t *testing.T) {
+	fs := sc24FS()
+	v := testVerbs(t)
+	cmd := `$(cd /other && rm -rf build)`
+	d := Decide(fs.lstat, fs.readFile, nil, v, nil, Input{ToolName: "Bash", CWD: "/repo/wt", Command: cmd})
+	if !d.Deny {
+		t.Fatalf("Decide(cmd=%q) from /repo/wt = allow, want deny (relative named path resolves against the interior cwd, into /other)", cmd)
+	}
+	if !containsAll(d.Reason, "/other/build") {
+		t.Errorf("Decide(cmd=%q) reason %q does not name /other/build, so the named path was not resolved against the interior cwd", cmd, d.Reason)
+	}
+}
+
+// TestDecide_Bash_InteriorCdAfterFirstGit_DisclosedResidual pins the residual
+// documented at pathBlindWriteDenial as ALLOWED, keeping it a visible
+// boundary rather than a silent one: resolveEffectiveCWD returns at the first
+// git word, so a `cd` behind one in the same interior never composes. The
+// top-level spelling is asserted alongside it to hold the record that this is
+// the shared cwd contract rather than an interior-only weakness -- both move
+// together the day SC-CWD-RESOLVER-CONTRACT does.
+func TestDecide_Bash_InteriorCdAfterFirstGit_DisclosedResidual(t *testing.T) {
+	fs := sc24FS()
+	v := testVerbs(t)
+	for _, cmd := range []string{
+		`$(git status && cd /other && git commit -am fix)`,
+		`git status && cd /other && git commit -am fix`,
+	} {
+		d := Decide(fs.lstat, fs.readFile, nil, v, nil, Input{ToolName: "Bash", CWD: "/repo/wt", Command: cmd})
+		if d.Deny {
+			t.Fatalf("Decide(cmd=%q) = deny, want allow -- this is the disclosed first-git-stop residual. A deny here means the cwd contract changed: retire the residual note at pathBlindWriteDenial and re-point this test, rather than deleting it. Got: %s", cmd, d.Reason)
+		}
+	}
+}
+
 func containsAll(s string, subs ...string) bool {
 	for _, sub := range subs {
 		if !strings.Contains(s, sub) {

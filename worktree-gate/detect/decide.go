@@ -343,10 +343,11 @@ func scanBash(lstat LstatFunc, readFile ReadFileFunc, gitIgnored GitIgnoredFunc,
 // <path-blind-write>`, and any other connector, inside a command
 // substitution, a backtick span, an `eval` argument, or a shell's `-c`
 // string -- every interior decomposableInteriors recurses into, at any
-// depth. A bare `(...)` subshell used as a whole command needs no separate
-// coverage here: decompose does not depth-track a bare paren, so its `cd`
-// and its write already land as ordinary top-level pieces the existing cwd
-// resolver and named-path rule see directly.
+// depth -- provided no `git` invocation precedes that `cd` in the same
+// interior (see the residual below). A bare `(...)` subshell used as a whole
+// command needs no separate coverage here: decompose does not depth-track a
+// bare paren, so its `cd` and its write already land as ordinary top-level
+// pieces the existing cwd resolver and named-path rule see directly.
 //
 // Not covered: a `cd` target built from a variable, glob, `~`, or a further
 // substitution (resolveEffectiveCWD already denies that outright as
@@ -356,6 +357,21 @@ func scanBash(lstat LstatFunc, readFile ReadFileFunc, gitIgnored GitIgnoredFunc,
 // whose true destination depends on runtime state (a symlink swapped between
 // resolution and execution, a second-order substitution) -- both are the
 // general, unbounded case this fix does not attempt to solve.
+//
+// Known, disclosed residual -- a `cd` that FOLLOWS a `git` invocation
+// earlier in the same interior does not compose. composeInteriorCWD resolves
+// through resolveEffectiveCWD, which by SC-CWD-RESOLVER-CONTRACT returns at
+// the first git word, so `$(git status && cd <primary> && git commit -am x)`
+// is judged against the outer cwd and stays ALLOWED. This is the resolver's
+// contract rather than a defect in this rule, and it is shared verbatim with
+// the top-level leg: `git status && cd <primary> && git commit -am x` allows
+// identically at depth 0, so the interior is exactly as strong as the
+// defense it mirrors, never weaker. Closing it means changing that contract
+// for every caller (effectiveBashCWD included) and re-baselining the cwd
+// tests, which is its own design decision, not a drive-by widening here.
+// Pinned as ALLOWED by
+// TestDecide_Bash_InteriorCdAfterFirstGit_DisclosedResidual so the day the
+// contract changes, that assertion flips and is seen.
 func pathBlindWriteDenial(lstat LstatFunc, readFile ReadFileFunc, cwd string, cwdUnresolvable bool) *Decision {
 	if cwdUnresolvable {
 		d := deny(

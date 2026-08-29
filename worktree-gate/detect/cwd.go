@@ -195,7 +195,15 @@ func isUnexpandable(s string) bool {
 // pathBlindWriteDenial) is judged against ITS OWN effective location, not the
 // caller's outer one, so `cd <path> && git commit` inside a `$(...)` lands the
 // commit's cwd check on <path> even though the outer command's own cwd never
-// changed.
+// changed. The composed cwd also reaches SC20: a RELATIVE path named by a
+// write inside the same interior (`$(cd <primary> && rm -rf build)`) now
+// resolves against <primary> rather than the outer cwd.
+//
+// It inherits resolveEffectiveCWD's stopping rule with the rest of that
+// resolver: only the `cd`s preceding the interior's FIRST git invocation
+// compose, so a `cd` after one does not move the result. That residual, and
+// why it is the cwd contract's to close rather than this function's, is
+// documented at pathBlindWriteDenial.
 func composeInteriorCWD(outerCWD string, outerUnresolvable bool, interior string) (dir string, unresolvable bool) {
 	resolved, denied := resolveEffectiveCWD(interior)
 	switch {
