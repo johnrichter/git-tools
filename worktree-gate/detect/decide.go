@@ -532,6 +532,20 @@ func gitignoreExempt(gitIgnored GitIgnoredFunc, repoRoot, absPath string) bool {
 // target rather than a same-verdict operand that merely happens to resolve
 // into the same checkout first (`echo x >> primary/f` denies on `primary/f`,
 // not on `x`).
+//
+// The unmodeled-command default below only reads operands for
+// pathOperandCommands -- the write_prefixes-anchored utilities (rm, tee,
+// mkdir, an editor, …) whose own non-flag operand really is the path they
+// write, even absent a redirect. Any other unmodeled command -- an arbitrary
+// interpreter or package manager invoked with an inline program string, a
+// filter expression, a package name, or a variable-named binary the caller
+// substitutes at the command position -- names no destination operand at
+// all here: its own argument text is a program body or a read source, not a
+// path, so only its redirect targets (already gathered above) are a real
+// write signal. Judging every operand of every unmodeled command as a
+// candidate path used to mistake an inline `-c`/`-e` script body containing
+// bracket or glob-like syntax, or a plain read argument of a command this
+// package cannot name, for an unresolvable write target (LED-023, LED-153).
 func namedPaths(p piece) []string {
 	targets := outputRedirectTargets(p.raw)
 	toks := skipAssignments(shellTokens(p.argv))
@@ -545,13 +559,40 @@ func namedPaths(p piece) []string {
 		return append(targets, gitToolsDestinations(toks[1:])...)
 	case isCopyLikeWriter(cmd):
 		return append(targets, copyDestinations(toks[1:])...)
-	default:
-		// An unmodeled write command (rm, tee, sed -i, an editor, find
-		// -delete, …) writes the operands it names, so every non-flag operand
-		// is a candidate destination -- the conservative default that keeps a
-		// future write verb judged rather than silently exempt.
+	case cmd == "sed":
+		if sedInPlace(toks[1:]) {
+			return append(targets, operands(toks[1:])...)
+		}
+		return targets
+	case pathOperandCommands[cmd]:
+		// A write_prefixes-anchored utility whose own operand doubles as the
+		// path it writes -- every non-flag operand is a candidate
+		// destination, the conservative default that keeps this class of
+		// write judged rather than silently exempt.
 		return append(targets, operands(toks[1:])...)
+	default:
+		return targets
 	}
+}
+
+// pathOperandCommands are the unmodeled write commands (see write_prefixes)
+// whose own non-flag operand is the path they write, so SC20 must judge that
+// operand directly rather than trusting a redirect target alone: deletion,
+// creation, and mode-change utilities, tee's own destination file(s), find's
+// own path operand (its -delete/-exec forms are still write_contains-matched
+// elsewhere), and an interactive editor. sed is handled separately
+// (sedInPlace), since only its -i form writes to a named operand at all.
+var pathOperandCommands = map[string]bool{
+	"rm": true, "rmdir": true, "touch": true, "mkdir": true, "tee": true,
+	"patch": true, "chmod": true, "chown": true, "dd": true, "find": true,
+	"vim": true, "vi": true, "nvim": true, "nano": true, "emacs": true, "code": true,
+}
+
+// sedInPlace reports whether sed's own arguments open its -i (in-place edit)
+// form -- the only sed shape that writes to a named operand rather than
+// stdout -- mirroring write_prefixes' own "sed -i" anchor.
+func sedInPlace(args []string) bool {
+	return len(args) > 0 && strings.HasPrefix(args[0], "-i")
 }
 
 // commandWord reduces a leading argv token to a bare command name: quotes

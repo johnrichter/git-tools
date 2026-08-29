@@ -126,17 +126,17 @@ func TestDecide_Bash_SameRepoPrimaryCheckoutCWD_GitignoreDoesNotExempt(t *testin
 	if !d.Deny {
 		t.Fatal("expected the cwd leg to still deny a same-repo write-class command run outside a worktree, gitignore exemption notwithstanding")
 	}
-	// This command's own operand "x" (echo's argument, not a real path) is
-	// itself a candidate destination under namedPaths' conservative default
-	// case, and it is never exempted by the stub above -- so this specific
-	// command denies via namedPathDenial on "x" (SC20's named-path rule),
-	// NOT via the cwd leg the test's own name and intent describe. A denial
-	// alone does not distinguish those two code paths; only the Reason text
-	// does. See TestDecide_Bash_SameRepoPrimaryCheckoutCWD_GitignoreDoesNotExempt_ViaCWDLegOnly
-	// below for a command with no such confounding operand, which pins the
-	// actual cwd-leg boundary this test's name claims.
-	if !strings.Contains(d.Reason, `via "/repo/x"`) {
-		t.Fatalf("expected this command to deny via namedPathDenial on the unexempted operand \"x\", got reason: %s", d.Reason)
+	// echo is not a path-operand command (LED-023): its own argument "x" is
+	// text it prints, never a destination, so namedPaths names only the
+	// redirect target here -- which the stub above does exempt -- leaving
+	// this command's eventual denial to the cwd leg, the same mechanism
+	// TestDecide_Bash_SameRepoPrimaryCheckoutCWD_GitignoreDoesNotExempt_ViaCWDLegOnly
+	// below pins for "date > ...". Before that fix, "x" was itself a
+	// candidate destination and denied via namedPathDenial instead; this
+	// assertion now checks for the cwd leg's own message to catch a
+	// regression back to that mistake.
+	if !strings.Contains(d.Reason, "may modify") {
+		t.Fatalf("expected this command to deny via the cwd leg, got reason: %s", d.Reason)
 	}
 }
 

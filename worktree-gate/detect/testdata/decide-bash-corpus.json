@@ -966,6 +966,54 @@
       "command": "rm /repo/tracked.md",
       "cwd": "/tmp",
       "want_deny": true
+    },
+    {
+      "name": "led023-jq-bracket-filter-with-redirect-allowed-from-worktree",
+      "command": "jq '.a[\"b\"]' /repo/wt/tracked.md > /repo/wt/out.json",
+      "cwd": "/repo/wt",
+      "want_deny": false
+    },
+    {
+      "name": "led023-python-inline-bracket-expression-with-redirect-allowed-from-worktree",
+      "command": "python3 -c \"d['x']=1\" > /repo/wt/out.txt",
+      "cwd": "/repo/wt",
+      "want_deny": false
+    },
+    {
+      "name": "led023-jq-bracket-filter-with-redirect-into-primary-still-denied",
+      "command": "jq '.a[\"b\"]' /repo/wt/tracked.md > /repo/tracked.md",
+      "cwd": "/repo/wt",
+      "want_deny": true
+    },
+    {
+      "name": "led023-rm-absolute-primary-target-from-worktree-still-denied",
+      "command": "rm /repo/tracked.md",
+      "cwd": "/repo/wt",
+      "want_deny": true
+    },
+    {
+      "name": "led023-sed-without-i-flag-read-source-not-mistaken-for-destination",
+      "command": "sed s/a/b/ /repo/tracked.md > /repo/wt/out.md",
+      "cwd": "/repo/wt",
+      "want_deny": false
+    },
+    {
+      "name": "led023-sed-i-absolute-primary-target-from-worktree-still-denied",
+      "command": "sed -i s/a/b/ /repo/tracked.md",
+      "cwd": "/repo/wt",
+      "want_deny": true
+    },
+    {
+      "name": "led153-variable-named-tool-with-literal-redirect-target-allowed-from-worktree",
+      "command": "\"$DAT_TOOLS\" render \"$PROJ/plan.json\" > /repo/wt/plan.md",
+      "cwd": "/repo/wt",
+      "want_deny": false
+    },
+    {
+      "name": "led153-variable-named-tool-with-variable-redirect-target-still-denied",
+      "command": "\"$DAT_TOOLS\" render \"$PROJ/plan.json\" > \"$PROJ/plan.md\"",
+      "cwd": "/repo/wt",
+      "want_deny": true
     }
   ]
 }
