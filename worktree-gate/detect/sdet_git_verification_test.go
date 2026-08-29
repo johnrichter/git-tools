@@ -119,7 +119,7 @@ func TestSDET_ClassifyGit_MigratedVerbsAndUnknownSubcommand(t *testing.T) {
 		{"worktree list stays read", []string{"worktree", "list"}, ClassRead},
 		{"worktree add is write", []string{"worktree", "add", "p"}, ClassWrite},
 		{"worktree remove is write", []string{"worktree", "remove", "p"}, ClassWrite},
-		{"worktree prune is write", []string{"worktree", "prune"}, ClassWrite},
+		{"worktree prune is read", []string{"worktree", "prune"}, ClassRead},
 		{"worktree unrecognized subcommand is write", []string{"worktree", "lock"}, ClassWrite},
 		{"config --get is read", []string{"config", "--get", "k"}, ClassRead},
 		{"config --list is read", []string{"config", "--list"}, ClassRead},

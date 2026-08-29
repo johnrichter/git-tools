@@ -866,10 +866,10 @@
       "want_deny": true
     },
     {
-      "name": "git-worktree-prune-write-denied",
+      "name": "git-worktree-prune-read-allowed",
       "command": "git worktree prune",
       "cwd": "/repo",
-      "want_deny": true
+      "want_deny": false
     },
     {
       "name": "git-config-get-read-allowed",

@@ -1014,7 +1014,12 @@ func classifyGitRefEditFn(rest []string, isListForcing, isModifier func(string) 
 	}
 }
 
-var gitWorktreeReadSubcommands = map[string]bool{"list": true}
+// gitWorktreeReadSubcommands admits `list` (reads the registration table)
+// and `prune` (drops a stale registration for a worktree directory that no
+// longer exists, editing only `.git/worktrees` admin metadata -- never a
+// file inside any live worktree's tracked tree). Neither touches tracked
+// content, so both classify as read exactly like `git worktree list` does.
+var gitWorktreeReadSubcommands = map[string]bool{"list": true, "prune": true}
 var gitReflogReadSubcommands = map[string]bool{"show": true}
 
 // classifyGitSubSelect reads only the listed subcommands of a verb whose other

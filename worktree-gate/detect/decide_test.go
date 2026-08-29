@@ -54,6 +54,19 @@ func TestDecide_Bash_WriteInPrimaryCheckout_Denied(t *testing.T) {
 	}
 }
 
+// TestDecide_Bash_WorktreePruneInPrimaryCheckout_Allowed is LED-152: a bare
+// `git worktree prune` against the primary checkout must allow, exactly like
+// `git worktree list` does, since prune only edits `.git/worktrees` admin
+// metadata and touches no tracked file.
+func TestDecide_Bash_WorktreePruneInPrimaryCheckout_Allowed(t *testing.T) {
+	fs := primaryFS()
+	v := testVerbs(t)
+	d := Decide(fs.lstat, fs.readFile, nil, v, nil, Input{ToolName: "Bash", CWD: "/repo", Command: "git worktree prune"})
+	if d.Deny {
+		t.Fatalf("expected allow for `git worktree prune` in the primary checkout, got deny: %s", d.Reason)
+	}
+}
+
 func TestDecide_Bash_WriteInWorktree_Allowed(t *testing.T) {
 	fs := worktreeFS()
 	v := testVerbs(t)
