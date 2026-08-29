@@ -70,6 +70,22 @@ func featureWorktree(t *testing.T, dir, branch string) (string, string) {
 	return wt, tip
 }
 
+// requireNoRecoveryMarker fails if the gate left a recovery marker behind,
+// checking both namespaces it could land in. refs/backup/ is where the marker
+// actually lives, so that check is the load-bearing one; the tag namespace
+// stays asserted empty because a marker written as a tag again is precisely
+// the regression this migration exists to prevent, and a refs/backup/-only
+// check would pass while it happened.
+func requireNoRecoveryMarker(t *testing.T, dir, when string) {
+	t.Helper()
+	if refs := runGit(t, dir, "for-each-ref", "refs/backup/"); refs != "" {
+		t.Fatalf("%s still left a backup ref: %q", when, refs)
+	}
+	if tags := runGit(t, dir, "tag", "--list"); tags != "" {
+		t.Fatalf("%s created a tag where no marker belongs: %q", when, tags)
+	}
+}
+
 func TestMerge_CleanupRemovesMergedWorktree(t *testing.T) {
 	bin := buildCLI(t)
 	dir := signingRepo(t)
@@ -535,9 +551,7 @@ func TestMerge_AlreadySignedSource_IsSkippedWithoutRewriting(t *testing.T) {
 	if got := runGit(t, dir, "rev-parse", "feature"); got != tip {
 		t.Fatalf("a signed branch was rewritten anyway: feature=%s want %s", got, tip)
 	}
-	if refs := runGit(t, dir, "for-each-ref", "refs/backup/"); refs != "" {
-		t.Fatalf("a skipped range still left a backup ref: %q", refs)
-	}
+	requireNoRecoveryMarker(t, dir, "a skipped range")
 }
 
 // merge no longer declares --force: SC-C1/D3 removed the Force plumbing
@@ -872,9 +886,7 @@ func TestMerge_SelfTargetInWorktree_RefusesBeforeGate(t *testing.T) {
 	if got := runGit(t, dir, "rev-parse", "other"); got != otherTip {
 		t.Fatalf("the other named source moved despite the refusal: got %s want %s", got, otherTip)
 	}
-	if refs := runGit(t, dir, "for-each-ref", "refs/backup/"); refs != "" {
-		t.Fatalf("a refusal before the gate still left a backup ref: %q", refs)
-	}
+	requireNoRecoveryMarker(t, dir, "a refusal before the gate")
 }
 
 // Both refusals resolve before the merge itself, so --dry-run does not exempt

@@ -107,11 +107,11 @@ func newBranchDeleteCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "delete <name> [expected-head]",
 		Short: "Delete name as a compare-and-swap, refusing to discard commits unreachable from a landing target",
-		Long: `delete removes name as a compare-and-swap against expected-head, tagging
-the old head for recovery first. expected-head may be omitted, in which case
-delete resolves name's current head itself so the compare-and-swap still has a
-concrete value to check against; an expected-head that is supplied but no
-longer current still fails that check.
+		Long: `delete removes name as a compare-and-swap against expected-head, recording
+the old head under refs/backup/ for recovery first. expected-head may be
+omitted, in which case delete resolves name's current head itself so the
+compare-and-swap still has a concrete value to check against; an expected-head
+that is supplied but no longer current still fails that check.
 
 Before touching the ref, delete proves name carries no commit unreachable from
 a landing target, using local refs only: --landing-target if given, else
