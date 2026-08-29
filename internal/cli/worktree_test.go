@@ -218,7 +218,13 @@ func TestCleanupWorktree_SwitchedBranch_MergePathRefuses(t *testing.T) {
 	}
 }
 
-func TestCleanupWorktree_DetachedHead_Refuses(t *testing.T) {
+// TestCleanupWorktree_DetachedHead_ReachableRemoves proves FB5: a detached
+// worktree (no branch checked out at all, the shape `worktree add <path>
+// <sha>` produces) removes cleanly once its checked-out commit is reachable
+// from the landing target -- closing the asymmetry with `worktree add`,
+// which could already create one that `worktree remove` could never take
+// back.
+func TestCleanupWorktree_DetachedHead_ReachableRemoves(t *testing.T) {
 	dir, repo := cleanupFixture(t)
 	wt := filepath.Join(t.TempDir(), "detached")
 	cgit(t, dir, "worktree", "add", "-q", "--detach", wt, "main")
@@ -227,8 +233,110 @@ func TestCleanupWorktree_DetachedHead_Refuses(t *testing.T) {
 	if err != nil {
 		t.Fatalf("cleanupWorktree: %v", err)
 	}
-	if out.RefusalKind != worktreeclean.RefusalDetachedHead || out.Removed {
-		t.Fatalf("want detached-head refusal, got kind=%d removed=%v refusal=%q", out.RefusalKind, out.Removed, out.Refusal)
+	if out.Refusal != "" || !out.Removed {
+		t.Fatalf("want removal of a reachable detached worktree, got refusal=%q removed=%v", out.Refusal, out.Removed)
+	}
+	if _, statErr := os.Stat(wt); !os.IsNotExist(statErr) {
+		t.Fatalf("worktree %s still present after removal", wt)
+	}
+}
+
+// TestCleanupWorktree_DetachedHead_UnreachableRefuses is FB5's regression
+// case: a detached worktree checked out on a commit that never landed on the
+// target must still refuse, exactly like the branch case -- accepting a
+// detached HEAD must not become a way to discard unreachable work.
+func TestCleanupWorktree_DetachedHead_UnreachableRefuses(t *testing.T) {
+	dir, repo := cleanupFixture(t)
+	wt := filepath.Join(t.TempDir(), "detached")
+	cgit(t, dir, "worktree", "add", "-q", "--detach", wt, "main")
+	commitIn(t, wt, "detached.txt", "detached work") // now ahead of main, unreachable
+
+	out, err := worktreeclean.Cleanup(context.Background(), repo, wt, worktreeclean.Options{LandingTarget: "main"})
+	if err != nil {
+		t.Fatalf("cleanupWorktree: %v", err)
+	}
+	if out.RefusalKind != worktreeclean.RefusalUnmergedWork || out.Removed {
+		t.Fatalf("want unmerged-work refusal for an unreachable detached commit, got kind=%d removed=%v refusal=%q", out.RefusalKind, out.Removed, out.Refusal)
+	}
+	if _, statErr := os.Stat(wt); statErr != nil {
+		t.Fatalf("worktree %s was disturbed by a refusing cleanup: %v", wt, statErr)
+	}
+}
+
+// TestCleanupWorktree_DeleteBranch_ReachableDeletesAfterRemoval proves
+// LED-146's first gap is closed: opting into DeleteBranch, once the worktree
+// removes cleanly (its branch already proven reachable from the landing
+// target by the same rule that gates the removal itself), also deletes the
+// now-orphaned branch ref.
+func TestCleanupWorktree_DeleteBranch_ReachableDeletesAfterRemoval(t *testing.T) {
+	dir, repo := cleanupFixture(t)
+	wt := addWorktreeBranch(t, dir, "feature", "main")
+
+	out, err := worktreeclean.Cleanup(context.Background(), repo, wt, worktreeclean.Options{LandingTarget: "main", DeleteBranch: true})
+	if err != nil {
+		t.Fatalf("cleanupWorktree: %v", err)
+	}
+	if out.Refusal != "" || !out.Removed {
+		t.Fatalf("want removal with no refusal, got refusal=%q removed=%v", out.Refusal, out.Removed)
+	}
+	if out.DeletedBranch != "feature" {
+		t.Fatalf("DeletedBranch = %q, want %q", out.DeletedBranch, "feature")
+	}
+	if sha, ok, resolveErr := worktreeclean.RevParseLocal(context.Background(), dir, "refs/heads/feature"); resolveErr != nil || ok {
+		t.Fatalf("branch feature still exists after DeleteBranch (sha=%q ok=%v err=%v)", sha, ok, resolveErr)
+	}
+}
+
+// TestCleanupWorktree_DeleteBranch_UnreachableNeverDeletesBranch is
+// LED-146's mandated regression case: DeleteBranch must never delete a
+// branch that is not yet reachable from the landing target. Cleanup refuses
+// the whole removal first -- the worktree stays, and so does the branch --
+// which is the only way an unreachable branch can be proven safe from silent
+// data loss here.
+func TestCleanupWorktree_DeleteBranch_UnreachableNeverDeletesBranch(t *testing.T) {
+	dir, repo := cleanupFixture(t)
+	wt := addWorktreeBranch(t, dir, "feature", "main")
+	commitIn(t, wt, "feature.txt", "feature work") // now ahead of main, unreachable
+
+	out, err := worktreeclean.Cleanup(context.Background(), repo, wt, worktreeclean.Options{LandingTarget: "main", DeleteBranch: true})
+	if err != nil {
+		t.Fatalf("cleanupWorktree: %v", err)
+	}
+	if out.RefusalKind != worktreeclean.RefusalUnmergedWork || out.Removed {
+		t.Fatalf("want unmerged-work refusal and nothing removed, got kind=%d removed=%v refusal=%q", out.RefusalKind, out.Removed, out.Refusal)
+	}
+	if out.DeletedBranch != "" {
+		t.Fatalf("DeletedBranch = %q, want empty: an unreachable branch must never be deleted", out.DeletedBranch)
+	}
+	if _, statErr := os.Stat(wt); statErr != nil {
+		t.Fatalf("worktree %s was removed despite unreachable work: %v", wt, statErr)
+	}
+	if sha, ok, resolveErr := worktreeclean.RevParseLocal(context.Background(), dir, "refs/heads/feature"); resolveErr != nil || !ok {
+		t.Fatalf("branch feature was lost (sha=%q ok=%v err=%v), want it to still exist", sha, ok, resolveErr)
+	}
+}
+
+// TestCleanupWorktree_LandingUnresolved_NamesEveryTriedSourceAndNoUpstream
+// covers LED-146's second gap: when a repository has no upstream at all --
+// no --landing-target, no branch upstream, no locally recorded remote
+// default -- the refusal names every source the standalone path actually
+// tried and states plainly that the repository has no upstream, rather than
+// pointing at one flag with no explanation.
+func TestCleanupWorktree_LandingUnresolved_NamesEveryTriedSourceAndNoUpstream(t *testing.T) {
+	dir, repo := cleanupFixture(t)
+	wt := addWorktreeBranch(t, dir, "feature", "main") // no upstream, no origin/HEAD
+
+	out, err := worktreeclean.Cleanup(context.Background(), repo, wt, worktreeclean.Options{})
+	if err != nil {
+		t.Fatalf("cleanupWorktree: %v", err)
+	}
+	if out.RefusalKind != worktreeclean.RefusalLandingUnresolved || out.Removed {
+		t.Fatalf("want landing-unresolved refusal, got kind=%d removed=%v", out.RefusalKind, out.Removed)
+	}
+	for _, want := range []string{"feature's upstream", "origin's recorded default branch", "no upstream configured"} {
+		if !strings.Contains(out.Refusal, want) {
+			t.Fatalf("refusal %q does not name %q", out.Refusal, want)
+		}
 	}
 }
 

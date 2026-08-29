@@ -1,9 +1,10 @@
 // Package worktreeclean holds the one rule set that decides whether a linked
 // worktree may be removed. Both cleanup paths -- the standalone `worktree
 // remove` verb and `merge --cleanup` -- call Cleanup, so the no-work-loss,
-// cardinality, wrong-branch, detached-head, dirty-tree, and partial-failure
-// rules cannot diverge between them: there is a single choke point, not two
-// copies that drift.
+// cardinality, wrong-branch, dirty-tree, and partial-failure rules cannot
+// diverge between them: there is a single choke point, not two copies that
+// drift. A detached target is judged by the same no-work-loss rule as a
+// branch: its checked-out commit stands in for a branch name.
 //
 // Every reachability question is answered from LOCAL refs alone -- the landing
 // target and the count of unreachable commits are resolved before anything is
@@ -39,6 +40,14 @@ type Options struct {
 	// the target's checked-out branch is among them, and the landing target is
 	// the branch the merge landed onto (the branch checked out in repo.Dir).
 	MergedBranches []string
+	// DeleteBranch also deletes the target's checked-out branch once the
+	// worktree itself has been removed (standalone path only; a no-op when
+	// the target is detached, since there is no branch to delete). It is
+	// safe precisely because a removal only reaches that point once this
+	// same Cleanup call has already proven the branch's commits are
+	// reachable from the landing target -- the identical no-work-loss check
+	// `branch delete` runs on its own, not a second one invented here.
+	DeleteBranch bool
 	// DryRun runs every rule and reports the verdict without removing anything.
 	DryRun bool
 }
@@ -52,7 +61,6 @@ type RefusalKind int
 const (
 	RefusalNone RefusalKind = iota
 	RefusalNotRegistered
-	RefusalDetachedHead
 	RefusalBranchNotMerged
 	RefusalLandingUnresolved
 	RefusalDirtyTree
@@ -71,6 +79,10 @@ type Result struct {
 	UntrackedPaths []string
 	ModifiedPaths  []string
 	Removed        bool // the worktree was removed (false on a dry run or a refusal)
+	// DeletedBranch is the short name of the branch Cleanup deleted, when
+	// Options.DeleteBranch asked for it and there was one to delete (empty on
+	// a dry run, a refusal, or a detached target).
+	DeletedBranch string
 	// Refusal, when non-empty, is the named reason cleanup removed nothing. A
 	// caller renders it as a hard error (standalone path) or a caveat on an
 	// already successful merge (merge path); the reason string is the same
@@ -144,17 +156,18 @@ func Cleanup(ctx context.Context, repo *git.Repo, target string, opts Options) (
 	res.UntrackedPaths, res.ModifiedPaths = untracked, modified
 
 	switch {
-	case entry.Branch == "":
-		res.RefusalKind = RefusalDetachedHead
-		res.Refusal = "the worktree's HEAD is detached; cleanup cannot prove its work is reachable from a landing target"
 	case opts.MergedBranches != nil && !BranchAmong(entry.Branch, opts.MergedBranches):
 		res.RefusalKind = RefusalBranchNotMerged
 		res.Refusal = fmt.Sprintf("the worktree is on %s, which is not among the branches just merged (%s)",
 			shortRef(entry.Branch), strings.Join(opts.MergedBranches, ", "))
 	case !landingOK:
 		res.RefusalKind = RefusalLandingUnresolved
-		res.Refusal = fmt.Sprintf("cannot resolve a landing target for %s from local refs; pass --landing-target to name one",
-			shortRef(entry.Branch))
+		if opts.MergedBranches == nil {
+			res.Refusal = landingUnresolvedMessage(entry, opts)
+		} else {
+			res.Refusal = fmt.Sprintf("cannot resolve a landing target for %s from local refs; pass --landing-target to name one",
+				shortRef(entry.Branch))
+		}
 	case len(untracked) > 0 || len(modified) > 0:
 		res.RefusalKind = RefusalDirtyTree
 		res.Refusal = fmt.Sprintf("the worktree has uncommitted work (%s); commit it, ignore it, or delete it deliberately before removing the worktree",
@@ -167,14 +180,46 @@ func Cleanup(ctx context.Context, repo *git.Repo, target string, opts Options) (
 		res.RefusalKind = RefusalLiveSubWorktree
 		res.Refusal = fmt.Sprintf("a live sub-worktree at %s nests under the target; remove it first", nested)
 	default:
-		return removeTarget(ctx, repo, target, opts, res)
+		return removeTarget(ctx, repo, target, entry, opts, res)
 	}
 	return res, nil
 }
 
+// landingUnresolvedMessage composes the standalone path's landing-target
+// refusal. By the time it is called, resolveLandingTarget has already tried
+// --landing-target (if given), the branch's own upstream, and the local
+// record of the remote's default branch, in that order, and none of them
+// resolved -- so the message names every source actually tried and states
+// plainly that the repository has no upstream configured, rather than
+// pointing at one flag with no explanation of why it is needed.
+func landingUnresolvedMessage(entry *git.WorktreeInfo, opts Options) string {
+	label := shortRef(entry.Branch)
+	if label == "" {
+		label = "the detached worktree"
+	}
+	remote := opts.Remote
+	if remote == "" {
+		remote = "origin"
+	}
+	var tried []string
+	if opts.LandingTarget != "" {
+		tried = append(tried, fmt.Sprintf("--landing-target %s", opts.LandingTarget))
+	}
+	if entry.Branch != "" {
+		tried = append(tried, fmt.Sprintf("%s's upstream", label))
+	}
+	tried = append(tried, fmt.Sprintf("%s's recorded default branch", remote))
+	return fmt.Sprintf("cannot resolve a landing target for %s: tried %s, and none resolved -- this repository has no upstream configured; pass --landing-target to name one",
+		label, strings.Join(tried, ", "))
+}
+
 // removeTarget performs the actual removal (or, on a dry run, reports that it
-// would), recording it on res.
-func removeTarget(ctx context.Context, repo *git.Repo, target string, opts Options, res *Result) (*Result, error) {
+// would), recording it on res, and -- when Options.DeleteBranch asked for it
+// and there is a branch to delete -- deletes it too. Deleting the branch here
+// is safe because the switch in Cleanup only reaches this point once it has
+// already proven the branch's commits are reachable from the landing target;
+// this is not a second reachability check, it relies on the one already run.
+func removeTarget(ctx context.Context, repo *git.Repo, target string, entry *git.WorktreeInfo, opts Options, res *Result) (*Result, error) {
 	if opts.DryRun {
 		return res, nil
 	}
@@ -182,6 +227,13 @@ func removeTarget(ctx context.Context, repo *git.Repo, target string, opts Optio
 		return nil, err
 	}
 	res.Removed = true
+	if opts.DeleteBranch && entry.Branch != "" {
+		branch := shortRef(entry.Branch)
+		if _, err := repo.DeleteBranch(ctx, branch, entry.Head, false); err != nil {
+			return nil, err
+		}
+		res.DeletedBranch = branch
+	}
 	return res, nil
 }
 
@@ -358,18 +410,21 @@ func describeDirty(untracked, modified []string) string {
 	return strings.Join(parts, "; ")
 }
 
-// subtreeState returns the branches checked out at or under targetResolved and
-// the path of the first live sub-worktree strictly under it, if any. A branch
-// can be checked out in only one worktree, so a branch found here is one whose
-// only checkout lies inside the target subtree.
+// subtreeState returns the commit-ish refs whose reachability must be proven
+// -- the branch checked out at targetResolved itself, or its detached HEAD
+// commit when it has no branch, plus any nested worktree's branch -- and the
+// path of the first live sub-worktree strictly under targetResolved, if any.
+// A branch can be checked out in only one worktree, so a branch found here is
+// one whose only checkout lies inside the target subtree. Substituting the
+// bare commit SHA for a detached target is what lets Cleanup weigh a
+// detached HEAD's reachability the same way it weighs a branch's: the target
+// itself always contributes something to check, branch or not.
 func subtreeState(list []git.WorktreeInfo, base, targetResolved string) (branches []string, nested string) {
 	for _, wt := range list {
 		p := ResolvedPath(base, wt.Path)
 		switch {
 		case p == targetResolved:
-			if wt.Branch != "" {
-				branches = append(branches, wt.Branch)
-			}
+			branches = append(branches, worktreeCommitRef(wt))
 		case pathUnder(targetResolved, p):
 			if wt.Branch != "" {
 				branches = append(branches, wt.Branch)
@@ -380,6 +435,15 @@ func subtreeState(list []git.WorktreeInfo, base, targetResolved string) (branche
 		}
 	}
 	return branches, nested
+}
+
+// worktreeCommitRef is the ref Cleanup measures a worktree's reachability
+// against: its branch when it has one, else its checked-out commit SHA.
+func worktreeCommitRef(wt git.WorktreeInfo) string {
+	if wt.Branch != "" {
+		return wt.Branch
+	}
+	return wt.Head
 }
 
 // RevParseLocal resolves ref to a SHA using only local refs (it never touches

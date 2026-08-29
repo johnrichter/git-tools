@@ -120,18 +120,27 @@ safe to discard. It refuses -- removing nothing and returning a named non-zero
 error -- when the worktree's checked-out branch (or a nested worktree's branch)
 carries commits unreachable from its landing target, when that target cannot be
 resolved from local refs, when the worktree's own tree has an untracked or
-modified path (commit it, ignore it, or delete it deliberately), when a live
-sub-worktree nests under it, or when its HEAD is detached. No flag overrides
-any of these refusals -- each condition must be resolved on its own terms
-before the worktree can go. The landing target is --landing-target if given,
-else the branch's upstream, else the local record of the remote's default
-branch; every step is answered from local refs, never the network.
+modified path (commit it, ignore it, or delete it deliberately), or when a live
+sub-worktree nests under it. A detached HEAD is judged by the same rule as a
+branch: its checked-out commit stands in for a branch name, so a detached
+worktree removes cleanly once that commit is reachable from the landing
+target. No flag overrides any of these refusals -- each condition must be
+resolved on its own terms before the worktree can go. The landing target is
+--landing-target if given, else the branch's upstream, else the local record
+of the remote's default branch; every step is answered from local refs, never
+the network.
+
+--delete-branch also deletes the worktree's checked-out branch once the
+worktree itself is gone. It never risks the branch's commits: removal only
+reaches that point once the same no-work-loss check has already proven them
+reachable from the landing target, so there is nothing left to delete but the
+now-orphaned ref. It is a no-op on a detached worktree, which has no branch.
 
 The worktree gate sanctions this verb only when git-tools is invoked by its
 exact provisioned absolute path: a bare "git-tools", or a name resolved off
 $PATH, does not satisfy it, and is denied from a primary checkout.`,
 		Args:    cobra.ExactArgs(1),
-		Example: "  git-tools worktree remove ../review --landing-target main",
+		Example: "  git-tools worktree remove ../review --landing-target main --delete-branch",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			path := args[0]
 			cfg, err := loadConfig(cmd.Flags())
@@ -145,10 +154,12 @@ $PATH, does not satisfy it, and is denied from a primary checkout.`,
 
 			dryRun, _ := cmd.Flags().GetBool("dry-run")
 			landing, _ := cmd.Flags().GetString("landing-target")
+			deleteBranch, _ := cmd.Flags().GetBool("delete-branch")
 
 			out, err := worktreeclean.Cleanup(cmd.Context(), repo, path, worktreeclean.Options{
 				LandingTarget: landing,
 				Remote:        cfg.Remote,
+				DeleteBranch:  deleteBranch,
 				DryRun:        dryRun,
 			})
 			if err != nil {
@@ -177,6 +188,7 @@ $PATH, does not satisfy it, and is denied from a primary checkout.`,
 	}
 	cmd.Flags().Bool("dry-run", false, "run every rule and report the verdict without removing anything")
 	cmd.Flags().String("landing-target", "", "ref the worktree's work must already be reachable from (default: the branch's upstream, else the remote's recorded default)")
+	cmd.Flags().Bool("delete-branch", false, "after removing the worktree, also delete its checked-out branch, once its commits are proven reachable from the landing target")
 	return cmd
 }
 
@@ -196,6 +208,9 @@ func cleanupData(out *worktreeclean.Result, dryRun bool) map[string]any {
 	if len(out.ModifiedPaths) > 0 {
 		data["modified_paths"] = out.ModifiedPaths
 	}
+	if out.DeletedBranch != "" {
+		data["deleted_branch"] = out.DeletedBranch
+	}
 	return data
 }
 
@@ -203,8 +218,6 @@ func cleanupData(out *worktreeclean.Result, dryRun bool) map[string]any {
 // diagnostic code.
 func cleanupRefusalCode(kind worktreeclean.RefusalKind) string {
 	switch kind {
-	case worktreeclean.RefusalDetachedHead:
-		return "precondition_unmet.git.worktree_detached_head"
 	case worktreeclean.RefusalBranchNotMerged:
 		return "precondition_unmet.git.worktree_branch_not_merged"
 	case worktreeclean.RefusalLandingUnresolved:

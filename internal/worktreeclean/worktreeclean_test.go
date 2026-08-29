@@ -31,16 +31,14 @@ func TestRefusalStrings_ByteIdenticalToPreExtraction(t *testing.T) {
 			want: fmt.Sprintf("%q is not a registered worktree of this repository", "/tmp/some/path"),
 		},
 		{
-			kind: RefusalDetachedHead,
-			got:  "the worktree's HEAD is detached; cleanup cannot prove its work is reachable from a landing target",
-			want: "the worktree's HEAD is detached; cleanup cannot prove its work is reachable from a landing target",
-		},
-		{
 			kind: RefusalBranchNotMerged,
 			got:  fmt.Sprintf("the worktree is on %s, which is not among the branches just merged (%s)", "other", "feature"),
 			want: fmt.Sprintf("the worktree is on %s, which is not among the branches just merged (%s)", "other", "feature"),
 		},
 		{
+			// Merge-path wording is unchanged: the standalone path's
+			// every-source-tried wording (below, via landingUnresolvedMessage)
+			// only applies when Options.MergedBranches is nil.
 			kind: RefusalLandingUnresolved,
 			got:  fmt.Sprintf("cannot resolve a landing target for %s from local refs; pass --landing-target to name one", "feature"),
 			want: fmt.Sprintf("cannot resolve a landing target for %s from local refs; pass --landing-target to name one", "feature"),
@@ -81,20 +79,6 @@ func TestRefusalStrings_LiveRenderMatchesTemplate(t *testing.T) {
 		}
 	})
 
-	t.Run("RefusalDetachedHead", func(t *testing.T) {
-		dir, repo := cleanupFixture(t)
-		wt := filepath.Join(t.TempDir(), "detached")
-		cgit(t, dir, "worktree", "add", "-q", "--detach", wt, "main")
-		out, err := Cleanup(context.Background(), repo, wt, Options{LandingTarget: "main"})
-		if err != nil {
-			t.Fatalf("Cleanup: %v", err)
-		}
-		want := "the worktree's HEAD is detached; cleanup cannot prove its work is reachable from a landing target"
-		if out.Refusal != want {
-			t.Fatalf("refusal = %q, want %q", out.Refusal, want)
-		}
-	})
-
 	t.Run("RefusalBranchNotMerged", func(t *testing.T) {
 		dir, repo := cleanupFixture(t)
 		wt := addWorktreeBranch(t, dir, "other", "main")
@@ -115,7 +99,7 @@ func TestRefusalStrings_LiveRenderMatchesTemplate(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Cleanup: %v", err)
 		}
-		want := "cannot resolve a landing target for feature from local refs; pass --landing-target to name one"
+		want := "cannot resolve a landing target for feature: tried feature's upstream, origin's recorded default branch, and none resolved -- this repository has no upstream configured; pass --landing-target to name one"
 		if out.Refusal != want {
 			t.Fatalf("refusal = %q, want %q", out.Refusal, want)
 		}
