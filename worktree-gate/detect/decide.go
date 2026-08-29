@@ -284,10 +284,10 @@ func scanBash(lstat LstatFunc, readFile ReadFileFunc, gitIgnored GitIgnoredFunc,
 				pc = ClassRead
 			}
 			if pc == ClassWrite {
-				if d := namedPathDenial(lstat, readFile, gitIgnored, p, cwd, cwdUnresolvable); d != nil {
+				if d := namedPathDenial(lstat, readFile, gitIgnored, verbs, p, cwd, cwdUnresolvable); d != nil {
 					return ClassWrite, d
 				}
-				if depth > 0 && len(namedPaths(p)) == 0 {
+				if depth > 0 && len(namedPaths(verbs, p)) == 0 {
 					// SC24: this piece was recursed out of an interior (a command
 					// substitution, backtick span, or eval/-c payload) and names no
 					// operand path at all -- its write lands wherever it actually
@@ -416,8 +416,8 @@ func pathBlindWriteDenial(lstat LstatFunc, readFile ReadFileFunc, cwd string, cw
 // target that resolves into a primary checkout but sits under its worktree
 // home (FB7) is exempted as gate-managed scratch rather than denied -- see
 // isWorktreeHomeScratch.
-func namedPathDenial(lstat LstatFunc, readFile ReadFileFunc, gitIgnored GitIgnoredFunc, p piece, cwd string, cwdUnresolvable bool) *Decision {
-	for _, raw := range namedPaths(p) {
+func namedPathDenial(lstat LstatFunc, readFile ReadFileFunc, gitIgnored GitIgnoredFunc, verbs Verbs, p piece, cwd string, cwdUnresolvable bool) *Decision {
+	for _, raw := range namedPaths(verbs, p) {
 		t := stripQuotes(raw)
 		if t == "" {
 			continue
@@ -533,20 +533,19 @@ func gitignoreExempt(gitIgnored GitIgnoredFunc, repoRoot, absPath string) bool {
 // into the same checkout first (`echo x >> primary/f` denies on `primary/f`,
 // not on `x`).
 //
-// The unmodeled-command default below only reads operands for
-// pathOperandCommands -- the write_prefixes-anchored utilities (rm, tee,
-// mkdir, an editor, …) whose own non-flag operand really is the path they
-// write, even absent a redirect. Any other unmodeled command -- an arbitrary
-// interpreter or package manager invoked with an inline program string, a
-// filter expression, a package name, or a variable-named binary the caller
-// substitutes at the command position -- names no destination operand at
-// all here: its own argument text is a program body or a read source, not a
-// path, so only its redirect targets (already gathered above) are a real
-// write signal. Judging every operand of every unmodeled command as a
-// candidate path used to mistake an inline `-c`/`-e` script body containing
-// bracket or glob-like syntax, or a plain read argument of a command this
-// package cannot name, for an unresolvable write target (LED-023, LED-153).
-func namedPaths(p piece) []string {
+// The unmodeled-command default below reads operands only for a command the
+// verbs model itself names as a writer (pathOperandCommand) -- a command
+// whose write signal is its own command word, so its own operands are where
+// that write lands. A command that is write-class only because the SHELL
+// opened a redirect on its behalf names no destination operand here at all:
+// its argument text is a program body, a filter expression, or a read
+// source, not a path, so only its redirect targets (already gathered above)
+// are a real write signal. Judging every operand of every unmodeled command
+// as a candidate path used to mistake an inline `-c`/`-e` script body
+// containing bracket or glob-like syntax, or a plain read argument of a
+// command this package cannot name, for an unresolvable write target
+// (LED-023, LED-153).
+func namedPaths(v Verbs, p piece) []string {
 	targets := outputRedirectTargets(p.raw)
 	toks := skipAssignments(shellTokens(p.argv))
 	if len(toks) == 0 {
@@ -564,33 +563,57 @@ func namedPaths(p piece) []string {
 			return append(targets, operands(toks[1:])...)
 		}
 		return targets
-	case pathOperandCommands[cmd]:
-		// A write_prefixes-anchored utility whose own operand doubles as the
-		// path it writes -- every non-flag operand is a candidate
-		// destination, the conservative default that keeps this class of
-		// write judged rather than silently exempt.
+	case pathOperandCommand(v, cmd):
+		// A modeled write command whose own operand doubles as the path it
+		// writes -- every non-flag operand is a candidate destination, the
+		// conservative default that keeps this class of write judged rather
+		// than silently exempt.
 		return append(targets, operands(toks[1:])...)
 	default:
 		return targets
 	}
 }
 
-// pathOperandCommands are the unmodeled write commands (see write_prefixes)
-// whose own non-flag operand is the path they write, so SC20 must judge that
-// operand directly rather than trusting a redirect target alone: deletion,
-// creation, and mode-change utilities, tee's own destination file(s), find's
-// own path operand (its -delete/-exec forms are still write_contains-matched
-// elsewhere), and an interactive editor. sed is handled separately
-// (sedInPlace), since only its -i form writes to a named operand at all.
-var pathOperandCommands = map[string]bool{
-	"rm": true, "rmdir": true, "touch": true, "mkdir": true, "tee": true,
-	"patch": true, "chmod": true, "chown": true, "dd": true, "find": true,
-	"vim": true, "vi": true, "nvim": true, "nano": true, "emacs": true, "code": true,
+// pathOperandCommand reports whether cmd is a command the verbs model names as
+// a writer in its own right, so SC20 must judge cmd's own operands rather than
+// trusting a redirect target alone: a deletion, creation, or mode-change
+// utility, tee's destination file(s), an interactive editor, and a package
+// manager whose default write locus is the cwd but which any of its own
+// path-valued options (`npm install --prefix <dir>`, `pip install -t <dir>`)
+// can retarget into a checkout the cwd leg would never look at.
+//
+// The set is DERIVED from Verbs.WritePrefixes -- the command word of each
+// entry, matched the way classifyPiece matches the entry itself -- rather than
+// restated as a second, hand-synced list, so a write verb added to verbs.json
+// gains its operand judging here at the same moment it gains its
+// classification, and cannot silently keep one without the other. `find` is
+// the single addition: its writing forms are anchored in write_contains
+// (-delete, -exec, …) rather than write_prefixes, but the path it deletes is
+// still its own operand. cp/mv/ln (copyDestinations) and sed (sedInPlace) are
+// modeled more precisely in namedPaths' earlier cases and never reach here.
+func pathOperandCommand(v Verbs, cmd string) bool {
+	if cmd == "find" {
+		return true
+	}
+	for _, w := range v.WritePrefixes {
+		if firstToken(w) == cmd {
+			return true
+		}
+	}
+	return false
 }
 
 // sedInPlace reports whether sed's own arguments open its -i (in-place edit)
 // form -- the only sed shape that writes to a named operand rather than
-// stdout -- mirroring write_prefixes' own "sed -i" anchor.
+// stdout. It mirrors write_prefixes' own "sed -i" anchor exactly, including
+// that anchor's limits: `-i` and its glued suffix form (`-i.bak`) match, and
+// so does BSD's form that passes the suffix as a separate empty argument
+// (whose first argument is still `-i`). A reordered (`sed -e … -i f`), long
+// (`--in-place`), or bundled (`-ri`) spelling matches neither this predicate
+// nor the anchor that classifies the piece write in the first place, so such
+// a piece never reaches here as a write at all -- FB9 owns closing that
+// anchor, and widening only this predicate would judge the operands of a
+// piece already classified uncertain.
 func sedInPlace(args []string) bool {
 	return len(args) > 0 && strings.HasPrefix(args[0], "-i")
 }
