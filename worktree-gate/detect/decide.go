@@ -832,8 +832,20 @@ var gitWriteSubcommands = map[string]bool{
 // sets on the exact subcommand, and routes a verb that mixes read and write
 // forms to its own splitter. An unrecognized subcommand -- or an unrecognized
 // form of a split verb -- classifies write, the conservative default.
+//
+// A bare `git` invocation carrying no subcommand at all -- only global flags
+// such as --version or --help, or nothing beyond `git` itself -- classifies
+// read instead: gitSubcommand returns "" only when it never found a
+// subcommand token to skip options past, and an invocation with no
+// subcommand can perform no repo write for the write default below to guard
+// against. This is distinct from an actual unrecognized subcommand (a real
+// verb word gitSubcommand did isolate, just not one this switch knows), which
+// still falls through to that write default unchanged.
 func classifyGit(args []string) BashClass {
 	sub, rest := gitSubcommand(args)
+	if sub == "" {
+		return ClassRead
+	}
 	sub = strings.ToLower(sub)
 	switch {
 	case gitReadSubcommands[sub]:

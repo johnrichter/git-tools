@@ -155,6 +155,43 @@ func TestSDET_ClassifyGit_UnknownSubcommandWriteDefault_GlobalOptionParity(t *te
 	}
 }
 
+// A `git` invocation carrying no subcommand at all -- only global flags, or
+// nothing beyond `git` itself -- classifies read: it can perform no repo
+// write for the unrecognized-subcommand default to guard against, and that
+// default is reserved for a real (if unmapped) subcommand word instead. This
+// keeps a bare `git --version` or `git --help` from being denied by the
+// write default for a reason that has nothing to do with what it actually
+// does.
+func TestSDET_ClassifyGit_NoSubcommandAtAll_ClassifiesRead(t *testing.T) {
+	cases := []struct {
+		name string
+		args []string
+		want BashClass
+	}{
+		{"bare git, no args", nil, ClassRead},
+		{"--version alone", []string{"--version"}, ClassRead},
+		{"--help alone", []string{"--help"}, ClassRead},
+		{"-h alone", []string{"-h"}, ClassRead},
+		{"a value-consuming global option with nothing after it", []string{"-C", "dir"}, ClassRead},
+		{"stacked valueless globals with nothing after them", []string{"--no-pager", "--paginate"}, ClassRead},
+		{"trailing double-dash with nothing after it", []string{"--"}, ClassRead},
+		// A flag-only prefix ahead of a REAL subcommand is not this case at
+		// all -- gitSubcommand isolates "status" and the ordinary read/write
+		// split governs, unchanged.
+		{"flag-only prefix with a real subcommand stays governed by that subcommand", []string{"-C", "dir", "status"}, ClassRead},
+		{"flag-only prefix with a real write subcommand stays write", []string{"-C", "dir", "commit"}, ClassWrite},
+		// An actual unrecognized subcommand (gitSubcommand DID isolate a verb
+		// word) must still fall to the conservative write default, not flip
+		// to read alongside the true empty-subcommand case above.
+		{"unrecognized subcommand is unaffected: still write", []string{"frobnicate"}, ClassWrite},
+	}
+	for _, c := range cases {
+		if got := classifyGit(c.args); got != c.want {
+			t.Errorf("%s: classifyGit(%v) = %v, want %v", c.name, c.args, got, c.want)
+		}
+	}
+}
+
 // A positional operand on branch/tag triggers write only when no listing
 // flag is present; combined with a listing flag it stays read; an
 // unrecognized flag also classifies as write, never uncertain.

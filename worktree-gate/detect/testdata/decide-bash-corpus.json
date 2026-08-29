@@ -1014,6 +1014,36 @@
       "command": "\"$DAT_TOOLS\" render \"$PROJ/plan.json\" > \"$PROJ/plan.md\"",
       "cwd": "/repo/wt",
       "want_deny": true
+    },
+    {
+      "name": "new-finding-git-bare-version-flag-allowed-from-primary",
+      "command": "git --version",
+      "cwd": "/repo",
+      "want_deny": false
+    },
+    {
+      "name": "new-finding-git-bare-help-flag-allowed-from-primary",
+      "command": "git --help",
+      "cwd": "/repo",
+      "want_deny": false
+    },
+    {
+      "name": "new-finding-git-no-args-at-all-allowed-from-primary",
+      "command": "git",
+      "cwd": "/repo",
+      "want_deny": false
+    },
+    {
+      "name": "new-finding-git-dash-C-status-still-a-real-subcommand-read",
+      "command": "git -C /repo status",
+      "cwd": "/tmp",
+      "want_deny": false
+    },
+    {
+      "name": "new-finding-git-unrecognized-subcommand-still-write-default",
+      "command": "git bisect start",
+      "cwd": "/repo",
+      "want_deny": true
     }
   ]
 }
