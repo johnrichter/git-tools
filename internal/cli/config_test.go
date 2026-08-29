@@ -82,7 +82,7 @@ func TestLoadConfig_EnvBeatsFile(t *testing.T) {
 
 func TestLoadConfig_HyphenatedFlagMapsToUnderscoredKey(t *testing.T) {
 	fs := rootFlags()
-	if err := fs.Set("privacy-tier", "personal"); err != nil {
+	if err := fs.Set("privacy-tier", "private"); err != nil {
 		t.Fatal(err)
 	}
 	if err := fs.Set("max-binary-bytes", "1024"); err != nil {
@@ -92,7 +92,7 @@ func TestLoadConfig_HyphenatedFlagMapsToUnderscoredKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadConfig: %v", err)
 	}
-	if cfg.PrivacyTier != "personal" {
+	if cfg.PrivacyTier != "private" {
 		t.Errorf("--privacy-tier did not map to privacy_tier, got %q", cfg.PrivacyTier)
 	}
 	if cfg.MaxBinaryBytes != 1024 {

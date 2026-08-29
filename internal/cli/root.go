@@ -49,7 +49,7 @@ hooks.`,
 	root.PersistentFlags().String("config", "", "path to a YAML config file (flag > env > file > default)")
 	root.PersistentFlags().String("repo", "", "git working tree to operate on (default \".\"); refused by push")
 	root.PersistentFlags().String("remote", "", "remote name resign/rebase's force-with-lease report targets, and push publishes to (default \"origin\")")
-	root.PersistentFlags().String("privacy-tier", "", "privacy scan posture: public, datadog, or personal (default \"public\")")
+	root.PersistentFlags().String("privacy-tier", "", "privacy scan posture: public, confidential, or private (default \"public\")")
 	root.PersistentFlags().Bool("strict", false, "escalate privacy warnings to failures")
 	root.PersistentFlags().Int64("max-binary-bytes", 0, "raw-binary scan size threshold in bytes (default githooks.DefaultMaxBytes)")
 

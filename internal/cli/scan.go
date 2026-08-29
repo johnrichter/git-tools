@@ -30,6 +30,22 @@ var gitToolsSkipRules = append(append([]fsx.Rule(nil), githooks.DefaultSkipRules
 	Class:   githooks.SkipClass,
 })
 
+// gitToolsEmployeeEmail configures ScanPrivacy's optional public-tier
+// employee-email check with this org's own domains: githooks ships no
+// default domain of its own, so a consumer that wants this check active
+// must supply it. Allowlist exempts the enumerated public role addresses
+// (support, sales, press, ...) that anyone external is meant to reach, never
+// an individual.
+var gitToolsEmployeeEmail = githooks.EmployeeEmailCheck{
+	Domains: []string{"datadoghq.com", "datadoghq.internal"},
+	Allowlist: map[string]bool{
+		"support@datadoghq.com": true, "sales@datadoghq.com": true,
+		"press@datadoghq.com": true, "info@datadoghq.com": true,
+		"privacy@datadoghq.com": true, "security@datadoghq.com": true,
+		"legal@datadoghq.com": true, "careers@datadoghq.com": true,
+	},
+}
+
 func newScanCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "scan",
@@ -98,7 +114,7 @@ func newScanPrivacyCmd() *cobra.Command {
 		Use:     "privacy",
 		Short:   "Scan for forbidden privacy markers and internal-identifier mentions",
 		Args:    cobra.NoArgs,
-		Example: "  git-tools scan privacy --privacy-tier datadog",
+		Example: "  git-tools scan privacy --privacy-tier confidential",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadConfig(cmd.Flags())
 			if err != nil {
@@ -106,7 +122,7 @@ func newScanPrivacyCmd() *cobra.Command {
 			}
 			tier := githooks.PrivacyTier(cfg.PrivacyTier)
 			if !tier.Known() {
-				return finishUsage(cmd, nil, "usage.cli.invalid_privacy_tier", fmt.Sprintf("--privacy-tier %q is not one of public, datadog, personal", cfg.PrivacyTier))
+				return finishUsage(cmd, nil, "usage.cli.invalid_privacy_tier", fmt.Sprintf("--privacy-tier %q is not one of public, confidential, private", cfg.PrivacyTier))
 			}
 			if bad, ok := malformedPrivacyMarkerExempt(cfg.PrivacyMarkerExempt); ok {
 				return finishUsage(cmd, nil, "usage.cli.invalid_privacy_marker_exempt", fmt.Sprintf("privacy_marker_exempt entry %q is not a valid glob pattern", bad))
@@ -118,6 +134,7 @@ func newScanPrivacyCmd() *cobra.Command {
 				SkipRules:         gitToolsSkipRules,
 				MarkerExemptRules: privacyMarkerExemptRules(cfg.PrivacyMarkerExempt),
 				SecretExemptRules: secretExemptRules(cfg.SecretScanExempt),
+				EmployeeEmail:     gitToolsEmployeeEmail,
 			})
 			if err != nil {
 				return finishErr(cmd, nil, "internal.githooks.scan_privacy_failed", "scan for privacy violations", err)
@@ -141,7 +158,7 @@ func newScanAllCmd() *cobra.Command {
 			}
 			tier := githooks.PrivacyTier(cfg.PrivacyTier)
 			if !tier.Known() {
-				return finishUsage(cmd, nil, "usage.cli.invalid_privacy_tier", fmt.Sprintf("--privacy-tier %q is not one of public, datadog, personal", cfg.PrivacyTier))
+				return finishUsage(cmd, nil, "usage.cli.invalid_privacy_tier", fmt.Sprintf("--privacy-tier %q is not one of public, confidential, private", cfg.PrivacyTier))
 			}
 			if bad, ok := malformedPrivacyMarkerExempt(cfg.PrivacyMarkerExempt); ok {
 				return finishUsage(cmd, nil, "usage.cli.invalid_privacy_marker_exempt", fmt.Sprintf("privacy_marker_exempt entry %q is not a valid glob pattern", bad))
@@ -272,6 +289,7 @@ func scanTree(ctx context.Context, dir string, cfg *Config, staged bool) (githoo
 		SkipRules:         gitToolsSkipRules,
 		MarkerExemptRules: privacyMarkerExemptRules(cfg.PrivacyMarkerExempt),
 		SecretExemptRules: secretExemptRules(cfg.SecretScanExempt),
+		EmployeeEmail:     gitToolsEmployeeEmail,
 	})
 	if err != nil {
 		return githooks.ScanOutcome{}, fmt.Errorf("scan for privacy violations: %w", err)
@@ -299,7 +317,7 @@ func scanTree(ctx context.Context, dir string, cfg *Config, staged bool) (githoo
 func scanGate(cmd *cobra.Command, cfg *Config, dir, verb string, data map[string]any) error {
 	tier := githooks.PrivacyTier(cfg.PrivacyTier)
 	if !tier.Known() {
-		return finishUsage(cmd, data, "usage.cli.invalid_privacy_tier", fmt.Sprintf("--privacy-tier %q is not one of public, datadog, personal", cfg.PrivacyTier))
+		return finishUsage(cmd, data, "usage.cli.invalid_privacy_tier", fmt.Sprintf("--privacy-tier %q is not one of public, confidential, private", cfg.PrivacyTier))
 	}
 	if bad, ok := malformedPrivacyMarkerExempt(cfg.PrivacyMarkerExempt); ok {
 		return finishUsage(cmd, data, "usage.cli.invalid_privacy_marker_exempt", fmt.Sprintf("privacy_marker_exempt entry %q is not a valid glob pattern", bad))

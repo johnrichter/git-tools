@@ -586,7 +586,7 @@ func TestScanLFS_DetectsOversizedRawBinary(t *testing.T) {
 func TestScanPrivacy_DetectsForbiddenMarker(t *testing.T) {
 	bin := buildCLI(t)
 	dir := initRepo(t)
-	content := "---\nowner: datadog\n---\n\nbody\n"
+	content := "---\nprivacy: internal\n---\n\nbody\n"
 	commitFile(t, dir, "doc.md", content, "add doc")
 
 	r, exit := runCLI(t, bin, "--repo", dir, "scan", "privacy", "--privacy-tier", "public")
@@ -617,6 +617,21 @@ func TestScanPrivacy_InvalidTier_IsUsageError(t *testing.T) {
 	r, exit := runCLI(t, bin, "--repo", dir, "scan", "privacy", "--privacy-tier", "nonsense")
 	if r.Status != "usage" || exit != 50 {
 		t.Fatalf("status=%s exit=%d, want usage/50: %+v", r.Status, exit, r)
+	}
+}
+
+// TestScanPrivacy_RetiredTierWireValues_AreUsageErrors proves the tier rename
+// to confidential/private (from the retired datadog/personal wire values) is
+// a hard cutover: the old values fall through tier.Known()'s ordinary usage-
+// error path, not a special-cased backward-compat warning.
+func TestScanPrivacy_RetiredTierWireValues_AreUsageErrors(t *testing.T) {
+	bin := buildCLI(t)
+	dir := initRepo(t)
+	for _, tier := range []string{"datadog", "personal"} {
+		r, exit := runCLI(t, bin, "--repo", dir, "scan", "privacy", "--privacy-tier", tier)
+		if r.Status != "usage" || exit != 50 {
+			t.Errorf("--privacy-tier %s: status=%s exit=%d, want usage/50: %+v", tier, r.Status, exit, r)
+		}
 	}
 }
 
