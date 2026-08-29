@@ -7,7 +7,7 @@ require (
 	github.com/gofrs/flock v0.13.0
 	github.com/johnrichter/claude-shared-tooling/go/clikit v0.1.0
 	github.com/johnrichter/claude-shared-tooling/go/fsx v0.1.0
-	github.com/johnrichter/claude-shared-tooling/go/git v0.3.0
+	github.com/johnrichter/claude-shared-tooling/go/git v0.4.0
 	github.com/johnrichter/claude-shared-tooling/go/githooks v0.5.0
 	github.com/johnrichter/claude-shared-tooling/go/sysops v0.1.0
 	github.com/knadh/koanf/parsers/yaml v1.1.0
@@ -37,10 +37,3 @@ require (
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
 	golang.org/x/sys v0.37.0 // indirect
 )
-
-// TEMPORARY: pins go/git to the not-yet-merged chore/d1-backup-ref-migration
-// worktree so git-tools can build and test against the BackupRef rename and
-// the LED-033 reachability fix before that branch has a real released
-// version. Remove this replace and restore a real go/git version pin once
-// the operator approves the ai-shared-lib merge and a new tag is cut.
-replace github.com/johnrichter/claude-shared-tooling/go/git => /home/bits/Development/workspaces/psa-platform/ai-shared-lib/.claude/worktrees/d1-backup-ref-migration/go/git
