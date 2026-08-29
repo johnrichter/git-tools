@@ -287,6 +287,19 @@ func scanBash(lstat LstatFunc, readFile ReadFileFunc, gitIgnored GitIgnoredFunc,
 				if d := namedPathDenial(lstat, readFile, gitIgnored, p, cwd, cwdUnresolvable); d != nil {
 					return ClassWrite, d
 				}
+				if depth > 0 && len(namedPaths(p)) == 0 {
+					// SC24: this piece was recursed out of an interior (a command
+					// substitution, backtick span, or eval/-c payload) and names no
+					// operand path at all -- its write lands wherever it actually
+					// runs. cwd here is already that interior's OWN resolved
+					// location (composed below, before this piece's interior was
+					// recursed into), not the caller's outer cwd, which is the gap
+					// this closes: a depth-0 piece in the same shape is already
+					// covered by decideBash's own cwd leg once scanBash returns.
+					if d := pathBlindWriteDenial(lstat, readFile, cwd, cwdUnresolvable); d != nil {
+						return ClassWrite, d
+					}
+				}
 			}
 			worst = stricter(worst, pc)
 		}
@@ -294,7 +307,13 @@ func scanBash(lstat LstatFunc, readFile ReadFileFunc, gitIgnored GitIgnoredFunc,
 			continue
 		}
 		for _, interior := range decomposableInteriors(p.raw) {
-			ic, d := scanBash(lstat, readFile, gitIgnored, verbs, sc15Path, sc15Digest, interior, cwd, cwdUnresolvable, depth+1)
+			// SC24: an interior may run its own `cd` before the write it smuggles
+			// (`$(cd /other && git commit)`) -- composeInteriorCWD resolves that
+			// against the cwd already in force here, so the recursive scan below
+			// judges the interior's piece against where it actually lands, not
+			// against the enclosing command's own unrelated cwd.
+			interiorCWD, interiorUnresolvable := composeInteriorCWD(cwd, cwdUnresolvable, interior)
+			ic, d := scanBash(lstat, readFile, gitIgnored, verbs, sc15Path, sc15Digest, interior, interiorCWD, interiorUnresolvable, depth+1)
 			if d != nil {
 				return ClassWrite, d
 			}
@@ -305,6 +324,69 @@ func scanBash(lstat LstatFunc, readFile ReadFileFunc, gitIgnored GitIgnoredFunc,
 		}
 	}
 	return worst, nil
+}
+
+// pathBlindWriteDenial is SC24's rule for a write-class piece that names no
+// operand path at all -- git's commit/reset/checkout and every other verb
+// namedPaths leaves empty because the write lands wherever the process is
+// actually running, not at a named destination. SC20's namedPathDenial has
+// nothing to resolve for such a piece, and outside a top-level command
+// decideBash's own cwd leg never reaches it either, since that leg judges
+// only the OUTER command's own effective cwd -- never a `cd` occurring inside
+// a command substitution, backtick span, or eval/-c payload that this piece
+// was recursed out of (SC16). This closes exactly that gap: cwd here is
+// already the interior's OWN resolved location (composeInteriorCWD, applied
+// by the caller before recursing), so a piece reached this way is judged
+// against where it truly runs.
+//
+// Covered: `cd <literal> && <path-blind-write>` or `cd <literal>;
+// <path-blind-write>`, and any other connector, inside a command
+// substitution, a backtick span, an `eval` argument, or a shell's `-c`
+// string -- every interior decomposableInteriors recurses into, at any
+// depth. A bare `(...)` subshell used as a whole command needs no separate
+// coverage here: decompose does not depth-track a bare paren, so its `cd`
+// and its write already land as ordinary top-level pieces the existing cwd
+// resolver and named-path rule see directly.
+//
+// Not covered: a `cd` target built from a variable, glob, `~`, or a further
+// substitution (resolveEffectiveCWD already denies that outright as
+// unresolvable, on SC5's precedent, same as the top-level leg); a `cd`
+// reached only through an xargs-supplied argv (xargsArgv's interior is the
+// command xargs runs, not a cd/write sequence inside it); and any interior
+// whose true destination depends on runtime state (a symlink swapped between
+// resolution and execution, a second-order substitution) -- both are the
+// general, unbounded case this fix does not attempt to solve.
+func pathBlindWriteDenial(lstat LstatFunc, readFile ReadFileFunc, cwd string, cwdUnresolvable bool) *Decision {
+	if cwdUnresolvable {
+		d := deny(
+			"an interior `cd` retargets this command's own working directory to a value this gate cannot determine statically, and a write inside it names no path of its own to check instead",
+			remedyStaticCWD)
+		return &d
+	}
+	if cwd == "" {
+		return nil // no static cwd at all to judge; the caller's own cwd leg governs
+	}
+	root, gitEntry, found, err := FindRepoRoot(lstat, cwd)
+	if err != nil {
+		d := deny(fmt.Sprintf(
+			"cannot determine whether the working directory %q is inside a git repository (%v)", cwd, err), remedyReadablePath)
+		return &d
+	}
+	if !found {
+		return nil // confidently outside any repo
+	}
+	switch ClassifyGitEntry(lstat, readFile, gitEntry) {
+	case KindWorktree:
+		return nil // already isolated
+	case KindPrimary:
+		d := deny(fmt.Sprintf(
+			"this command's own interior retargets its working directory to %q, the primary checkout of %q, and writes there implicitly rather than to a named path", cwd, root), remedyTargetRepoWorktree)
+		return &d
+	default:
+		d := deny(fmt.Sprintf(
+			"cannot determine whether the working directory %q, reached through this command's own interior `cd`, is a worktree", cwd), remedyProveMembership)
+		return &d
+	}
 }
 
 // namedPathDenial applies SC20's rule to a piece already resolved write-class:

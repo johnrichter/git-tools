@@ -182,6 +182,36 @@ func isUnexpandable(s string) bool {
 	return strings.ContainsAny(s, "$`*?[]")
 }
 
+// composeInteriorCWD resolves the working directory in force at the start of
+// an interior command string (a command substitution, backtick span, or
+// eval/-c payload), given the cwd already in force where that interior is
+// reached: outerCWD/outerUnresolvable, exactly what scanBash was carrying at
+// the piece it recursed the interior out of. It is effectiveBashCWD's own
+// composition rule, reused here instead of duplicated, but with one
+// difference effectiveBashCWD cannot have: an already-unresolvable outer cwd
+// must stay unresolvable under a relative interior target, never silently
+// default to "" as effectiveBashCWD does for a bare sessionCWD of "". This is
+// SC24's own resolver: a path-blind write recursed out of an interior (see
+// pathBlindWriteDenial) is judged against ITS OWN effective location, not the
+// caller's outer one, so `cd <path> && git commit` inside a `$(...)` lands the
+// commit's cwd check on <path> even though the outer command's own cwd never
+// changed.
+func composeInteriorCWD(outerCWD string, outerUnresolvable bool, interior string) (dir string, unresolvable bool) {
+	resolved, denied := resolveEffectiveCWD(interior)
+	switch {
+	case denied:
+		return "", true
+	case resolved == "":
+		return outerCWD, outerUnresolvable
+	case filepath.IsAbs(resolved):
+		return resolved, false
+	case outerUnresolvable || outerCWD == "":
+		return "", true
+	default:
+		return filepath.Join(outerCWD, resolved), false
+	}
+}
+
 // effectiveBashCWD resolves the real, absolute working directory decideBash
 // should evaluate a Bash call against: resolveEffectiveCWD's result composed
 // onto the session's own cwd. "" from the resolver (no cd/-C found) defers
