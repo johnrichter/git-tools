@@ -595,19 +595,49 @@ func TestScanPrivacy_DetectsForbiddenMarker(t *testing.T) {
 	}
 }
 
+// employeeEmailConfig turns the public tier's optional employee-email check on
+// for a placeholder domain, with one allowlisted role address. The domain is
+// deliberately a documentation placeholder, never a real organization's: which
+// domains identify an org's own people is per-repo config, so a test proving
+// the mechanism needs a fixture value, not a live one.
+const employeeEmailConfig = "employee_email_domains:\n  - example.com\nemployee_email_allowlist:\n  - support@example.com\n"
+
+// TestScanPrivacy_InternalEmailWarnsWithoutStrict covers the public tier's
+// employee-email check as a repo configures it through git-tools.yaml, and its
+// allowlist: the flagged individual address warns (and fails under --strict)
+// while the allowlisted role address at the same domain does not.
 func TestScanPrivacy_InternalEmailWarnsWithoutStrict(t *testing.T) {
 	bin := buildCLI(t)
 	dir := initRepo(t)
-	commitFile(t, dir, "doc.md", "contact person@datadoghq.com for details\n", "add doc")
+	commitFile(t, dir, "git-tools.yaml", employeeEmailConfig, "configure the employee-email check")
+	commitFile(t, dir, "doc.md", "contact person@example.com, not support@example.com\n", "add doc")
 
 	r, exit := runCLI(t, bin, "--repo", dir, "scan", "privacy", "--privacy-tier", "public")
 	if r.Status != "caveats" || exit != 10 {
 		t.Fatalf("status=%s exit=%d, want caveats/10: %+v", r.Status, exit, r)
 	}
+	if len(r.Caveats) != 1 {
+		t.Errorf("caveats = %d, want exactly 1 (the allowlisted role address must not warn): %+v", len(r.Caveats), r.Caveats)
+	}
 
 	r, exit = runCLI(t, bin, "--repo", dir, "scan", "privacy", "--privacy-tier", "public", "--strict")
 	if r.Status != "precondition_unmet" || exit != 30 {
 		t.Fatalf("--strict: status=%s exit=%d, want precondition_unmet/30: %+v", r.Status, exit, r)
+	}
+}
+
+// TestScanPrivacy_EmployeeEmailCheckOffWithoutConfig pins the check off by
+// default. git-tools holds no organization's mail domains in its own source —
+// it ships publicly and serves any repo — so an address at a domain no
+// git-tools.yaml named is not an internal identifier and the scan is clean.
+func TestScanPrivacy_EmployeeEmailCheckOffWithoutConfig(t *testing.T) {
+	bin := buildCLI(t)
+	dir := initRepo(t)
+	commitFile(t, dir, "doc.md", "contact person@example.com for details\n", "add doc")
+
+	r, exit := runCLI(t, bin, "--repo", dir, "scan", "privacy", "--privacy-tier", "public")
+	if r.Status != "success" || exit != 0 {
+		t.Fatalf("status=%s exit=%d, want success/0 (no configured domain means no employee-email check): %+v", r.Status, exit, r)
 	}
 }
 
@@ -804,6 +834,24 @@ func TestHooksInstall_WritesScriptAndSetsHooksPath(t *testing.T) {
 	commit.Dir = dir
 	if out, err := commit.CombinedOutput(); err == nil {
 		t.Fatalf("commit with a planted secret should have been blocked by the installed hook:\n%s", out)
+	}
+}
+
+// TestHooksInstall_RetiredTierWireValues_AreUsageErrors covers the other half
+// of the tier cutover: install embeds the tier verbatim in the script it
+// writes, so a retired value must be refused here rather than baked into a
+// hook that then fails every commit. Nothing is installed on refusal.
+func TestHooksInstall_RetiredTierWireValues_AreUsageErrors(t *testing.T) {
+	bin := buildCLI(t)
+	for _, tier := range []string{"datadog", "personal", "nonsense"} {
+		dir := initRepo(t)
+		r, exit := runCLI(t, bin, "--repo", dir, "hooks", "install", "--privacy-tier", tier)
+		if r.Status != "usage" || exit != 50 {
+			t.Errorf("--privacy-tier %s: status=%s exit=%d, want usage/50: %+v", tier, r.Status, exit, r)
+		}
+		if _, err := os.Stat(filepath.Join(dir, ".githooks", "pre-commit")); !os.IsNotExist(err) {
+			t.Errorf("--privacy-tier %s: a hook was installed despite the usage error (stat err = %v)", tier, err)
+		}
 	}
 }
 

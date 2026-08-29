@@ -30,22 +30,6 @@ var gitToolsSkipRules = append(append([]fsx.Rule(nil), githooks.DefaultSkipRules
 	Class:   githooks.SkipClass,
 })
 
-// gitToolsEmployeeEmail configures ScanPrivacy's optional public-tier
-// employee-email check with this org's own domains: githooks ships no
-// default domain of its own, so a consumer that wants this check active
-// must supply it. Allowlist exempts the enumerated public role addresses
-// (support, sales, press, ...) that anyone external is meant to reach, never
-// an individual.
-var gitToolsEmployeeEmail = githooks.EmployeeEmailCheck{
-	Domains: []string{"datadoghq.com", "datadoghq.internal"},
-	Allowlist: map[string]bool{
-		"support@datadoghq.com": true, "sales@datadoghq.com": true,
-		"press@datadoghq.com": true, "info@datadoghq.com": true,
-		"privacy@datadoghq.com": true, "security@datadoghq.com": true,
-		"legal@datadoghq.com": true, "careers@datadoghq.com": true,
-	},
-}
-
 func newScanCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "scan",
@@ -134,7 +118,7 @@ func newScanPrivacyCmd() *cobra.Command {
 				SkipRules:         gitToolsSkipRules,
 				MarkerExemptRules: privacyMarkerExemptRules(cfg.PrivacyMarkerExempt),
 				SecretExemptRules: secretExemptRules(cfg.SecretScanExempt),
-				EmployeeEmail:     gitToolsEmployeeEmail,
+				EmployeeEmail:     employeeEmailCheck(cfg),
 			})
 			if err != nil {
 				return finishErr(cmd, nil, "internal.githooks.scan_privacy_failed", "scan for privacy violations", err)
@@ -255,6 +239,26 @@ func secretExemptRules(paths []string) []fsx.Rule {
 	return rules
 }
 
+// employeeEmailCheck converts cfg's employee_email_domains and
+// employee_email_allowlist entries into the githooks.EmployeeEmailCheck
+// PrivacyOptions.EmployeeEmail expects, turning the public tier's optional
+// employee-email check on for exactly the domains a repo's own git-tools.yaml
+// names. With no domains configured — the default — it returns the zero value
+// and the check stays off, the same posture githooks itself ships: this CLI
+// serves any repo and ships as public source, so it holds no organization's
+// domains of its own to fall back on.
+func employeeEmailCheck(cfg *Config) githooks.EmployeeEmailCheck {
+	check := githooks.EmployeeEmailCheck{Domains: cfg.EmployeeEmailDomains}
+	if len(cfg.EmployeeEmailAllowlist) == 0 {
+		return check
+	}
+	check.Allowlist = make(map[string]bool, len(cfg.EmployeeEmailAllowlist))
+	for _, addr := range cfg.EmployeeEmailAllowlist {
+		check.Allowlist[addr] = true
+	}
+	return check
+}
+
 // emitScan hands outcome to githooks' own result-builder, which produces the
 // full clikit envelope (success/caveats/precondition_unmet) in one call.
 func emitScan(cmd *cobra.Command, outcome githooks.ScanOutcome) error {
@@ -289,7 +293,7 @@ func scanTree(ctx context.Context, dir string, cfg *Config, staged bool) (githoo
 		SkipRules:         gitToolsSkipRules,
 		MarkerExemptRules: privacyMarkerExemptRules(cfg.PrivacyMarkerExempt),
 		SecretExemptRules: secretExemptRules(cfg.SecretScanExempt),
-		EmployeeEmail:     gitToolsEmployeeEmail,
+		EmployeeEmail:     employeeEmailCheck(cfg),
 	})
 	if err != nil {
 		return githooks.ScanOutcome{}, fmt.Errorf("scan for privacy violations: %w", err)

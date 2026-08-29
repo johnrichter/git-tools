@@ -210,9 +210,11 @@ const markerFrontmatter = "---\nprivacy: internal\n---\n\nfixture body\n"
 // multiple of it rather than as an opaque number.
 const markerFrontmatterFindings = 2
 
-// writeConfig writes a git-tools.yaml into dir, the shape loadConfigFile
-// auto-discovers from the invoking process's own working directory when no
-// --config flag is passed.
+// writeConfig writes an untracked git-tools.yaml into dir, the shape
+// loadConfigFile auto-discovers from --repo's own target directory when no
+// --config flag is passed. Untracked on purpose: a config file takes effect
+// without being committed — loadConfigFile warns but does not block — which
+// is the behavior these gate tests rely on to configure a scratch repo.
 func writeConfig(t *testing.T, dir, content string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(dir, "git-tools.yaml"), []byte(content), 0o644); err != nil {

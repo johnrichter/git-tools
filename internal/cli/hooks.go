@@ -2,10 +2,12 @@ package cli
 
 import (
 	"errors"
+	"fmt"
 
 	"github.com/spf13/cobra"
 
 	"github.com/johnrichter/claude-shared-tooling/go/clikit"
+	"github.com/johnrichter/claude-shared-tooling/go/githooks"
 	"github.com/johnrichter/git-tools/internal/hooks"
 )
 
@@ -28,6 +30,17 @@ func newHooksInstallCmd() *cobra.Command {
 			cfg, err := loadConfig(cmd.Flags())
 			if err != nil {
 				return finishErr(cmd, nil, "internal.config.load_failed", "load configuration", err)
+			}
+
+			// Validate the tier before baking it into the script: the hook
+			// embeds this value verbatim and passes it back to `scan all`, so
+			// an unknown one installs cleanly and then fails every commit
+			// with a usage error instead of scanning. Refusing here is the
+			// only point that can name the bad value while nothing is
+			// installed yet — newly load-bearing now that the tier
+			// vocabulary has changed and a stale value is a live hazard.
+			if tier := githooks.PrivacyTier(cfg.PrivacyTier); !tier.Known() {
+				return finishUsage(cmd, nil, "usage.cli.invalid_privacy_tier", fmt.Sprintf("--privacy-tier %q is not one of public, confidential, private", cfg.PrivacyTier))
 			}
 
 			hooksDir, _ := cmd.Flags().GetString("hooks-dir")
