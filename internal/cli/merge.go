@@ -74,7 +74,11 @@ Exit codes:
 Exit 20 is an expected negative answer, not a failure: the merge asked to land
 something and there was nothing to land. --dry-run is blind to this — it still
 reports would_merge at exit 0 over an all-empty range, the accepted cost of a
-preflight that does not detect the condition.`,
+preflight that does not detect the condition.
+
+The worktree gate sanctions this verb only when git-tools is invoked by its
+exact provisioned absolute path: a bare "git-tools", or a name resolved off
+$PATH, does not satisfy it, and is denied from a primary checkout.`,
 		Args:    cobra.MinimumNArgs(1),
 		Example: "  git-tools merge --message \"merge release\" release/1.2",
 		RunE: func(cmd *cobra.Command, args []string) error {

@@ -24,7 +24,10 @@ func newPushCmd() *cobra.Command {
 		Short: "Publish the currently checked-out branch, or a tag, to the sanctioned remote",
 		Long: `push is the sanctioned channel for advancing a protected branch or a
 tag: the worktree gate refuses a raw "git push" outright, and this verb is
-what it expects in its place.
+what it expects in its place. The gate sanctions it only when git-tools is
+invoked by its exact provisioned absolute path — a bare "git-tools", or a
+name resolved off $PATH, does not satisfy it, and is denied from a primary
+checkout.
 
 It refuses anything it cannot verify as sanctioned at the moment it runs:
 tracked modifications or staged changes, --repo/--config (either would

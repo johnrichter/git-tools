@@ -497,12 +497,23 @@ func classifyPiece(v Verbs, p piece) BashClass {
 		return ClassRead
 	}
 	stripped := stripGroupOpeners(p.argv)
-	if toks := shellTokens(stripped); len(toks) > 0 && commandWord(toks[0]) == "git" {
-		// Every `git …` verb is classified from the in-code subcommand sets
-		// (see classifyGit), not the verbs.json prefixes, so a leading global
-		// option never defeats the match and merge-base stays a read while
-		// merge is a write.
-		return classifyGit(toks[1:])
+	if toks := shellTokens(stripped); len(toks) > 0 {
+		switch commandWord(toks[0]) {
+		case "git":
+			// Every `git …` verb is classified from the in-code subcommand sets
+			// (see classifyGit), not the verbs.json prefixes, so a leading global
+			// option never defeats the match and merge-base stays a read while
+			// merge is a write.
+			return classifyGit(toks[1:])
+		case "git-tools":
+			// Every `git-tools …` invocation is a write by default, whatever its
+			// verb: the provisioned CLI names no read class here, so a
+			// differently planted binary of the same name can never earn one for
+			// free. Its two real read verbs (worktree list, branch list) reach
+			// ClassRead only through sc15ReadAllowed's independently
+			// digest-verified check.
+			return ClassWrite
+		}
 	}
 	lower := strings.ToLower(stripped)
 	for _, w := range v.WritePrefixes {
@@ -524,6 +535,19 @@ func classifyPiece(v Verbs, p piece) BashClass {
 		}
 	}
 	return ClassUncertain
+}
+
+// gitToolsVerbShapes names the provisioned CLI's verb shapes a denial can
+// recognize by name -- plain data, consulted only to name a matching verb
+// inside a more specific deny message (see gitToolsVerbShape in decide.go).
+// It plays no part in classification: classifyPiece's git-tools default
+// above is unconditional, so this list can never turn into a read set by
+// accident.
+var gitToolsVerbShapes = []string{
+	"merge", "push", "rebase", "resign", "sign",
+	"branch create", "branch delete",
+	"worktree add", "worktree remove",
+	"tag create", "hooks install",
 }
 
 // eligibleCdSkip reports whether p is exactly `cd <literal-target>` and nothing

@@ -222,6 +222,9 @@ func decideBash(lstat LstatFunc, readFile ReadFileFunc, gitIgnored GitIgnoredFun
 		return deny(fmt.Sprintf(
 			"cannot classify %q, so the gate cannot rule out a write into the primary checkout of %q", in.Command, root), remedyRewordAsRead)
 	default: // ClassWrite in a primary checkout
+		if cause, ok := gitToolsSanctionCause(readFile, in.ProvisionedBinPath, in.ProvisionedBinDigest, in.Command); ok {
+			return deny(fmt.Sprintf("%q %s", in.Command, cause), remedyThisRepoWorktree)
+		}
 		return deny(fmt.Sprintf(
 			"%q may modify %q outside a worktree", in.Command, root), remedyThisRepoWorktree)
 	}
@@ -258,16 +261,18 @@ func scanBash(lstat LstatFunc, readFile ReadFileFunc, gitIgnored GitIgnoredFunc,
 		exempt := depth == 0 && sc15Exempt(readFile, sc15Path, sc15Digest, p)
 		if !exempt {
 			pc := classifyPiece(verbs, p)
-			if pc == ClassUncertain && depth == 0 &&
+			if pc != ClassRead && depth == 0 &&
 				sc15ReadAllowed(readFile, sc15Path, sc15Digest, p) {
 				// SC15's read allowance: the digest-verified CLI's read verbs
 				// (worktree list, branch list) write nothing, so a piece that
-				// would otherwise fail closed as ClassUncertain reads instead.
-				// Evaluated only here, after classifyPiece has already resolved
-				// a file-opening output redirect to ClassWrite, so
-				// `worktree list > <primary>/f` is caught by the class tally
-				// and the named-path rule below rather than read away into a
-				// primary checkout.
+				// would otherwise fail closed -- as ClassUncertain, or, for the
+				// provisioned CLI's own basename, as classifyPiece's
+				// unconditional git-tools-is-a-write default -- reads instead.
+				// sc15Identity itself already refuses a piece carrying a
+				// file-opening redirect or here-document, so
+				// `worktree list > <primary>/f` is still caught by the class
+				// tally and the named-path rule below rather than read away
+				// into a primary checkout.
 				pc = ClassRead
 			}
 			if pc == ClassWrite {
@@ -430,6 +435,8 @@ func namedPaths(p piece) []string {
 	switch cmd := commandWord(toks[0]); {
 	case cmd == "git":
 		return append(targets, gitDestinations(toks[1:])...)
+	case cmd == "git-tools":
+		return append(targets, gitToolsDestinations(toks[1:])...)
 	case isCopyLikeWriter(cmd):
 		return append(targets, copyDestinations(toks[1:])...)
 	default:
@@ -534,6 +541,45 @@ func gitDestinations(args []string) []string {
 		}
 	}
 	return nil
+}
+
+// gitToolsDestinations returns the filesystem paths a git-tools invocation
+// names explicitly: a --repo or --config value, which retargets whichever
+// verb runs onto a different repository, and worktree add/remove's own path
+// operand. Every SC15-sanctioned landing verb (merge, push, resign, branch
+// delete) writes its own working directory instead, governed by the cwd leg
+// the same way git's own commit/add/reset are -- it names no destination
+// here, so the verb word itself is never mistaken for one.
+func gitToolsDestinations(args []string) []string {
+	var out []string
+	if v, ok := flagValue(args, "--repo"); ok {
+		out = append(out, v)
+	}
+	if v, ok := flagValue(args, "--config"); ok {
+		out = append(out, v)
+	}
+	if len(args) >= 2 && args[0] == "worktree" && (args[1] == "add" || args[1] == "remove") {
+		if ops := operands(args[2:]); len(ops) > 0 {
+			out = append(out, ops[0])
+		}
+	}
+	return out
+}
+
+// flagValue returns name's value from args, spelled either as a separate
+// following token or joined with "=", or ok false when name is absent.
+func flagValue(args []string, name string) (value string, ok bool) {
+	for i, a := range args {
+		switch {
+		case a == name:
+			if i+1 < len(args) {
+				return stripQuotes(args[i+1]), true
+			}
+		case strings.HasPrefix(a, name+"="):
+			return stripQuotes(a[len(name)+1:]), true
+		}
+	}
+	return "", false
 }
 
 // gitSubcommand skips git's global options -- their split, glued, and =-joined
@@ -867,29 +913,115 @@ func outputRedirectTargets(raw string) []string {
 // both SC15 allowances -- the write exemption (sc15Exempt) and the read
 // reclassification (sc15ReadAllowed) layer their own verb policy behind it.
 func sc15Identity(readFile ReadFileFunc, verifiedPath, expectedDigest string, p piece) (args []string, ok bool) {
+	args, cause := sc15IdentityCause(readFile, verifiedPath, expectedDigest, p)
+	return args, cause == sc15IdentityHolds
+}
+
+// sc15IdentityCause is sc15Identity's own logic, reworked to also name WHICH
+// check failed -- sc15Identity itself keeps its plain ok-bool signature for
+// its two allowance callers, so only a caller building a caller-facing
+// denial (gitToolsSanctionCause) needs the cause.
+type sc15IdentityFailure int
+
+const (
+	sc15IdentityHolds sc15IdentityFailure = iota
+	sc15IdentityNoParams
+	sc15IdentityPathMismatch
+	sc15IdentityUnreadable
+	sc15IdentityDigestMismatch
+	sc15IdentityOpensAPath
+)
+
+func sc15IdentityCause(readFile ReadFileFunc, verifiedPath, expectedDigest string, p piece) (args []string, cause sc15IdentityFailure) {
 	expected := strings.ToLower(strings.TrimSpace(expectedDigest))
 	if verifiedPath == "" || expected == "" {
-		return nil, false // both parameters arrive as argv; absence of either denies
+		return nil, sc15IdentityNoParams // both parameters arrive as argv; absence of either denies
 	}
 	if p.openingRedirect || len(p.heredocs) > 0 {
-		return nil, false // a file-opening redirect is the shell's write, not the CLI's
+		return nil, sc15IdentityOpensAPath // a file-opening redirect is the shell's write, not the CLI's
 	}
 	toks := shellTokens(p.argv)
 	for i, tok := range toks {
 		toks[i] = stripQuotes(tok)
 	}
 	if len(toks) < 2 || toks[0] != verifiedPath {
-		return nil, false
+		return nil, sc15IdentityPathMismatch
 	}
 	b, err := readFile(verifiedPath)
 	if err != nil {
-		return nil, false // cannot re-verify the binary's identity: not the CLI
+		// The path matched, so args is still the verb a caller-facing denial
+		// can name, even though identity itself does not hold.
+		return toks[1:], sc15IdentityUnreadable
 	}
 	sum := sha256.Sum256(b)
 	if hex.EncodeToString(sum[:]) != expected {
-		return nil, false
+		return toks[1:], sc15IdentityDigestMismatch
 	}
-	return toks[1:], true
+	return toks[1:], sc15IdentityHolds
+}
+
+// sc15IdentityCauseReason renders a failed sc15IdentityCause as the
+// caller-facing clause naming what specifically failed, for a denial more
+// useful than a blanket "cannot classify". It is never called with
+// sc15IdentityHolds -- gitToolsSanctionCause only reaches for a reason once
+// identity has already failed.
+func sc15IdentityCauseReason(cause sc15IdentityFailure) string {
+	switch cause {
+	case sc15IdentityNoParams:
+		return "no provisioned-CLI path or digest was supplied to verify it against"
+	case sc15IdentityPathMismatch:
+		return "it was not invoked by the CLI's exact provisioned absolute path"
+	case sc15IdentityUnreadable:
+		return "the binary at the provisioned path could not be read to re-verify it"
+	case sc15IdentityDigestMismatch:
+		return "the binary at the provisioned path no longer matches its pinned digest"
+	case sc15IdentityOpensAPath:
+		return "it opens a file (a redirect or here-document), which the sanctioned channel never does"
+	default:
+		return ""
+	}
+}
+
+// gitToolsSanctionCause looks for a top-level git-tools-shaped piece in
+// command that fails SC15's identity check, so a "write in a primary
+// checkout" denial can name why instead of only restating the command. ok is
+// false when no such piece is found -- an ordinary write, a piece that holds
+// identity (and is exempted or read-allowed elsewhere), or one voided only by
+// a retargeting flag, whose message SC20's own named-path denial already
+// covers.
+func gitToolsSanctionCause(readFile ReadFileFunc, sc15Path, sc15Digest, command string) (situation string, ok bool) {
+	for _, p := range decompose(command) {
+		toks := shellTokens(stripGroupOpeners(p.argv))
+		if len(toks) == 0 || commandWord(toks[0]) != "git-tools" {
+			continue
+		}
+		args, cause := sc15IdentityCause(readFile, sc15Path, sc15Digest, p)
+		if cause == sc15IdentityHolds {
+			continue
+		}
+		reason := sc15IdentityCauseReason(cause)
+		if reason == "" {
+			continue
+		}
+		if verb := gitToolsVerbShape(args); verb != "" {
+			return fmt.Sprintf("recognized this as a `%s` call, but %s", verb, reason), true
+		}
+		return fmt.Sprintf("cannot be sanctioned here: %s", reason), true
+	}
+	return "", false
+}
+
+// gitToolsVerbShape reports which of gitToolsVerbShapes args (the tokens
+// after the CLI's own path) opens with, or "" when none match. It is used
+// only to name a verb inside a denial message, never to classify.
+func gitToolsVerbShape(args []string) string {
+	joined := strings.ToLower(strings.Join(args, " "))
+	for _, shape := range gitToolsVerbShapes {
+		if joined == shape || strings.HasPrefix(joined, shape+" ") {
+			return shape
+		}
+	}
+	return ""
 }
 
 // sc15Exempt reports whether a top-level piece is SC15's sanctioned landing

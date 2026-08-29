@@ -35,8 +35,14 @@ func newSignCmd() *cobra.Command {
 // --base..ref gets an identical-tree, newly signed replacement.
 func newResignCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:     "resign [ref]",
-		Short:   "Re-sign every commit in --base..ref with identical trees",
+		Use:   "resign [ref]",
+		Short: "Re-sign every commit in --base..ref with identical trees",
+		Long: `resign is the pre-landing re-signing step, sanctioned to run from the
+primary checkout by the same channel that lands a merge there.
+
+The worktree gate sanctions it only when git-tools is invoked by its exact
+provisioned absolute path — a bare "git-tools", or a name resolved off
+$PATH, does not satisfy it, and is denied from a primary checkout.`,
 		Args:    cobra.MaximumNArgs(1),
 		Example: "  git-tools resign --base origin/main HEAD",
 		RunE: func(cmd *cobra.Command, args []string) error {

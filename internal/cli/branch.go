@@ -125,7 +125,11 @@ Exit codes:
                            commits unreachable from it; the ref did not move
   40 not_found            --repo is not a git working tree, or name does not exist
   41 conflict             expected-head is stale; the compare-and-swap refused
-  90 internal             an underlying git command failed unexpectedly`,
+  90 internal             an underlying git command failed unexpectedly
+
+The worktree gate sanctions this verb only when git-tools is invoked by its
+exact provisioned absolute path: a bare "git-tools", or a name resolved off
+$PATH, does not satisfy it, and is denied from a primary checkout.`,
 		Args:    cobra.RangeArgs(1, 2),
 		Example: "  git-tools branch delete feature/x $(git rev-parse feature/x)",
 		RunE: func(cmd *cobra.Command, args []string) error {

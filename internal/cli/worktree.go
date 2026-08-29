@@ -48,8 +48,14 @@ func newWorktreeCmd() *cobra.Command {
 
 func newWorktreeAddCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:     "add <path> <ref>",
-		Short:   "Create a linked worktree at path checked out to ref",
+		Use:   "add <path> <ref>",
+		Short: "Create a linked worktree at path checked out to ref",
+		Long: `add creates a linked worktree at path checked out to ref, then verifies it
+was actually registered before reporting success.
+
+The worktree gate sanctions this verb only when git-tools is invoked by its
+exact provisioned absolute path: a bare "git-tools", or a name resolved off
+$PATH, does not satisfy it, and is denied from a primary checkout.`,
 		Args:    cobra.ExactArgs(2),
 		Example: "  git-tools worktree add ../review origin/main --branch review",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -119,7 +125,11 @@ sub-worktree nests under it, or when its HEAD is detached. No flag overrides
 any of these refusals -- each condition must be resolved on its own terms
 before the worktree can go. The landing target is --landing-target if given,
 else the branch's upstream, else the local record of the remote's default
-branch; every step is answered from local refs, never the network.`,
+branch; every step is answered from local refs, never the network.
+
+The worktree gate sanctions this verb only when git-tools is invoked by its
+exact provisioned absolute path: a bare "git-tools", or a name resolved off
+$PATH, does not satisfy it, and is denied from a primary checkout.`,
 		Args:    cobra.ExactArgs(1),
 		Example: "  git-tools worktree remove ../review --landing-target main",
 		RunE: func(cmd *cobra.Command, args []string) error {
