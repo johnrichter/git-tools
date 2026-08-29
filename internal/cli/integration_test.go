@@ -897,14 +897,14 @@ func TestAbandonmentRoute_MergedBranch_SucceedsInTwoActs(t *testing.T) {
 		t.Fatal("act 2 left the branch ref behind")
 	}
 
-	// The backup tag from act 2 makes the abandonment recoverable (SC-C6): it
+	// The backup ref from act 2 makes the abandonment recoverable (SC-C6): it
 	// must exist and still resolve to the deleted branch's old head.
-	backupTag, _ := r.Data["backup_tag"].(string)
-	if backupTag == "" {
-		t.Fatalf("branch delete result carries no backup_tag: %+v", r.Data)
+	backupRef, _ := r.Data["backup_ref"].(string)
+	if backupRef == "" {
+		t.Fatalf("branch delete result carries no backup_ref: %+v", r.Data)
 	}
-	if got := runGit(t, dir, "rev-parse", backupTag); got != head {
-		t.Fatalf("backup tag %s resolves to %s, want the deleted branch's old head %s", backupTag, got, head)
+	if got := runGit(t, dir, "rev-parse", backupRef); got != head {
+		t.Fatalf("backup ref %s resolves to %s, want the deleted branch's old head %s", backupRef, got, head)
 	}
 }
 

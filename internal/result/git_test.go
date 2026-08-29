@@ -116,21 +116,21 @@ func TestConflictDiagnostic_UnrecognizedErrorIsNotOK(t *testing.T) {
 }
 
 func TestRewriteOutcomeData_OmitsEmptyOptionalFields(t *testing.T) {
-	data := RewriteOutcomeData(&git.RewriteOutcome{Ref: "HEAD", OldHead: "aaa", BackupTag: "backup/aaa"})
+	data := RewriteOutcomeData(&git.RewriteOutcome{Ref: "HEAD", OldHead: "aaa", BackupRef: "refs/backup/aaa"})
 	if _, ok := data["new_head"]; ok {
 		t.Error("new_head present despite empty NewHead")
 	}
 	if _, ok := data["push_cmd"]; ok {
 		t.Error("push_cmd present despite empty PushCmd")
 	}
-	if data["ref"] != "HEAD" || data["old_head"] != "aaa" || data["backup_tag"] != "backup/aaa" {
+	if data["ref"] != "HEAD" || data["old_head"] != "aaa" || data["backup_ref"] != "refs/backup/aaa" {
 		t.Errorf("required fields missing/wrong: %+v", data)
 	}
 }
 
 func TestRewriteOutcomeData_IncludesPopulatedOptionalFields(t *testing.T) {
 	data := RewriteOutcomeData(&git.RewriteOutcome{
-		Ref: "HEAD", OldHead: "aaa", NewHead: "bbb", BackupTag: "backup/aaa",
+		Ref: "HEAD", OldHead: "aaa", NewHead: "bbb", BackupRef: "refs/backup/aaa",
 		PushCmd: []string{"git", "push", "--force-with-lease", "origin", "HEAD"},
 	})
 	if data["new_head"] != "bbb" {

@@ -67,7 +67,7 @@ func RewriteOutcomeData(o *git.RewriteOutcome) map[string]any {
 	data := map[string]any{
 		"ref":        o.Ref,
 		"old_head":   o.OldHead,
-		"backup_tag": o.BackupTag,
+		"backup_ref": o.BackupRef,
 		"dry_run":    o.DryRun,
 	}
 	if o.NewHead != "" {

@@ -250,8 +250,8 @@ func TestMerge_UnsignedSource_IsResignedBeforeLanding(t *testing.T) {
 	if record["action"] != "resigned" {
 		t.Fatalf("gate action=%v, want resigned: %+v", record["action"], record)
 	}
-	if record["backup_tag"] == "" || record["backup_tag"] == nil {
-		t.Fatalf("a rewrite reported no backup tag: %+v", record)
+	if record["backup_ref"] == "" || record["backup_ref"] == nil {
+		t.Fatalf("a rewrite reported no backup ref: %+v", record)
 	}
 	if got := runGit(t, dir, "rev-parse", "feature"); got == unsignedTip {
 		t.Fatalf("feature still points at the unsigned commit %s", got)
@@ -317,7 +317,7 @@ func TestMerge_ConflictAfterRewrite_CarriesTheRewrittenSourceList(t *testing.T) 
 	if entry["source"] != "feature" {
 		t.Fatalf("rewritten entry = %+v, want source %q", entry, "feature")
 	}
-	for _, key := range []string{"old_head", "new_head", "backup_tag"} {
+	for _, key := range []string{"old_head", "new_head", "backup_ref"} {
 		if v, ok := entry[key]; !ok || v == "" || v == nil {
 			t.Fatalf("rewritten entry missing %s: %+v", key, entry)
 		}
@@ -470,7 +470,7 @@ func TestMerge_OctopusLaterSourceRefusal_ReportsEarlierRewrite(t *testing.T) {
 		t.Fatalf("refusal does not report the one earlier rewrite: %+v", context)
 	}
 	entry, _ := rewritten[0].(map[string]any)
-	if entry["source"] != "alpha" || entry["backup_tag"] == "" {
+	if entry["source"] != "alpha" || entry["backup_ref"] == "" {
 		t.Fatalf("rewrite report is incomplete: %+v", entry)
 	}
 	if got := runGit(t, dir, "rev-parse", "HEAD"); got != head {
@@ -503,7 +503,7 @@ func TestMerge_OctopusUnrelatedLaterSource_ReportsEarlierRewrite(t *testing.T) {
 	if len(rewritten) != 1 {
 		t.Fatalf("refusal does not report the one earlier rewrite: %+v", context)
 	}
-	if entry, _ := rewritten[0].(map[string]any); entry["source"] != "alpha" || entry["backup_tag"] == "" {
+	if entry, _ := rewritten[0].(map[string]any); entry["source"] != "alpha" || entry["backup_ref"] == "" {
 		t.Fatalf("rewrite report is incomplete: %+v", rewritten[0])
 	}
 	if got := runGit(t, dir, "rev-parse", "HEAD"); got != head {
@@ -535,8 +535,8 @@ func TestMerge_AlreadySignedSource_IsSkippedWithoutRewriting(t *testing.T) {
 	if got := runGit(t, dir, "rev-parse", "feature"); got != tip {
 		t.Fatalf("a signed branch was rewritten anyway: feature=%s want %s", got, tip)
 	}
-	if tags := runGit(t, dir, "tag", "--list"); tags != "" {
-		t.Fatalf("a skipped range still left a backup tag: %q", tags)
+	if refs := runGit(t, dir, "for-each-ref", "refs/backup/"); refs != "" {
+		t.Fatalf("a skipped range still left a backup ref: %q", refs)
 	}
 }
 
@@ -836,7 +836,7 @@ func TestMerge_KeylessFastForwardableAlreadyVerifying_Lands(t *testing.T) {
 // from inside its own task worktree would call this by accident. "other"
 // precedes the offending source in the argument list, so a regression that
 // let the gate start on earlier sources before this check would show up as a
-// backup tag or a moved "other" tip.
+// backup ref or a moved "other" tip.
 func TestMerge_SelfTargetInWorktree_RefusesBeforeGate(t *testing.T) {
 	bin := buildCLI(t)
 	dir := signingRepo(t)
@@ -872,8 +872,8 @@ func TestMerge_SelfTargetInWorktree_RefusesBeforeGate(t *testing.T) {
 	if got := runGit(t, dir, "rev-parse", "other"); got != otherTip {
 		t.Fatalf("the other named source moved despite the refusal: got %s want %s", got, otherTip)
 	}
-	if tags := runGit(t, dir, "tag", "--list"); tags != "" {
-		t.Fatalf("a refusal before the gate still left a backup tag: %q", tags)
+	if refs := runGit(t, dir, "for-each-ref", "refs/backup/"); refs != "" {
+		t.Fatalf("a refusal before the gate still left a backup ref: %q", refs)
 	}
 }
 

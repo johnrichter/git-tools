@@ -21,7 +21,7 @@ func branchWithCommit(t *testing.T, dir, branch string) string {
 	return tip
 }
 
-func TestBranchDelete_MergedBranch_Succeeds_BackupTagPresent(t *testing.T) {
+func TestBranchDelete_MergedBranch_Succeeds_BackupRefPresent(t *testing.T) {
 	bin := buildCLI(t)
 	dir := initRepo(t)
 	head := runGit(t, dir, "rev-parse", "HEAD")
@@ -31,8 +31,8 @@ func TestBranchDelete_MergedBranch_Succeeds_BackupTagPresent(t *testing.T) {
 	if r.Status != "success" || exit != 0 {
 		t.Fatalf("status=%s exit=%d, want success/0: %+v", r.Status, exit, r)
 	}
-	if r.Data["backup_tag"] == nil || r.Data["backup_tag"] == "" {
-		t.Fatalf("success result carries no backup_tag: %+v", r.Data)
+	if r.Data["backup_ref"] == nil || r.Data["backup_ref"] == "" {
+		t.Fatalf("success result carries no backup_ref: %+v", r.Data)
 	}
 	if err := runGitErr(t, dir, "show-ref", "--verify", "refs/heads/feature"); err == nil {
 		t.Fatal("branch still exists after a successful delete")

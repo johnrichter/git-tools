@@ -37,3 +37,10 @@ require (
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
 	golang.org/x/sys v0.37.0 // indirect
 )
+
+// TEMPORARY: pins go/git to the not-yet-merged chore/d1-backup-ref-migration
+// worktree so git-tools can build and test against the BackupRef rename and
+// the LED-033 reachability fix before that branch has a real released
+// version. Remove this replace and restore a real go/git version pin once
+// the operator approves the ai-shared-lib merge and a new tag is cut.
+replace github.com/johnrichter/claude-shared-tooling/go/git => /home/bits/Development/workspaces/psa-platform/ai-shared-lib/.claude/worktrees/d1-backup-ref-migration/go/git

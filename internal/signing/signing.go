@@ -26,7 +26,7 @@ const (
 // a message, triage advice and a context map. The rewritten list names the
 // sources already re-signed before this refusal — an octopus merge gates its
 // sources in turn, so a late refusal can follow earlier rewrites, reported
-// here with their backup tags rather than unwound.
+// here with their backup refs rather than unwound.
 type Refusal struct {
 	code      string
 	message   string
@@ -178,13 +178,13 @@ func Gate(ctx context.Context, repo *git.Repo, target string, sources []string, 
 		if err != nil {
 			return nil, refuse(source, "precondition_unmet.git.signing_gate_failed",
 				fmt.Sprintf("re-signing %s..%s failed: %v", base, source, err),
-				clikit.Manual("nothing was merged; recover any listed rewrite from its backup tag if the rewrite is unwanted, then re-run"))
+				clikit.Manual("nothing was merged; recover any listed rewrite from its backup ref if the rewrite is unwanted, then re-run"))
 		}
 		record["action"] = ActionResigned
 		record["new_head"] = applied.NewHead
-		record["backup_tag"] = applied.BackupTag
+		record["backup_ref"] = applied.BackupRef
 		gated = append(gated, record)
-		rewritten = append(rewritten, map[string]any{"source": source, "old_head": applied.OldHead, "new_head": applied.NewHead, "backup_tag": applied.BackupTag})
+		rewritten = append(rewritten, map[string]any{"source": source, "old_head": applied.OldHead, "new_head": applied.NewHead, "backup_ref": applied.BackupRef})
 	}
 	return gated, nil
 }

@@ -156,7 +156,7 @@ func TestRefusal_Context(t *testing.T) {
 	if !reflect.DeepEqual(bare, map[string]any{"source": "feature"}) {
 		t.Errorf("context without rewrites = %+v, want only the source", bare)
 	}
-	rewrites := []map[string]any{{"source": "alpha", "backup_tag": "backup/alpha"}}
+	rewrites := []map[string]any{{"source": "alpha", "backup_ref": "refs/backup/alpha"}}
 	withRewrites := (&Refusal{source: "beta", rewritten: rewrites}).Context()
 	if !reflect.DeepEqual(withRewrites, map[string]any{"source": "beta", "rewritten": rewrites}) {
 		t.Errorf("context with rewrites = %+v, want source and rewritten", withRewrites)

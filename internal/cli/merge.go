@@ -294,7 +294,7 @@ func allEmptyRange(gated []map[string]any) bool {
 
 // rewrittenSources extracts, from the gate's per-source report, the entries
 // the gate actually re-signed — in the same vocabulary (source, old_head,
-// new_head, backup_tag) signing.Refusal's own rewritten context uses, so an
+// new_head, backup_ref) signing.Refusal's own rewritten context uses, so an
 // operator sees one shape whether the gate stopped the merge or the merge
 // itself aborted afterward. It returns nil when nothing was rewritten, so a
 // caller with no rewrite to report omits the key rather than emitting an
@@ -309,7 +309,7 @@ func rewrittenSources(gated []map[string]any) []map[string]any {
 			"source":     record["source"],
 			"old_head":   record["old_head"],
 			"new_head":   record["new_head"],
-			"backup_tag": record["backup_tag"],
+			"backup_ref": record["backup_ref"],
 		})
 	}
 	return rewritten
