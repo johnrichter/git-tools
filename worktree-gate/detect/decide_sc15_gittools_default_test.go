@@ -8,9 +8,10 @@ import (
 
 // TestClassifyPiece_GitToolsAlwaysWritesByDefault pins the classifier-bypass
 // fix: any command whose first word names the provisioned CLI, whatever verb
-// follows, classifies write -- not just the shapes verbs.json happens to
-// know about. No lookup table separates a read set from a write set here;
-// the default is unconditional.
+// follows, classifies write. verbs.json carries no git-tools pattern at all,
+// so before this default every one of these fell to ClassUncertain. No lookup
+// table separates a read set from a write set here; the default is
+// unconditional.
 func TestClassifyPiece_GitToolsAlwaysWritesByDefault(t *testing.T) {
 	v := testVerbs(t)
 	commands := []string{
@@ -93,6 +94,49 @@ func TestDecide_Bash_GitToolsBypass_MergeRepoRetargetFromWorktree_Denied(t *test
 	}
 	if !strings.Contains(d.Reason, "/other") {
 		t.Errorf("denial %q does not name the retargeted primary checkout", d.Reason)
+	}
+}
+
+// TestDecide_Bash_GitToolsDestinations_FlagOrderCannotHideATarget pins the
+// other half of the same bypass: SC20 only sees what gitToolsDestinations
+// enumerates, so a flag placed ahead of the verb word or between the verb and
+// its path must not shift that path out of view. Every spelling below names a
+// path in ANOTHER repository's primary checkout and is run from a sanctioned
+// worktree -- the cwd leg allows it, leaving the named-path rule as the only
+// thing standing between the call and that checkout.
+func TestDecide_Bash_GitToolsDestinations_FlagOrderCannotHideATarget(t *testing.T) {
+	const bin = "/plugin-data/bin/git-tools"
+	const content = "PROVISIONED-CLI-BYTES"
+	digest := hex.EncodeToString(sha256Sum(content))
+	v := testVerbs(t)
+
+	commands := []string{
+		"git-tools worktree add /other/x ref",                    // no flag: the baseline
+		"git-tools --strict worktree add /other/x ref",           // root bool flag before the verb
+		"git-tools --config /tmp/c.yaml worktree add /other/x r", // root value flag before the verb
+		"git-tools --config=/tmp/c.yaml worktree add /other/x r", // its =-joined spelling
+		"git-tools worktree add --branch b /other/x ref",         // the verb's own value flag
+		"git-tools worktree add --force /other/x ref",            // the verb's own bool flag
+		"git-tools worktree remove /other/x",
+		"git-tools --strict worktree remove /other/x",
+		"git-tools worktree remove --landing-target main /other/x",
+	}
+	for _, cmd := range commands {
+		fs := newFakeFS().
+			file("/repo/wt/.git", "gitdir: /repo/.git/worktrees/wt\n").
+			dir("/other/.git").
+			file(bin, content)
+		d := Decide(fs.lstat, fs.readFile, nil, v, nil, Input{
+			ToolName: "Bash", CWD: "/repo/wt", Command: cmd,
+			ProvisionedBinPath: bin, ProvisionedBinDigest: digest,
+		})
+		if !d.Deny {
+			t.Errorf("Decide(cmd=%q) from a worktree was ALLOWED; it names %q in another repository's primary checkout", cmd, "/other/x")
+			continue
+		}
+		if !strings.Contains(d.Reason, "/other/x") {
+			t.Errorf("denial of %q does not name the target /other/x: %s", cmd, d.Reason)
+		}
 	}
 }
 

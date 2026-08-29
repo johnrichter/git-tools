@@ -268,6 +268,14 @@ func scanBash(lstat LstatFunc, readFile ReadFileFunc, gitIgnored GitIgnoredFunc,
 				// would otherwise fail closed -- as ClassUncertain, or, for the
 				// provisioned CLI's own basename, as classifyPiece's
 				// unconditional git-tools-is-a-write default -- reads instead.
+				// The gate is `pc != ClassRead`, not `pc == ClassUncertain`,
+				// because that default means a git-tools piece never arrives
+				// uncertain any more. Widening it grants nothing on its own:
+				// sc15ReadAllowed re-verifies the exact provisioned path and
+				// the pinned digest itself, and only then applies its two-verb
+				// policy, so which classes reach it changes reachability, never
+				// trust. Do not narrow it back to a class test without
+				// restoring a path git-tools can take to ClassUncertain.
 				// sc15Identity itself already refuses a piece carrying a
 				// file-opening redirect or here-document, so
 				// `worktree list > <primary>/f` is still caught by the class
@@ -550,6 +558,12 @@ func gitDestinations(args []string) []string {
 // delete) writes its own working directory instead, governed by the cwd leg
 // the same way git's own commit/add/reset are -- it names no destination
 // here, so the verb word itself is never mistaken for one.
+//
+// The verb and its operand are found by skipping options, never by position:
+// cobra accepts a persistent flag ahead of the verb word
+// (`--strict worktree add <primary>/x ref`) and the verb's own option between
+// it and its path (`worktree add --branch b <primary>/x ref`), so anchoring
+// on args[0] would let a single added flag hide the destination from SC20.
 func gitToolsDestinations(args []string) []string {
 	var out []string
 	if v, ok := flagValue(args, "--repo"); ok {
@@ -558,10 +572,58 @@ func gitToolsDestinations(args []string) []string {
 	if v, ok := flagValue(args, "--config"); ok {
 		out = append(out, v)
 	}
-	if len(args) >= 2 && args[0] == "worktree" && (args[1] == "add" || args[1] == "remove") {
-		if ops := operands(args[2:]); len(ops) > 0 {
+	verb := gitToolsOperands(args)
+	if len(verb) >= 2 && verb[0] == "worktree" && (verb[1] == "add" || verb[1] == "remove") {
+		if ops := gitToolsOperands(verb[2:]); len(ops) > 0 {
 			out = append(out, ops[0])
 		}
+	}
+	return out
+}
+
+// gitToolsValueOptions are the CLI's options that consume the FOLLOWING token
+// as their value -- the root command's persistent flags, plus worktree
+// add/remove's own -- so gitToolsOperands can skip the value rather than read
+// a branch name or a remote as the verb word or the path operand behind it.
+// Keep in sync with internal/cli whenever a value-taking flag is added to the
+// root or to either worktree verb: a missed one shifts that verb's path
+// operand out of SC20's view.
+var gitToolsValueOptions = map[string]bool{
+	"--config":           true,
+	"--repo":             true,
+	"--remote":           true,
+	"--privacy-tier":     true,
+	"--max-binary-bytes": true,
+	"--branch":           true,
+	"--landing-target":   true,
+}
+
+// gitToolsOperands drops the options ahead of args' first operand -- their
+// split, glued, and =-joined value forms -- and returns the tokens from that
+// operand on, quote-stripped: the same treatment gitSubcommand gives git's
+// own global options, applied to a CLI whose flags may sit on either side of
+// the verb word.
+func gitToolsOperands(args []string) []string {
+	start := -1
+	for i := 0; i < len(args) && start < 0; i++ {
+		a := args[i]
+		switch {
+		case a == "--":
+			start = i + 1
+		case gitToolsValueOptions[a]:
+			i++ // this option consumes the next token as its value
+		case strings.HasPrefix(a, "-"):
+			// a valueless or =-joined/glued option: one token
+		default:
+			start = i
+		}
+	}
+	if start < 0 {
+		return nil
+	}
+	out := make([]string, 0, len(args)-start)
+	for _, a := range args[start:] {
+		out = append(out, stripQuotes(a))
 	}
 	return out
 }
@@ -914,13 +976,17 @@ func outputRedirectTargets(raw string) []string {
 // reclassification (sc15ReadAllowed) layer their own verb policy behind it.
 func sc15Identity(readFile ReadFileFunc, verifiedPath, expectedDigest string, p piece) (args []string, ok bool) {
 	args, cause := sc15IdentityCause(readFile, verifiedPath, expectedDigest, p)
-	return args, cause == sc15IdentityHolds
+	if cause != sc15IdentityHolds {
+		// Return no args on a failure, whatever sc15IdentityCause salvaged for
+		// a denial message: an allowance caller must never have tokens to apply
+		// its verb policy to unless identity actually held.
+		return nil, false
+	}
+	return args, true
 }
 
-// sc15IdentityCause is sc15Identity's own logic, reworked to also name WHICH
-// check failed -- sc15Identity itself keeps its plain ok-bool signature for
-// its two allowance callers, so only a caller building a caller-facing
-// denial (gitToolsSanctionCause) needs the cause.
+// sc15IdentityFailure names which of sc15Identity's checks failed, so a
+// caller-facing denial can say more than "cannot classify".
 type sc15IdentityFailure int
 
 const (
@@ -932,6 +998,13 @@ const (
 	sc15IdentityOpensAPath
 )
 
+// sc15IdentityCause is sc15Identity's own logic, reworked to also report
+// WHICH check failed -- sc15Identity keeps its plain ok-bool signature for its
+// two allowance callers, so only a caller building a caller-facing denial
+// (gitToolsSanctionCause) needs the cause. Once the leading token has matched
+// the provisioned path it returns the tokens behind it even on a failure, so
+// that denial can name the verb; a caller acting on the args must gate on the
+// cause, as sc15Identity does.
 func sc15IdentityCause(readFile ReadFileFunc, verifiedPath, expectedDigest string, p piece) (args []string, cause sc15IdentityFailure) {
 	expected := strings.ToLower(strings.TrimSpace(expectedDigest))
 	if verifiedPath == "" || expected == "" {
