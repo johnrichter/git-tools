@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -59,11 +60,21 @@ merge that will mint a commit of its own — a forbidden fast-forward, an octopu
 of two or more sources, or a single source the target cannot fast-forward to —
 is proven signable first and then merged with signing on, so the minted commit
 is signed regardless of commit.gpgsign. If git cannot sign, the merge refuses
-before touching the target branch rather than landing an unsigned tip.
+before touching the target branch rather than landing an unsigned tip. Once a
+merge commit lands, its own signature is verified before the merge is
+reported as success — a signature that fails that check is reported as a
+caveat naming the merge unsigned, never silently as success.
+
+A real merge's result reports commits_landed — the commits, via rev-list,
+newly reachable from the resulting head — so a caller never recomputes it.
+--push, opted in like --cleanup, publishes the target branch to the
+sanctioned remote once the merge lands; the result's published field states
+plainly whether a publish happened, true only when --push was given and a
+real merge landed.
 
 Exit codes:
   0  success              the sources merged (with any re-signing reported)
-  10 caveats              the merge landed, but an opted-in cleanup did not complete
+  10 caveats              the merge landed, but an opted-in cleanup or publish did not complete, or the minted commit's signature failed to verify
   20 gate_negative        every source was already in the target, so nothing landed
   30 precondition_unmet   a content guardrail flagged a file, or signing could not be satisfied; nothing was merged
   40 not_found            --repo is not a git working tree
@@ -99,6 +110,7 @@ $PATH, does not satisfy it, and is denied from a primary checkout.`,
 			ffMode, _ := cmd.Flags().GetString("fast-forward")
 			dryRun, _ := cmd.Flags().GetBool("dry-run")
 			cleanup, _ := cmd.Flags().GetBool("cleanup")
+			push, _ := cmd.Flags().GetBool("push")
 
 			ff, err := parseFastForward(ffMode)
 			if err != nil {
@@ -227,6 +239,15 @@ $PATH, does not satisfy it, and is denied from a primary checkout.`,
 				}
 			}
 
+			// The target's pre-merge tip, captured immediately before the merge
+			// runs (target is checked out and not detached, settled above), so
+			// the count below reports exactly what this merge landed and
+			// nothing an earlier step already moved.
+			oldHead, err := resolveCommit(cmd.Context(), repo.Dir, "HEAD")
+			if err != nil {
+				return finishErr(cmd, map[string]any{dataKeyRepo: repoPath, dataKeyTarget: target}, "internal.git.head_check_failed", "resolve HEAD before merging", err)
+			}
+
 			result, err := repo.Merge(cmd.Context(), args, git.MergeOptions{Message: message, FastForward: ff, DryRun: dryRun, Sign: sign})
 			if err != nil {
 				conflictData := map[string]any{dataKeyRepo: repoPath, dataKeyTarget: target}
@@ -241,6 +262,47 @@ $PATH, does not satisfy it, and is denied from a primary checkout.`,
 				data["would_merge"] = result.WouldMerge
 			} else {
 				data["new_head"] = result.NewHead
+				commits, countErr := commitsLanded(cmd.Context(), repo.Dir, oldHead, result.NewHead)
+				if countErr != nil {
+					return finishErr(cmd, data, "internal.git.commit_count_failed", "count the commits this merge landed", countErr)
+				}
+				data["commits_landed"] = commits
+			}
+
+			// The gate above re-signs every incoming range, and the probe before
+			// the merge proves signing is possible before -S is passed — but
+			// neither confirms the minted commit's own signature actually
+			// verifies once it exists. A merge that mints a signed commit checks
+			// that here, rather than trusting `git merge -S`'s exit code alone: a
+			// signature that fails to verify is reported as a caveat naming the
+			// merge unsigned, never silently as success, and nothing here
+			// unwinds the merge that already landed.
+			if sign {
+				state, verifyErr := headSigState(cmd.Context(), repo.Dir, result.NewHead)
+				if verifyErr != nil {
+					return finishErr(cmd, data, "internal.git.merge_commit_verify_failed", "verify the merge commit's signature", verifyErr)
+				}
+				if state != "G" && state != "U" {
+					return finishCaveat(cmd, data, "caveats.git.merge_commit_unsigned",
+						fmt.Sprintf("the merge landed at %s, but its signature does not verify (state %q); treat the merge as unsigned", result.NewHead, state),
+						clikit.Manual("investigate the signing setup, then re-sign or redo the merge; the merge that already landed is not unwound"),
+						map[string]any{"new_head": result.NewHead, "sig_state": state})
+				}
+			}
+
+			// FB24: whether this invocation also published the target is
+			// reported plainly rather than left for a caller to infer from
+			// other fields — false unless --push was given and a real merge
+			// landed.
+			data["published"] = false
+			if push && !result.DryRun {
+				if pubErr := publishTarget(cmd.Context(), cfg, repo.Dir, target); pubErr != nil {
+					return finishCaveat(cmd, data, "caveats.git.merge_publish_failed",
+						fmt.Sprintf("the merge landed, but publishing %s to %s failed: %s", target, cfg.Remote, sanitizeMessage(pubErr.Error())),
+						clikit.Manual(fmt.Sprintf("push %s to %s manually", target, cfg.Remote)),
+						map[string]any{"target": target, "remote": cfg.Remote})
+				}
+				data["published"] = true
 			}
 
 			// Cleanup runs only on a real, successful merge, and only when opted
@@ -274,6 +336,7 @@ $PATH, does not satisfy it, and is denied from a primary checkout.`,
 	cmd.Flags().String("fast-forward", "allow", "fast-forward behavior: allow, never, or only")
 	cmd.Flags().Bool("dry-run", false, "merge into the index and report clean-mergeability, always aborting afterward")
 	cmd.Flags().Bool("cleanup", false, "after a successful merge, remove each merged branch's worktree once its work has safely landed")
+	cmd.Flags().Bool("push", false, "after a successful merge, publish the target branch to the sanctioned remote")
 	return cmd
 }
 
@@ -404,6 +467,69 @@ func resolveCommit(ctx context.Context, dir, ref string) (string, error) {
 		return "", &git.CommandError{Args: []string{"rev-parse", "--verify", ref}, ExitCode: res.ExitCode, Stderr: strings.TrimSpace(string(res.Stderr))}
 	}
 	return strings.TrimSpace(string(res.Stdout)), nil
+}
+
+// commitsLanded reports the count of commits reachable from newHead but not
+// from oldHead — the commits this merge actually landed, whether carried in
+// verbatim (a fast-forward) or newly minted (the merge commit itself, on an
+// octopus or a forced merge commit). The caller counts once here rather than
+// leaving every caller of the result to recompute it from new_head/old ref
+// state it may no longer have.
+func commitsLanded(ctx context.Context, dir, oldHead, newHead string) (int, error) {
+	args := []string{"rev-list", "--count", oldHead + ".." + newHead}
+	res, err := gitexec.RunGit(ctx, dir, args...)
+	if err != nil {
+		return 0, err
+	}
+	if res.ExitCode != 0 {
+		return 0, &git.CommandError{Args: args, ExitCode: res.ExitCode, Stderr: strings.TrimSpace(string(res.Stderr))}
+	}
+	n, convErr := strconv.Atoi(strings.TrimSpace(string(res.Stdout)))
+	if convErr != nil {
+		return 0, fmt.Errorf("parse rev-list count for %s..%s: %w", oldHead, newHead, convErr)
+	}
+	return n, nil
+}
+
+// headSigState reports git's own signature-status code (%G?) for a single
+// commit — the same vocabulary the signing gate reads over a range, read
+// here for just the minted merge commit.
+func headSigState(ctx context.Context, dir, ref string) (string, error) {
+	args := []string{"log", "-1", "--format=%G?", ref}
+	res, err := gitexec.RunGit(ctx, dir, args...)
+	if err != nil {
+		return "", err
+	}
+	if res.ExitCode != 0 {
+		return "", &git.CommandError{Args: args, ExitCode: res.ExitCode, Stderr: strings.TrimSpace(string(res.Stderr))}
+	}
+	return strings.TrimSpace(string(res.Stdout)), nil
+}
+
+// publishTarget pushes target's current tip to cfg.Remote once a real merge
+// has landed, comparing local and remote first so a remote already at
+// target's tip is treated as published without an unnecessary push.
+func publishTarget(ctx context.Context, cfg *Config, dir, target string) error {
+	fullRef := "refs/heads/" + target
+	localSHA, err := localRefSHA(ctx, dir, fullRef)
+	if err != nil {
+		return fmt.Errorf("resolve %s: %w", fullRef, err)
+	}
+	remoteSHA, hadRemote, err := remoteRefSHA(ctx, dir, cfg.Remote, fullRef)
+	if err != nil {
+		return fmt.Errorf("query %s on %s: %w", fullRef, cfg.Remote, err)
+	}
+	if hadRemote && remoteSHA == localSHA {
+		return nil
+	}
+	res, err := gitexec.RunGit(ctx, dir, "push", cfg.Remote, fullRef+":"+fullRef)
+	if err != nil {
+		return fmt.Errorf("push %s to %s: %w", fullRef, cfg.Remote, err)
+	}
+	if res.ExitCode != 0 {
+		return fmt.Errorf("%s", strings.TrimSpace(string(res.Stderr)))
+	}
+	return nil
 }
 
 // parseFastForward maps the --fast-forward flag's string value onto

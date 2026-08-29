@@ -1219,3 +1219,151 @@ func TestMerge_DataKeys_ExemptBoundaries_AreAssertedNotAssumed(t *testing.T) {
 		t.Fatalf("requireRepo's own refusal carries a non-empty data map: %+v", r.Data)
 	}
 }
+
+// The commit-count fix: a real merge's result reports commits_landed, via
+// rev-list against the pre-merge head, rather than leaving a caller to
+// recompute it. An octopus of two two-commit sources into an unmoved main
+// mints one merge commit, so the correct count is five -- two per source
+// plus the merge commit itself -- not four, which is what a caller counting
+// only the sources' own commits would land on.
+func TestMerge_CommitsLanded_OctopusReportsSourcesPlusMergeCommit(t *testing.T) {
+	bin := buildCLI(t)
+	dir := signingRepo(t)
+	for _, branch := range []string{"alpha", "beta"} {
+		runGit(t, dir, "checkout", "-q", "-b", branch, "main")
+		commitFile(t, dir, branch+"-one.txt", "one\n", branch+" commit one")
+		commitFile(t, dir, branch+"-two.txt", "two\n", branch+" commit two")
+		runGit(t, dir, "checkout", "-q", "main")
+	}
+
+	r, exit := runCLI(t, bin, "--repo", dir, "merge", "alpha", "beta", "--message", "merge alpha beta")
+	if r.Status != "success" || exit != 0 {
+		t.Fatalf("status=%s exit=%d, want success/0: %+v", r.Status, exit, r)
+	}
+	if got, want := r.Data["commits_landed"], float64(5); got != want {
+		t.Fatalf("data[commits_landed] = %v, want %v: %+v", got, want, r.Data)
+	}
+}
+
+// The fast-forward case of the same fix: three commits carried straight in,
+// with no merge commit minted, still report the exact count landed.
+func TestMerge_CommitsLanded_FastForwardReportsCarriedCommits(t *testing.T) {
+	bin := buildCLI(t)
+	dir := signingRepo(t)
+	runGit(t, dir, "checkout", "-q", "-b", "feature", "main")
+	commitFile(t, dir, "one.txt", "one\n", "feature commit one")
+	commitFile(t, dir, "two.txt", "two\n", "feature commit two")
+	commitFile(t, dir, "three.txt", "three\n", "feature commit three")
+	runGit(t, dir, "checkout", "-q", "main")
+
+	r, exit := runCLI(t, bin, "--repo", dir, "merge", "feature")
+	if r.Status != "success" || exit != 0 {
+		t.Fatalf("status=%s exit=%d, want success/0: %+v", r.Status, exit, r)
+	}
+	if got, want := r.Data["commits_landed"], float64(3); got != want {
+		t.Fatalf("data[commits_landed] = %v, want %v: %+v", got, want, r.Data)
+	}
+}
+
+// LED-109 permanent regression test: global signing off (commit.gpgsign
+// unset, not merely false) but a resolvable signing key, and a genuine
+// non-fast-forward merge -- main and feature have each advanced
+// independently, so nothing but a real merge commit can land it, unlike
+// SC-B1's forced --fast-forward=never case. The resulting head still
+// verifies signed: merge's own -S, not commit.gpgsign, is what signs it.
+func TestMerge_LED109_GlobalSigningOff_RealNonFastForward_VerifiesSigned(t *testing.T) {
+	bin := buildCLI(t)
+	dir := signingRepo(t)
+	signedBranch(t, dir, "feature")
+	commitFile(t, dir, "main.txt", "main\n", "diverge main")
+	runGit(t, dir, "config", "--unset", "commit.gpgsign")
+
+	r, exit := runCLI(t, bin, "--repo", dir, "merge", "feature", "--message", "merge feature")
+	if r.Status != "success" || exit != 0 {
+		t.Fatalf("status=%s exit=%d, want success/0: %+v", r.Status, exit, r)
+	}
+	newHead, _ := r.Data["new_head"].(string)
+	if newHead == "" {
+		t.Fatalf("result carries no new_head: %+v", r.Data)
+	}
+	if parents := runGit(t, dir, "rev-list", "--parents", "-1", newHead); len(strings.Fields(parents)) != 3 {
+		t.Fatalf("landed head is not a genuine two-parent merge commit: %q", parents)
+	}
+	runGit(t, dir, "verify-commit", newHead)
+	if state := runGit(t, dir, "log", "-1", "--format=%G?", newHead); state != "G" && state != "U" {
+		t.Fatalf("merge commit signature state=%q, want G or U", state)
+	}
+}
+
+// FB24: merge's result names whether it also published the target, so a
+// caller never infers it from the presence/absence of other fields. Without
+// --push, a merge that lands reports published=false and the remote is
+// untouched.
+func TestMerge_Publish_WithoutPushFlag_ReportsPublishedFalse(t *testing.T) {
+	bin := buildCLI(t)
+	dir := signingRepo(t)
+	bare := newBareRemote(t, dir)
+	before := runGit(t, bare, "rev-parse", "refs/heads/main")
+	runGit(t, dir, "branch", "feature")
+	runGit(t, dir, "checkout", "-q", "feature")
+	commitFile(t, dir, "feature.txt", "feature\n", "feature work")
+	runGit(t, dir, "checkout", "-q", "main")
+
+	r, exit := runCLI(t, bin, "--repo", dir, "merge", "feature")
+	if r.Status != "success" || exit != 0 {
+		t.Fatalf("status=%s exit=%d, want success/0: %+v", r.Status, exit, r)
+	}
+	if r.Data["published"] != false {
+		t.Fatalf("data[published] = %v, want false: %+v", r.Data["published"], r.Data)
+	}
+	if after := runGit(t, bare, "rev-parse", "refs/heads/main"); after != before {
+		t.Fatalf("main published to the remote despite no --push: %s -> %s", before, after)
+	}
+}
+
+// The companion case: --push publishes the target once the merge lands, and
+// the result reports published=true.
+func TestMerge_Publish_WithPushFlag_MergesAndPublishes(t *testing.T) {
+	bin := buildCLI(t)
+	dir := signingRepo(t)
+	bare := newBareRemote(t, dir)
+	runGit(t, dir, "branch", "feature")
+	runGit(t, dir, "checkout", "-q", "feature")
+	tip := commitFile(t, dir, "feature.txt", "feature\n", "feature work")
+	runGit(t, dir, "checkout", "-q", "main")
+
+	r, exit := runCLI(t, bin, "--repo", dir, "merge", "feature", "--push")
+	if r.Status != "success" || exit != 0 {
+		t.Fatalf("status=%s exit=%d, want success/0: %+v", r.Status, exit, r)
+	}
+	if r.Data["published"] != true {
+		t.Fatalf("data[published] = %v, want true: %+v", r.Data["published"], r.Data)
+	}
+	if got := runGit(t, bare, "rev-parse", "refs/heads/main"); got != tip {
+		t.Fatalf("remote main = %s, want %s (the merged tip, published)", got, tip)
+	}
+}
+
+// --push has no effect on a dry run: nothing lands, so nothing publishes,
+// and published stays false.
+func TestMerge_Publish_DryRunNeverPublishes(t *testing.T) {
+	bin := buildCLI(t)
+	dir := signingRepo(t)
+	bare := newBareRemote(t, dir)
+	before := runGit(t, bare, "rev-parse", "refs/heads/main")
+	runGit(t, dir, "branch", "feature")
+	runGit(t, dir, "checkout", "-q", "feature")
+	commitFile(t, dir, "feature.txt", "feature\n", "feature work")
+	runGit(t, dir, "checkout", "-q", "main")
+
+	r, exit := runCLI(t, bin, "--repo", dir, "merge", "feature", "--push", "--dry-run")
+	if r.Status != "success" || exit != 0 {
+		t.Fatalf("status=%s exit=%d, want success/0: %+v", r.Status, exit, r)
+	}
+	if r.Data["published"] != false {
+		t.Fatalf("data[published] = %v, want false on a dry run: %+v", r.Data["published"], r.Data)
+	}
+	if after := runGit(t, bare, "rev-parse", "refs/heads/main"); after != before {
+		t.Fatalf("a dry run with --push published anyway: %s -> %s", before, after)
+	}
+}
