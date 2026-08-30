@@ -12,6 +12,7 @@ import (
 
 	"github.com/johnrichter/claude-shared-tooling/go/clikit"
 	"github.com/johnrichter/claude-shared-tooling/go/git"
+	"github.com/johnrichter/git-tools/internal/commitmsg"
 	"github.com/johnrichter/git-tools/internal/gitexec"
 	"github.com/johnrichter/git-tools/internal/signing"
 	"github.com/johnrichter/git-tools/internal/worktreeclean"
@@ -72,11 +73,17 @@ sanctioned remote once the merge lands; the result's published field states
 plainly whether a publish happened, true only when --push was given and a
 real merge landed.
 
+An explicit --message is checked against the repository's own configured
+commit-msg hook before anything else runs: merge delegates to that hook
+rather than judging the message itself, so a repository with no hook
+configured sees no check at all, and a rejection there is reported as a
+precondition, before the signing gate does any re-signing work.
+
 Exit codes:
   0  success              the sources merged (with any re-signing reported)
   10 caveats              the merge landed; its signature did not verify, or a publish or cleanup did not complete
   20 gate_negative        every source was already in the target, so nothing landed
-  30 precondition_unmet   a content guardrail flagged a file, or signing could not be satisfied; nothing was merged
+  30 precondition_unmet   a content guardrail flagged a file, the configured commit-msg hook rejected --message, or signing could not be satisfied; nothing was merged
   40 not_found            --repo is not a git working tree
   41 conflict             the merge would conflict; it was aborted
   50 usage                a flag value is not valid
@@ -162,6 +169,26 @@ $PATH, does not satisfy it, and is denied from a primary checkout.`,
 					fmt.Sprintf("%s is a linked worktree, not the repository's primary checkout at %s; merge refuses to land there", linkedPath, primaryPath),
 					clikit.Manual(fmt.Sprintf("run merge from the primary checkout at %s (or point --repo at it) instead of the linked worktree %s; nothing was merged", primaryPath, linkedPath)),
 					map[string]any{"resolved_target": linkedPath, "primary_checkout": primaryPath})
+			}
+
+			// An explicit --message is the one commit message this verb
+			// itself composes -- checked here, ahead of the signing gate and
+			// the scan below, against whatever commit-msg hook the
+			// repository already has configured, so a message a configured
+			// hook would reject never pays for that gate's re-signing work
+			// first. commitmsg.Check delegates to that hook rather than
+			// judging the message itself, and is a no-op when no hook is
+			// configured. An omitted --message leaves git to compose its own
+			// default merge message, which the real "git merge" below still
+			// runs past that same hook natively.
+			if message != "" {
+				refusal, err := commitmsg.Check(cmd.Context(), repo.Dir, message)
+				if err != nil {
+					return finishErr(cmd, map[string]any{dataKeyRepo: repoPath, dataKeyTarget: target}, "internal.git.commit_message_hook_failed", "run the configured commit-msg hook", err)
+				}
+				if refusal != nil {
+					return finishDiagnostic(cmd, map[string]any{dataKeyRepo: repoPath, dataKeyTarget: target}, clikit.NewPreconditionUnmet, refusal.Code(), refusal.Message(), refusal.Advice(), nil)
+				}
 			}
 
 			// The content-guardrail scan is the last read-only precondition
