@@ -10,6 +10,11 @@ import (
 
 func initScratchRepo(t *testing.T) string {
 	t.Helper()
+	// Isolate from the host's global/system git config, for consistency with
+	// every other fixture in this repo -- no commit happens here, so there is
+	// little wall-clock time to win, but this keeps the convention uniform.
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
 	dir := t.TempDir()
 	cmd := exec.Command("git", "init", "-q")
 	cmd.Dir = dir

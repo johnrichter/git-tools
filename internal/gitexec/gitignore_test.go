@@ -150,6 +150,8 @@ func TestIsIgnoredByCommittedGitignore_NotARepositoryIsAnError(t *testing.T) {
 // already surfaces as a real error -- this pins that git refuses first, so a
 // caller-side traversal can never widen into an accidental exemption.
 func TestIsIgnoredByCommittedGitignore_PathTraversalRelPathIsError(t *testing.T) {
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
 	parent := t.TempDir()
 	dir := filepath.Join(parent, "repo")
 	if err := os.Mkdir(dir, 0o755); err != nil {
@@ -330,6 +332,8 @@ func TestIsIgnoredByCommittedGitignore_ColonInCommittedSourcePathFailsClosed(t *
 // -- which the gate reads as "not covered" -- never as a plain absence that
 // could be mistaken for a decided answer.
 func TestIsIgnoredByCommittedGitignore_UnbornHeadIsError(t *testing.T) {
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
 	dir := t.TempDir()
 	runGitOrFatal(t, dir, "init", "-q", "-b", "main")
 	writeFileOrFatal(t, filepath.Join(dir, ".gitignore"), "app.log\n")

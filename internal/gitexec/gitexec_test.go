@@ -18,6 +18,11 @@ import (
 // also the fixture builder.
 func scratchRepo(t *testing.T) string {
 	t.Helper()
+	// Isolate from the host's global/system git config: core.hooksPath would
+	// otherwise run whatever hook the host has configured globally on every
+	// commit below.
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
 	dir := t.TempDir()
 	run := func(args ...string) {
 		cmd := exec.Command("git", args...)

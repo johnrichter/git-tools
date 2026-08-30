@@ -23,6 +23,11 @@ import (
 // the fixture, decide each test.
 func scratchRepo(t *testing.T) string {
 	t.Helper()
+	// Isolate from the host's global/system git config: core.hooksPath would
+	// otherwise run whatever hook the host has configured globally on every
+	// commit below.
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
 	dir := t.TempDir()
 	gitCmd(t, dir, "init", "-q", "-b", "main")
 	gitCmd(t, dir, "config", "user.name", "Test User")
