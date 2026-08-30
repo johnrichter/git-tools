@@ -7,6 +7,7 @@
 package cli_test
 
 import (
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -148,6 +149,73 @@ func TestTagCreate_SignsRegardlessOfForceSignAnnotated(t *testing.T) {
 	}
 	if !strings.Contains(string(out), "Good \"git\" signature") {
 		t.Fatalf("tag v1.4.0 did not carry a verifying signature:\n%s", out)
+	}
+}
+
+// TestTagCreate_NoSigningKey_RefusesBeforeAttemptingToSign proves the
+// precondition check ahead of "git tag -s": with no key resolved, create
+// refuses by name at exit 30 rather than letting "git tag -s" fail and
+// surface as create's one generic internal tag_create_failed code.
+func TestTagCreate_NoSigningKey_RefusesBeforeAttemptingToSign(t *testing.T) {
+	bin := buildCLI(t)
+	dir := signingRepo(t)
+	newBareRemote(t, dir)
+	breakSigningKey(t, dir)
+
+	r, exit := runCLIIn(t, bin, dir, "tag", "create", "1.4.0", "--shape", "vX.Y.Z")
+	if r.Status != "precondition_unmet" || exit != 30 {
+		t.Fatalf("status=%s exit=%d, want precondition_unmet/30: %+v", r.Status, exit, r)
+	}
+	if code, _ := r.Errors[0]["code"].(string); code != "precondition_unmet.git.signing_key_unresolved" {
+		t.Fatalf("refusal code=%q, want precondition_unmet.git.signing_key_unresolved: %+v", code, r.Errors[0])
+	}
+	if tags := localTags(t, dir); tags != "" {
+		t.Fatalf("refused create left a local tag behind: %q", tags)
+	}
+}
+
+// TestTagCreate_FailedPostCreationVerification_RollsBackAndRefuses forces
+// the one failure the up-front signing check cannot catch: signing succeeds
+// (the repository can produce a signature), but the tag's own signature does
+// not verify, because gpg.ssh.allowedSignersFile trusts a different key than
+// the one that actually signed it. "git tag -s" never consults that file, so
+// it succeeds; "git tag -v" then fails, and create must delete the tag it
+// just made and refuse rather than push it.
+func TestTagCreate_FailedPostCreationVerification_RollsBackAndRefuses(t *testing.T) {
+	bin := buildCLI(t)
+	dir := signingRepo(t)
+	bare := newBareRemote(t, dir)
+
+	otherKeyDir := t.TempDir()
+	otherKey := filepath.Join(otherKeyDir, "unrelated-key")
+	if out, err := exec.Command("ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "unrelated", "-f", otherKey).CombinedOutput(); err != nil {
+		t.Fatalf("ssh-keygen: %v\n%s", err, out)
+	}
+	otherPub, err := os.ReadFile(otherKey + ".pub")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mismatchedAllowed := filepath.Join(otherKeyDir, "allowed_signers")
+	if err := os.WriteFile(mismatchedAllowed, []byte(`test@example.com namespaces="git" `+string(otherPub)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, dir, "config", "gpg.ssh.allowedSignersFile", mismatchedAllowed)
+
+	r, exit := runCLIIn(t, bin, dir, "tag", "create", "1.4.0", "--shape", "vX.Y.Z")
+	if r.Status != "internal" || exit != 90 {
+		t.Fatalf("status=%s exit=%d, want internal/90: %+v", r.Status, exit, r)
+	}
+	message, _ := r.Errors[0]["message"].(string)
+	if !strings.Contains(message, "failed its own post-creation signature verification") || !strings.Contains(message, "rolled back") {
+		t.Fatalf("governing error message %q does not describe the verification failure and rollback", message)
+	}
+	if tags := localTags(t, dir); tags != "" {
+		t.Fatalf("a tag that failed verification was not rolled back locally: %q", tags)
+	}
+	if out, err := exec.Command("git", "-C", bare, "tag", "-l").CombinedOutput(); err != nil {
+		t.Fatalf("git tag -l: %v\n%s", err, out)
+	} else if strings.TrimSpace(string(out)) != "" {
+		t.Fatalf("a tag that failed verification reached the remote: %q", out)
 	}
 }
 

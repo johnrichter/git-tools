@@ -8,7 +8,9 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/johnrichter/claude-shared-tooling/go/clikit"
+	"github.com/johnrichter/claude-shared-tooling/go/git"
 	"github.com/johnrichter/git-tools/internal/gitexec"
+	"github.com/johnrichter/git-tools/internal/signing"
 )
 
 // versionPlaceholder is the token a --shape pattern uses to mark where a
@@ -65,6 +67,13 @@ local-existence check, not retried as a push — the clean retry for a push
 that failed after the tag was already made is "git-tools push <tag>", not
 create again.
 
+Signing has two checks of its own, both before anything is pushed. Before
+"git tag -s" runs, create proves git can actually produce a signature here —
+a missing key or unreachable agent is refused by name rather than left to
+surface as git tag -s's own opaque failure. After the tag is made, create
+verifies it with "git tag -v": a tag whose signature does not verify is
+deleted locally on the spot and never reaches the remote.
+
 Like push, create always operates on the invoking process's own working
 directory: --repo/--config would retarget it, so both are refused.
 
@@ -72,13 +81,16 @@ Exit codes:
   0  success              the tag was created and pushed
   30 precondition_unmet   the content-guardrail scan found a marker, an
                            internal identifier, or a secret at the commit
-                           being tagged; nothing was tagged
+                           being tagged, or no key resolved to sign it;
+                           nothing was tagged
   40 not_found            the working directory is not a git working tree
   41 conflict             a local tag by that derived name already exists
   50 usage                <version> or --shape is missing or malformed, or
                            --repo/--config was passed
   60 transient            the remote rejected the push; re-run to retry
-  90 internal             an underlying git command failed unexpectedly`,
+  90 internal             an underlying git command failed unexpectedly, or
+                           the finished tag failed its own signature
+                           verification and was rolled back`,
 		Args: cobra.ExactArgs(1),
 		Example: strings.TrimLeft(`
   git-tools tag create 1.4.0 --shape vX.Y.Z
@@ -137,6 +149,22 @@ Exit codes:
 				return err
 			}
 
+			// create signs unconditionally, so its precondition is checked
+			// here rather than left to fall through to "git tag -s"'s own
+			// failure below, which would otherwise surface as one generic
+			// tag_create_failed no matter the actual cause.
+			available, detail, err := signing.NewProber(&git.Repo{Dir: "."}).Available(ctx)
+			if err != nil {
+				return finishErr(cmd, nil, "internal.git.signing_probe_failed", "test whether git can sign the tag", err)
+			}
+			if !available {
+				return finishDiagnostic(cmd, map[string]any{"tag": tagName}, clikit.NewPreconditionUnmet,
+					"precondition_unmet.git.signing_key_unresolved",
+					fmt.Sprintf("no key resolved for commit signing, so tag %s cannot be signed: %s", tagName, detail),
+					clikit.Manual("configure a signing key (gpg.format plus user.signingkey, or this environment's signing setup) and re-run; nothing was tagged"),
+					map[string]any{"tag": tagName})
+			}
+
 			// -s, not -a: an explicit --annotate on the command line overrides
 			// tag.forceSignAnnotated (git-config(1)), so relying on ambient
 			// config to sign a release tag silently produces an unsigned one.
@@ -148,6 +176,32 @@ Exit codes:
 			if res.ExitCode != 0 {
 				return finishErr(cmd, nil, "internal.git.tag_create_failed", fmt.Sprintf("create tag %s", tagName),
 					fmt.Errorf("%s", strings.TrimSpace(string(res.Stderr))))
+			}
+
+			// Verify the tag just made before anything is pushed: the
+			// precondition check above proves git can produce a signature,
+			// not that the signature this tag actually carries verifies (a
+			// mismatched trust store can pass the former and fail the
+			// latter). Running this ahead of the push below means a failure
+			// here never has to touch the remote — only the local tag.
+			if verify, err := gitexec.RunGit(ctx, ".", "tag", "-v", tagName); err != nil {
+				return finishErr(cmd, nil, "internal.git.tag_verify_failed", fmt.Sprintf("verify tag %s", tagName), err)
+			} else if verify.ExitCode != 0 {
+				verifyDetail := strings.TrimSpace(string(verify.Stderr))
+				del, delErr := gitexec.RunGit(ctx, ".", "tag", "-d", tagName)
+				if delErr != nil || del.ExitCode != 0 {
+					rollbackDetail := ""
+					if delErr != nil {
+						rollbackDetail = delErr.Error()
+					} else {
+						rollbackDetail = strings.TrimSpace(string(del.Stderr))
+					}
+					return finishErr(cmd, nil, "internal.git.tag_signature_unverified", fmt.Sprintf("verify tag %s", tagName),
+						fmt.Errorf("failed its own post-creation signature verification (%s), and the rollback delete also failed (%s); remove it manually with `git tag -d %s`",
+							verifyDetail, rollbackDetail, tagName))
+				}
+				return finishErr(cmd, nil, "internal.git.tag_signature_unverified", fmt.Sprintf("verify tag %s", tagName),
+					fmt.Errorf("failed its own post-creation signature verification and was rolled back: %s", verifyDetail))
 			}
 
 			return pushRef(cmd, cfg, tagName, "tag", "refs/tags/"+tagName)
