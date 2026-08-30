@@ -2,8 +2,10 @@
 
 Scope: the two smaller D6 items left after this session's main D6 fixes
 (LED-023's operand-as-path default, the bare-flag `git --version` fix) already
-shipped in commits `870d4fe` and `38a426a`. No code change resulted from
-either item below; both are precise non-fixes, not oversights.
+shipped in commits `870d4fe` and `38a426a`. Neither item needs a production
+code change: LED-153's remaining half is correct fail-closed behavior, and
+LED-160 turned out to be the same defect `870d4fe` already fixed, now given
+its own regression test.
 
 ## LED-153 — shell-variable redirect target
 
@@ -63,78 +65,94 @@ plugin's binary can avoid.
 
 ## LED-160 — long `--note` text misread as an unresolvable write path
 
-**Status: not reproduced against `git-tools`' own worktree gate, in the
-current revision or any prior one found in this repo's history. The
-ledger's own "Affects" line names `governance-git`, not `git-tools` — if
-this is real, it is very likely a different repo's finding, not this one's.**
+**Status: real, and this repo's own defect — already fixed by commit
+`870d4fe` as a side effect of LED-023. It reproduces exactly, with the
+ticket's own length-dependence, against the immediately preceding revision
+(`b9d99db`), and no longer reproduces at HEAD. No further code fix is
+needed here; the regression is now pinned by a test, and the ledger entry
+should be closed as fixed rather than reassigned to another repo.**
 
 Claimed mechanism (ledger text): a `dat-tools record`/`log-note` call
 carrying a long (~300+ character) free-text `--note` value is denied, with
-the gate reportedly concatenating the note text with the target
-`execution.json` path and reporting that concatenation as an unresolvable
-write target, `ENAMETOOLONG`.
+the gate concatenating the note text with the target `execution.json` path
+and reporting that concatenation as an unresolvable write target,
+`ENAMETOOLONG`.
 
-**Reproduction attempts** (scratch test against `Decide()`, not committed,
-removed after use):
+**Actual mechanism.** The trigger the first reproduction attempt missed is
+that the call must be write-class *before* its operands are read, and a
+`dat-tools` call is not write-class from its command word — it becomes
+write-class from a shell redirect of its own output (`> …`), which sets
+`piece.writesFile` and short-circuits `classifyPiece`. Once write-class,
+the pre-`870d4fe` unmodeled-command default in `namedPaths` judged *every*
+non-flag operand as a candidate write target, so the `--note` value was
+joined onto the cwd (`filepath.Join(cwd, note)`) and `lstat`ed. Past
+`NAME_MAX` (255 bytes) a real filesystem answers `ENAMETOOLONG`, which
+`namedPathDenial` reads as an indeterminate target and denies fail-closed.
+This is the same root cause as LED-023 and LED-153, exactly as the ledger's
+own "Related family: LED-023" line suggests.
 
-- `dat-tools log-note /repo/wt/execution.json --note "<~400 chars>"` from a
-  worktree cwd: **allowed**, no denial, any note length.
-- `dat-tools record /repo/wt/execution.json --note "<~400 chars>"` from a
-  worktree cwd: **allowed**, same.
-- The same command from a primary-checkout cwd: **denied**, but with the
-  generic "cannot classify ... so the gate cannot rule out a write" message
-  — the same denial a one-character note would get. No `ENAMETOOLONG`, no
-  concatenation, and the denial has nothing to do with note length.
+The synthetic-filesystem probe used in the first attempt could not have
+found this: a fake `lstat` answers `ENOENT` for the joined path however
+long it is, `FindRepoRoot` treats that as "keep climbing", the walk-up
+reaches the worktree's own `.git`, and the target classifies `KindWorktree`
+and is allowed. Only a real errno separates the two behaviors. A
+length-dependent denial whose signature *is* an OS errno cannot be ruled
+out on a filesystem that has no length limit.
 
-**Why the claimed mechanism cannot occur here.** `dat-tools` is not
-`git`, not `git-tools`, and not in `verbs.json`'s `write_prefixes`/
-`write_contains`, so `classifyPiece` (`worktree-gate/detect/bash.go:488-537`)
-always falls through to `ClassUncertain` — checked against every commit
-touching that function's fallback, back to the very first commit
-(`95c6c68`); the default has always been `ClassUncertain`, never `ClassWrite`.
-`namedPathDenial` (SC20), the only code path that resolves an argument
-against a filesystem path (`filepath.Join` plus `lstat`, where a real OS
-`ENAMETOOLONG` could actually surface), only ever runs against a piece
-already classified `ClassWrite` (`decide.go:408-419`, called from
-`scanBash`). An `Uncertain`-classified piece never reaches it. So there is
-no path inside this gate's own logic, in any revision checked, where a
-`--note` value's length or content could reach the code that does static
-path resolution.
+**Reproduction, end-to-end through the real binary** (built from each
+revision, run against a real primary-plus-worktree topology, cwd inside the
+worktree, command `dat-tools log-note <wt>/state.json --note "<n chars>" >
+<wt>/out.txt`):
 
-I also checked `governance-git`'s own `pretooluse-worktree-gate.sh`
-wrapper directly (`marketplace/plugins/governance-git/hooks/
-pretooluse-worktree-gate.sh`) — it is a pure checksum-verification exec
-wrapper, by its own comment "This wrapper never inspects the payload," and
-delegates all classification to this same Go binary. It carries no
-independent fallback classifier of its own that could produce this
-mechanism either.
+| note length | `b9d99db` (pre-fix) | HEAD (`33f6e9e`) |
+| --- | --- | --- |
+| 100 / 150 / 200 / 253 / 254 | allow | allow |
+| 300 | **deny** — `lstat <wt>/<note text>/.git: file name too long` | allow |
+| 353 | **deny** — same | allow |
 
-**Conclusion.** Cannot reproduce, and cannot locate a code path in this
-repo capable of producing the claimed symptom. The ledger's own "Affects"
-line names `governance-git`, a different repository/plugin surface, so if
-the observation is real, tracking it further belongs there, or against
-whatever tool actually issued the `dat-tools` call (`dat-tools` itself, a
-different plugin's binary, not `git-tools`'s). No fix applied here; this is
-recorded as an honest non-reproduction, not a fabricated fix.
+That is the ticket verbatim: identical call, denied above roughly 255
+characters, allowed below, with the note text appearing inside the reported
+write-target path.
+
+**Why nothing else in the chain is implicated.** `dat-tools` is absent from
+`verbs.json` (no `dat` substring anywhere in the file), so `classifyPiece`
+(`worktree-gate/detect/bash.go:488-537`) reaches `ClassUncertain` from the
+command word alone — which is why a redirect-free `dat-tools … --note …`
+call is allowed from a worktree cwd at every note length in both revisions,
+and denied from a primary-checkout cwd on the generic cwd leg regardless of
+note length. `governance-git`'s `pretooluse-worktree-gate.sh` is a pure
+checksum-verification exec wrapper ("This wrapper never inspects the
+payload") that delegates all classification to this same Go binary, so the
+ledger's `governance-git` "Affects" attribution names the shipping surface,
+not the defective code; the defect was here.
+
+**Regression cover added.** `worktree-gate/detect/decide_led160_test.go`
+pins the fixed behavior against the reported shape: the long note and a
+short note must both be allowed from a worktree cwd, with the
+`ENAMETOOLONG` errno registered on exactly the over-`NAME_MAX` target.
+Differentially verified — the long-note subtest fails against `b9d99db`
+with the message above while the short-note subtest passes, so the test
+distinguishes fixed from unfixed rather than passing vacuously. LED-023's
+own cases cannot pin this: their operands resolve inside the worktree and
+are allowed either way.
 
 ## Files touched
 
-None. No production code changed. A scratch reproduction test
-(`worktree-gate/detect/zzled160_scratch_test.go`) was created and run, then
-deleted before this report was written — it never appears in `git status`.
+- `worktree-gate/detect/decide_led160_test.go` — new, test only. Pins
+  LED-160's reported shape against the fix already in `870d4fe`.
+
+No production code changed.
 
 ## Test results
 
-- `go build ./...`: PASS (no diagnostics).
-- `go vet ./...`: PASS (no diagnostics).
-- `go test ./worktree-gate/...`: PASS —
-  `github.com/johnrichter/git-tools/worktree-gate/detect` (6.4s),
-  `.../worktree-gate/fixtures` (0.0s), `.../worktree-gate/lifecycle`
-  (147.3s). No test file changed, so this is a baseline confirmation, not a
-  regression check.
-- `internal/cli`'s suite was not rerun: no file under `internal/cli`, or
-  any file this task touched, changed at all, so there is nothing for that
-  suite to newly verify for this task.
+- `go build ./...`: PASS.
+- `go vet ./...`: PASS.
+- `go test ./worktree-gate/...`: PASS, including the new LED-160 test.
+- `internal/cli`'s suite was not rerun: nothing under `internal/cli`
+  changed, and the added file is a test in `worktree-gate/detect`.
+- Differential check on the new test against `b9d99db` (`870d4fe`'s parent):
+  the long-note subtest FAILS, the short-note subtest PASSES — the test
+  discriminates fixed from unfixed.
 
 ## Assumptions
 
@@ -144,26 +162,29 @@ deleted before this report was written — it never appears in `git status`.
   face value and did not pick one on `delivery-agent-team`'s or
   `dat-tools`' behalf, since both live outside this repo and this task's
   scope.
-- LED-160's reproduction used the exact command shape and rough note
-  length the ledger describes, run against `Decide()` directly with a
-  synthetic filesystem (the same harness the existing LED-023/LED-153 tests
-  use), covering both a worktree and a primary-checkout cwd. A real
-  end-to-end run through the shipped `worktree-gate` binary was not
-  performed, since the direct `Decide()` call already conclusively shows
-  no code path can reach the claimed failure mode from any classifier
-  branch.
+- LED-160's verification ran end-to-end through the built `worktree-gate`
+  binary against a real filesystem, from both a worktree and a
+  primary-checkout cwd, at HEAD and at `870d4fe^`. A real filesystem is
+  required, not optional: the synthetic-filesystem harness the unit tests
+  use models no `NAME_MAX`, so it cannot raise the errno that is this
+  defect's entire signature.
 
 ## Hand-off notes
 
-- No code changed, so there is nothing to differentially test for the
-  full-corpus rule this project's own D6 lesson calls for; that lesson
-  applies to a rule that narrows a fail-closed catch-all, and neither item
-  here changed one.
+- LED-160 should be closed in the ledger as fixed by `870d4fe`, with its
+  `governance-git` "Affects" line corrected to `git-tools` — the wrapper
+  named there carries no classifier logic. Both independent filings
+  (toolchain-conformance FB10, ste-detector-and-voice-hardening FB15)
+  describe this same mechanism.
+- Method lesson worth carrying: a symptom whose signature is an OS errno
+  cannot be ruled out on a synthetic filesystem that models no errnos. Probe
+  the built binary against a real topology before recording a
+  non-reproduction.
 - If a future task ever adds `dat-tools` (or any comparably-shaped helper)
-  to `verbs.json`'s write sets so its operands get judged, re-run LED-160's
-  exact reproduction shape then: adding a write-prefix/contains entry
-  without an accompanying flag-value-aware operand parser is exactly the
-  mechanism that would newly make LED-160's claim possible.
+  to `verbs.json`'s write sets, its operands start being judged again;
+  adding a write-prefix/contains entry without a flag-value-aware operand
+  parser reopens LED-160 directly. The new test then becomes the guard that
+  catches it.
 - If LED-153 is ever picked up as a real task, it belongs to a
   `delivery-agent-team` (SKILL.md text) or `dat-tools` (new `--out` flag)
   ticket, not a `git-tools` one — do not re-open it here again without a
