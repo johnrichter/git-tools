@@ -1,5 +1,16 @@
 # D8 -- migrate check_privacy.py logic into git-tools, with differential-corpus proof
 
+> **CORRECTION NOTICE (2026-08-30, quality review).** The "Differential-corpus run
+> against the real seven repositories" section below, and corpus-table rows 7, 11 and
+> 12, are **factually wrong**. The claimed "0 findings on both sides across 1577 files,
+> all match" is not reproducible and is not true. The code change D8 actually made (the
+> code-suffix marker exemption) is correct and independently confirmed. Everything
+> before "Differential-corpus run" stands as written except rows 7/11/12. The original
+> text is left in place unedited, as the record of what was claimed; the honest,
+> reproduced result is in **"Correction: what the differential corpus actually shows"**
+> at the end of this file. Read that section before relying on anything in the
+> differential-corpus section.
+
 ## Scope
 
 D8 migrates check_privacy.py's full logic natively into git-tools (Go) and proves
@@ -192,3 +203,117 @@ touched.
   Includes the two new tests (`TestCodeMarkerExemptRules_MatchesEveryCodeSuffixAnywhereInTree`,
   `TestScanPrivacy_CodeSuffixIsMarkerExemptByDefault`) and every pre-existing test in
   the suite, with no regression.
+
+---
+
+## Correction: what the differential corpus actually shows
+
+Added 2026-08-30 by the quality review, after independently rebuilding the harness and
+re-running it. Supersedes the "Differential-corpus run against the real seven
+repositories" section above and corpus-table rows 7, 11 and 12.
+
+Host and URL examples in this section carry one bracketed dot
+(`foo[.]internal.test`), and private-address examples omit the `http://` scheme, so this
+section does not itself trip the scanner it describes. Read them with the brackets
+removed and the scheme restored.
+
+### What was claimed vs. what is true
+
+| Claim in this report | Status |
+|---|---|
+| Code-suffix marker exemption (`scan.go`, the change D8 made) is correct | **True.** Independently reproduced twice: identical marker text is exempt in `.py`, still fails in `.md`, at the exact expected finding count. |
+| Seven-repo enumeration: 552/399/91/123/30/286/96 = 1577 tracked files | **True.** Re-counted from each repo's own `git ls-files`; every figure matches. |
+| "0 Python findings, 0 Go findings, all seven repos match" | **FALSE.** 3 of 7 repos diverge. |
+| Row 7 -- both sides exempt enumerated AWS example key ids | **FALSE.** `check_privacy.py` has no AWS allowlist at all (`SECRET_PATTERNS` is applied with no value exemption, `check_privacy.py:283-285`). Only Go has one (`awsExampleAccessKeyIDs`). |
+| Row 11 -- reserved-sentinel exclusion matches on both sides | **FALSE.** Only Python implements it. Go has no reserved-sentinel lookahead on its `internal hostname` pattern. |
+| Row 12 -- disguised reserved sentinel warns on both sides | **FALSE** for the private/loopback-URL pattern. Python warns, Go does not. |
+
+### Honest re-run (fresh binary, same tiers, same `--strict`, per-repo `git ls-files` snapshot)
+
+Reproduced twice, by two independently written harnesses, with identical divergences.
+The harness is committed at `.task-reports/d8-differential-corpus-harness.py` so this
+result can be re-run rather than taken on trust.
+
+| Repo | Tier (py -> go) | Tracked files | Python | Go | Match |
+|------|-----------------|---------------|--------|----|-------|
+| marketplace | public -> public | 552 | 0 | 1 | **no** |
+| workspace | personal -> private | 400 | 0 | 0 | yes |
+| knowledge-public-datadog | public -> public | 91 | 0 | 1 | **no** |
+| knowledge-private-datadog | datadog -> confidential | 123 | 0 | 0 | yes |
+| knowledge-private-personal | personal -> private | 30 | 0 | 0 | yes |
+| marketplace-datadog | datadog -> confidential | 286 | 6 | 5 | **no** |
+| ai-shared-lib-datadog | datadog -> confidential | 96 | 0 | 0 | yes |
+| **Total** | | **1578** | **6** | **7** | **4 of 7 match** |
+
+workspace is 400 files here where this report's original table said 399: one commit
+landed there between the two runs. Every other count is unchanged. The original 1577 was
+correct when it was written.
+
+Three divergences, three distinct causes, all of them pre-existing in the pinned
+`go/githooks v0.5.0` dependency and none of them in anything D8's own diff touches:
+
+- **D-1 (Go stricter -- false positive).** Go's `internal hostname` pattern
+  (`githooks@v0.5.0/privacy.go:109`) carries no reserved-sentinel lookahead; Python's
+  (`check_privacy.py:184-185`) appends `_RESERVED_SENTINEL_LOOKAHEAD`. Go therefore
+  flags `foo[.]internal.test`, `bar[.]internal.example`, `baz[.]internal.localhost`,
+  `qux[.]internal.invalid` -- documentation-reserved sentinel hosts that cannot resolve
+  anywhere -- which Python deliberately excludes. Live on both public-tier repos today,
+  via `tests/test_check_privacy.py`'s own sentinel fixture data.
+- **D-2 (Go laxer -- justified).** The only `AKIA[0-9A-Z]{16}` value anywhere in the
+  corpus is `AKIAIOSFODNN7EXAMPLE`, the canonical AWS documentation example key, which
+  provably cannot be a credential. Go exempts it by exact match; Python has no
+  allowlist and fails on it. Go's behavior here is the better one.
+- **D-3 (Go laxer -- synthetic shapes only, and documented as intentional).** Go's
+  `privateNetworkURL` requires a *positive, consuming* `hostTerminator`
+  (`privacy.go:95`); Python uses a *negative* reserved-sentinel lookahead. Go therefore
+  does not flag `http://127[.]0.0.1.invalid.attacker.io/x` or
+  `http://192[.]168.1.5.attacker.io/x`, which Python warns on. Go's own comment states
+  this is deliberate: the resolvable host in those strings is a public DNS name, not a
+  private address. **Did not surface on any of the 1577 real files** -- reproduced only
+  on hand-built fixtures.
+
+Every genuine private-address, secret and marker shape matched on both sides. A 20-case
+directional fixture sweep of the internal-identifier rules matched on 14 cases and
+diverged on 6: 4 x D-1, 2 x D-3.
+
+**One honest limit on this result.** marketplace-datadog's two `corpus/chunks.jsonl`
+files (612 MB and 34 MB) carry more than 50 findings each, so even a single-file run
+truncates and their category sets may be incomplete. The harness reports this rather
+than hiding it. Every other file in all seven repos was compared with no truncation.
+
+### Why the original harness reported 0/0
+
+Two mechanisms, both of which any future differential harness must handle:
+
+1. **Warnings were not counted.** At public tier with `--strict`, marketplace's real
+   result is `privacy_violations_found: 0, privacy_warnings_found: 3`. A harness reading
+   only the violation count sees "0 findings" while a real `--strict` FAIL (exit 30) is
+   sitting in the warning count. Python's own exit code was 0, so the two agreed on the
+   wrong number.
+2. **`errors[]` is capped at 50.** `githooks.EmitHookResult` truncates to
+   `maxDiagnostics = 50` (`envelope.go:14,67-69`) and discloses it via a
+   `caveats.githooks.findings_truncated` caveat. A harness building a finding set from
+   `errors[]` without honoring that caveat silently undercounts on any repo with more
+   than 50 findings. The corrected harness detects the caveat and re-runs per file; on
+   marketplace-datadog that alone resolved one apparent divergence as a harness
+   artifact rather than a scanner gap.
+
+### Scope of the fix
+
+Not fixable from git-tools. `internalIDStrict`, `internalIDRelaxed`, `hostTerminator`,
+`markerPattern` and `awsExampleAccessKeyIDs` are all unexported in `githooks`, and
+`PrivacyOptions` exposes only `SkipRules`, `MarkerExemptRules`, `SecretExemptRules` and
+`EmployeeEmail` -- no internal-identifier or secret-pattern injection point. Closing
+D-1/D-2/D-3 requires a change in `ai-shared-lib`'s `go/githooks` and a repin. Filed as
+feedback rather than fixed here; see
+`.task-reports/d8-privacy-scan-migration-quality-review.md`.
+
+### Residual risk this report should have flagged and did not
+
+- **D-1 blocks the cutover.** Once git-tools' scan replaces `check_privacy.py`, both
+  public-tier repos' `--strict` gates fail on legitimately-clean content. This is a
+  release blocker for the shim/soak/cutover stage, not a security regression.
+- **`owner:`-keyed checks are absent by design** (B1's tested decision,
+  `adversarial_test.go:322-338`). Inert on today's corpus, but a future off-tier
+  `owner:` value in a public repo would be caught by `check_privacy.py` and missed by
+  git-tools. Belongs alongside the employee-email domain item as a hand-off risk.
