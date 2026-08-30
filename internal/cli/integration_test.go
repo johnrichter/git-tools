@@ -749,6 +749,33 @@ func TestScanPrivacy_PrivacyMarkerExemptConfigExemptsOnlyNamedPath(t *testing.T)
 	}
 }
 
+// TestScanPrivacy_CodeSuffixIsMarkerExemptByDefault covers check_privacy.py's
+// own CODE_SUFFIXES behavior: a source file's own literal "privacy:"/
+// "owner:" text (a scanner's own pattern definition, a fixture string) is
+// marker-exempt in every repo by default, with no privacy_marker_exempt
+// config needed. The identical text committed at an otherwise-plain path
+// (an .md file, never marker-exempt) still fails, proving the exemption is
+// keyed on the code suffix, not on some other accident of this fixture.
+func TestScanPrivacy_CodeSuffixIsMarkerExemptByDefault(t *testing.T) {
+	bin := buildCLI(t)
+	dir := initRepo(t)
+	commitFile(t, dir, "fixture.py", markerFrontmatter, "add code fixture")
+
+	r, exit := runCLI(t, bin, "--repo", dir, "scan", "privacy", "--privacy-tier", "public")
+	if r.Status != "success" || exit != 0 {
+		t.Fatalf("status=%s exit=%d, want success/0 (a .py file's own marker text is exempt by default): %+v", r.Status, exit, r)
+	}
+
+	commitFile(t, dir, "fixture.md", markerFrontmatter, "add non-code fixture")
+	r, exit = runCLI(t, bin, "--repo", dir, "scan", "privacy", "--privacy-tier", "public")
+	if r.Status != "precondition_unmet" || exit != 30 {
+		t.Fatalf("status=%s exit=%d, want precondition_unmet/30 (identical text in an .md file is not exempt): %+v", r.Status, exit, r)
+	}
+	if got, _ := r.Data["privacy_violations_found"].(float64); int(got) != markerFrontmatterFindings {
+		t.Fatalf("privacy_violations_found=%v, want %d (fixture.md alone) — fixture.py was flagged too, so the code-suffix exemption did not hold: %+v", r.Data["privacy_violations_found"], markerFrontmatterFindings, r.Data)
+	}
+}
+
 // TestScanPrivacy_MalformedPrivacyMarkerExemptIsUsageError is the
 // silent-disable guard at `scan privacy`'s own call site: a malformed glob
 // must refuse the invocation by name, not reach fsx.ClassifyPath, where an
