@@ -263,16 +263,16 @@ func secretExemptRules(paths []string) []fsx.Rule {
 	return rules
 }
 
-// employeeEmailCheck converts cfg's employee_email_allowed_domains entries
-// into the githooks.EmployeeEmailCheck PrivacyOptions.EmployeeEmail expects.
-// The public tier's employee-email check always runs; this only widens which
+// employeeEmailCheck converts cfg's allowed_email_domains entries into the
+// githooks.EmployeeEmailCheck PrivacyOptions.EmployeeEmail expects. The
+// public tier's employee-email check always runs; this only widens which
 // domains it exempts beyond githooks' own hardcoded example.com default, for
 // exactly the domains a repo's own git-tools.yaml names. With none
 // configured — the default — it returns the zero value, and only
 // example.com stays exempt: this CLI serves any repo and ships as public
 // source, so it holds no organization's domains of its own to fall back on.
 func employeeEmailCheck(cfg *Config) githooks.EmployeeEmailCheck {
-	return githooks.EmployeeEmailCheck{AllowedDomains: cfg.EmployeeEmailAllowedDomains}
+	return githooks.EmployeeEmailCheck{AllowedDomains: cfg.AllowedEmailDomains}
 }
 
 // emitScan hands outcome to githooks' own result-builder, which produces the

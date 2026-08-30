@@ -55,7 +55,7 @@ type Config struct {
 	MaxBinaryBytes      int64    `koanf:"max_binary_bytes"`
 	PrivacyMarkerExempt []string `koanf:"privacy_marker_exempt"`
 	SecretScanExempt    []string `koanf:"secret_scan_exempt"`
-	// EmployeeEmailAllowedDomains exempts the public tier's employee-email
+	// AllowedEmailDomains exempts the public tier's employee-email
 	// internal-identifier check from flagging an address at one of the named
 	// domains (e.g. an organization's own mail domains). The check itself
 	// always runs at that tier: with no domains configured — the default —
@@ -64,7 +64,7 @@ type Config struct {
 	// nothing else: which domains identify an organization's own people is
 	// that organization's value, so it belongs in the repo that needs it, not
 	// in this CLI's shared source, which serves any repo and ships publicly.
-	EmployeeEmailAllowedDomains []string `koanf:"employee_email_allowed_domains"`
+	AllowedEmailDomains []string `koanf:"allowed_email_domains"`
 }
 
 // defaultConfig seeds koanf's lowest-precedence layer. Every key here must
@@ -73,14 +73,14 @@ type Config struct {
 // across default/file/env/flag layers.
 func defaultConfig() map[string]interface{} {
 	return map[string]interface{}{
-		"repo":                           ".",
-		"remote":                         "origin",
-		"privacy_tier":                   "public",
-		"strict":                         false,
-		"max_binary_bytes":               githooks.DefaultMaxBytes,
-		"privacy_marker_exempt":          []string{},
-		"secret_scan_exempt":             []string{},
-		"employee_email_allowed_domains": []string{},
+		"repo":                  ".",
+		"remote":                "origin",
+		"privacy_tier":          "public",
+		"strict":                false,
+		"max_binary_bytes":      githooks.DefaultMaxBytes,
+		"privacy_marker_exempt": []string{},
+		"secret_scan_exempt":    []string{},
+		"allowed_email_domains": []string{},
 	}
 }
 

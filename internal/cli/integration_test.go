@@ -657,7 +657,7 @@ func TestScanPrivacy_DetectsForbiddenMarker(t *testing.T) {
 // documentation placeholder, never a real organization's: which domains
 // identify an org's own people is per-repo config, so a test proving the
 // mechanism needs a fixture value, not a live one.
-const employeeEmailConfig = "employee_email_allowed_domains:\n  - acme-corp.example\n"
+const employeeEmailConfig = "allowed_email_domains:\n  - acme-corp.example\n"
 
 // TestScanPrivacy_InternalEmailWarnsWithoutStrict covers the public tier's
 // employee-email check as a repo widens it through git-tools.yaml: an
