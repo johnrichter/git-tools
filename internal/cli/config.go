@@ -55,22 +55,16 @@ type Config struct {
 	MaxBinaryBytes      int64    `koanf:"max_binary_bytes"`
 	PrivacyMarkerExempt []string `koanf:"privacy_marker_exempt"`
 	SecretScanExempt    []string `koanf:"secret_scan_exempt"`
-	// EmployeeEmailDomains turns on the public tier's optional employee-email
-	// internal-identifier check for the domains it names (e.g. an
-	// organization's own mail domains). Empty by default, which leaves the
-	// check off, matching githooks' own off-by-default
-	// PrivacyOptions.EmployeeEmail. Deliberately a per-repo config key and
+	// EmployeeEmailAllowedDomains exempts the public tier's employee-email
+	// internal-identifier check from flagging an address at one of the named
+	// domains (e.g. an organization's own mail domains). The check itself
+	// always runs at that tier: with no domains configured — the default —
+	// only githooks' own hardcoded example.com stays exempt, and any other
+	// real-looking address flags. Deliberately a per-repo config key and
 	// nothing else: which domains identify an organization's own people is
 	// that organization's value, so it belongs in the repo that needs it, not
 	// in this CLI's shared source, which serves any repo and ships publicly.
-	EmployeeEmailDomains []string `koanf:"employee_email_domains"`
-	// EmployeeEmailAllowlist exempts individual addresses from
-	// EmployeeEmailDomains' check by their full text, for the public role
-	// addresses anyone external is meant to reach. Each entry is one exact
-	// address; there is no wildcard or domain-wide form (see
-	// githooks.EmployeeEmailCheck.Allowlist). Ignored when
-	// EmployeeEmailDomains is empty, since the check is then off.
-	EmployeeEmailAllowlist []string `koanf:"employee_email_allowlist"`
+	EmployeeEmailAllowedDomains []string `koanf:"employee_email_allowed_domains"`
 }
 
 // defaultConfig seeds koanf's lowest-precedence layer. Every key here must
@@ -79,15 +73,14 @@ type Config struct {
 // across default/file/env/flag layers.
 func defaultConfig() map[string]interface{} {
 	return map[string]interface{}{
-		"repo":                     ".",
-		"remote":                   "origin",
-		"privacy_tier":             "public",
-		"strict":                   false,
-		"max_binary_bytes":         githooks.DefaultMaxBytes,
-		"privacy_marker_exempt":    []string{},
-		"secret_scan_exempt":       []string{},
-		"employee_email_domains":   []string{},
-		"employee_email_allowlist": []string{},
+		"repo":                           ".",
+		"remote":                         "origin",
+		"privacy_tier":                   "public",
+		"strict":                         false,
+		"max_binary_bytes":               githooks.DefaultMaxBytes,
+		"privacy_marker_exempt":          []string{},
+		"secret_scan_exempt":             []string{},
+		"employee_email_allowed_domains": []string{},
 	}
 }
 

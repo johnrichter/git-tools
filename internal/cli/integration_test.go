@@ -652,29 +652,29 @@ func TestScanPrivacy_DetectsForbiddenMarker(t *testing.T) {
 	}
 }
 
-// employeeEmailConfig turns the public tier's optional employee-email check on
-// for a placeholder domain, with one allowlisted role address. The domain is
-// deliberately a documentation placeholder, never a real organization's: which
-// domains identify an org's own people is per-repo config, so a test proving
-// the mechanism needs a fixture value, not a live one.
-const employeeEmailConfig = "employee_email_domains:\n  - example.com\nemployee_email_allowlist:\n  - support@example.com\n"
+// employeeEmailConfig widens the public tier's employee-email check's
+// allow-list to a placeholder domain. The domain is deliberately a
+// documentation placeholder, never a real organization's: which domains
+// identify an org's own people is per-repo config, so a test proving the
+// mechanism needs a fixture value, not a live one.
+const employeeEmailConfig = "employee_email_allowed_domains:\n  - acme-corp.example\n"
 
 // TestScanPrivacy_InternalEmailWarnsWithoutStrict covers the public tier's
-// employee-email check as a repo configures it through git-tools.yaml, and its
-// allowlist: the flagged individual address warns (and fails under --strict)
-// while the allowlisted role address at the same domain does not.
+// employee-email check as a repo widens it through git-tools.yaml: an
+// address at the configured allow-list domain does not warn, while an address
+// at any other domain still does (and fails under --strict).
 func TestScanPrivacy_InternalEmailWarnsWithoutStrict(t *testing.T) {
 	bin := buildCLI(t)
 	dir := initRepo(t)
 	commitFile(t, dir, "git-tools.yaml", employeeEmailConfig, "configure the employee-email check")
-	commitFile(t, dir, "doc.md", "contact person@example.com, not support@example.com\n", "add doc")
+	commitFile(t, dir, "doc.md", "contact person@other.example, not support@acme-corp.example\n", "add doc")
 
 	r, exit := runCLI(t, bin, "--repo", dir, "scan", "privacy", "--privacy-tier", "public")
 	if r.Status != "caveats" || exit != 10 {
 		t.Fatalf("status=%s exit=%d, want caveats/10: %+v", r.Status, exit, r)
 	}
 	if len(r.Caveats) != 1 {
-		t.Errorf("caveats = %d, want exactly 1 (the allowlisted role address must not warn): %+v", len(r.Caveats), r.Caveats)
+		t.Errorf("caveats = %d, want exactly 1 (the allow-listed domain's address must not warn): %+v", len(r.Caveats), r.Caveats)
 	}
 
 	r, exit = runCLI(t, bin, "--repo", dir, "scan", "privacy", "--privacy-tier", "public", "--strict")
@@ -683,18 +683,33 @@ func TestScanPrivacy_InternalEmailWarnsWithoutStrict(t *testing.T) {
 	}
 }
 
-// TestScanPrivacy_EmployeeEmailCheckOffWithoutConfig pins the check off by
-// default. git-tools holds no organization's mail domains in its own source —
-// it ships publicly and serves any repo — so an address at a domain no
-// git-tools.yaml named is not an internal identifier and the scan is clean.
-func TestScanPrivacy_EmployeeEmailCheckOffWithoutConfig(t *testing.T) {
+// TestScanPrivacy_EmployeeEmailCheckFlagsAnyDomainWithoutConfig pins the
+// check's default posture: with no git-tools.yaml allow-list, only
+// example.com is exempt (githooks' own hardcoded default), so an address at
+// any other domain still flags.
+func TestScanPrivacy_EmployeeEmailCheckFlagsAnyDomainWithoutConfig(t *testing.T) {
+	bin := buildCLI(t)
+	dir := initRepo(t)
+	commitFile(t, dir, "doc.md", "contact person@other.example for details\n", "add doc")
+
+	r, exit := runCLI(t, bin, "--repo", dir, "scan", "privacy", "--privacy-tier", "public")
+	if r.Status != "caveats" || exit != 10 {
+		t.Fatalf("status=%s exit=%d, want caveats/10 (no configured allow-list means only example.com is exempt): %+v", r.Status, exit, r)
+	}
+}
+
+// TestScanPrivacy_EmployeeEmailCheckAllowsExampleDomainWithoutConfig confirms
+// githooks' hardcoded example.com default reaches the CLI's own wiring
+// unmodified: an example.com address never warns, even with no
+// git-tools.yaml allow-list at all.
+func TestScanPrivacy_EmployeeEmailCheckAllowsExampleDomainWithoutConfig(t *testing.T) {
 	bin := buildCLI(t)
 	dir := initRepo(t)
 	commitFile(t, dir, "doc.md", "contact person@example.com for details\n", "add doc")
 
 	r, exit := runCLI(t, bin, "--repo", dir, "scan", "privacy", "--privacy-tier", "public")
 	if r.Status != "success" || exit != 0 {
-		t.Fatalf("status=%s exit=%d, want success/0 (no configured domain means no employee-email check): %+v", r.Status, exit, r)
+		t.Fatalf("status=%s exit=%d, want success/0 (example.com is always exempt): %+v", r.Status, exit, r)
 	}
 }
 
