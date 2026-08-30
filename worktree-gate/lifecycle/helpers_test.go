@@ -16,10 +16,23 @@ import (
 // merely present.
 func signableScratchRepo(t *testing.T) string {
 	t.Helper()
+	dir := newScratchRepo(t)
+	configureSigningKeyT(t, dir)
+	runGitT(t, dir, "config", "commit.gpgsign", "true")
+	return dir
+}
+
+// configureSigningKeyT gives dir a resolvable ssh signing key without turning
+// commit.gpgsign on, mirroring internal/cli's configureSigningKey. A fixture
+// whose own commits should be signed uses signableScratchRepo; one whose
+// commits must stay unsigned -- the state that makes Complete's signing gate
+// re-sign the source branch before landing it -- layers this over
+// newScratchRepo instead.
+func configureSigningKeyT(t *testing.T, dir string) {
+	t.Helper()
 	if _, err := exec.LookPath("ssh-keygen"); err != nil {
 		t.Fatalf("ssh-keygen is required to sign this fixture's commits: %v", err)
 	}
-	dir := newScratchRepo(t)
 	keyDir := t.TempDir()
 	key := filepath.Join(keyDir, "signing-key")
 	if out, err := exec.Command("ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "lifecycle signing fixture", "-f", key).CombinedOutput(); err != nil {
@@ -36,8 +49,6 @@ func signableScratchRepo(t *testing.T) string {
 	runGitT(t, dir, "config", "gpg.format", "ssh")
 	runGitT(t, dir, "config", "user.signingkey", key+".pub")
 	runGitT(t, dir, "config", "gpg.ssh.allowedSignersFile", allowed)
-	runGitT(t, dir, "config", "commit.gpgsign", "true")
-	return dir
 }
 
 // breakSigningKeyT points user.signingkey at a key that does not exist, so

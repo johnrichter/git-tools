@@ -23,21 +23,27 @@ import (
 //     own no-work-loss guard, which runs unconditionally regardless of who
 //     is permitted to invoke it.
 func TestSDET_SC15_BranchDelete_GateSanctionsButGuardStillRefuses(t *testing.T) {
-	// Isolate from the host's global/system git config, most importantly
-	// core.hooksPath -- without this, every commit below runs whatever hook
-	// the host has configured globally.
-	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
-	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
 	bin := filepath.Join(t.TempDir(), "git-tools")
 	repoRoot, err := filepath.Abs("../..")
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The build runs before the isolation below on purpose: it compiles this
+	// repo, and `go build` stamps VCS info by running git against the real
+	// checkout, which can need global-only config (e.g. safe.directory).
 	build := exec.Command("go", "build", "-o", bin, "./cmd/git-tools")
 	build.Dir = repoRoot
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("go build git-tools: %v\n%s", err, out)
 	}
+
+	// Isolate every git invocation past this point from the host's
+	// global/system git config, most importantly core.hooksPath -- without
+	// this, every commit below runs whatever hook the host has configured
+	// globally. Process-level so it also reaches the built binary's own git
+	// calls, which inherit this test process's environment.
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
 
 	binBytes, err := os.ReadFile(bin)
 	if err != nil {

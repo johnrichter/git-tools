@@ -15,6 +15,12 @@ import (
 // to have a HEAD to compare against.
 func gitRepoForConfigTest(t *testing.T) string {
 	t.Helper()
+	// Isolate from the host's global/system git config, the same way initRepo
+	// does: core.hooksPath makes the commit below run whatever hook the host
+	// has configured globally, and core.excludesfile can hide the untracked
+	// config file two of these tests plant on purpose.
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
 	dir := t.TempDir()
 	run := func(args ...string) {
 		t.Helper()

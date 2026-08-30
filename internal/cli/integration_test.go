@@ -111,9 +111,13 @@ func runGit(t *testing.T, dir string, args ...string) string {
 }
 
 // initRepo creates a scratch repo with one committed file on branch main,
-// signing disabled so tests run without a configured GPG/SSH signing key. A
-// test of the merge verb uses signingRepo instead, which layers a real
-// ephemeral signing key over this — merge signs what it lands.
+// signing disabled and no signing key configured at all. Two fixtures layer
+// a key over it, for verbs that sign:
+//   - signingRepo — key plus commit.gpgsign, so this fixture's own commits
+//     are signed too (merge, tag create, and the scan gate's create path).
+//   - configureSigningKey — key only, leaving commits unsigned, for sign and
+//     resign, whose whole point is turning an unsigned commit into a signed
+//     one.
 func initRepo(t *testing.T) string {
 	t.Helper()
 	// Isolate this fixture (and the CLI binary it drives) from the host's

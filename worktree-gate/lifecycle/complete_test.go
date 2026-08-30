@@ -13,10 +13,12 @@ import (
 )
 
 func TestComplete_MergesBackAndCleansUp(t *testing.T) {
-	// Complete's merge signs unsigned source commits before landing them, so
-	// this fixture needs a signing key that resolves under isolation from
-	// the host's own config.
-	repo := signableScratchRepo(t)
+	// Complete's signing gate re-signs the source branch's unsigned commits
+	// before landing them, so this fixture carries a resolvable key but
+	// leaves commit.gpgsign off: that unsigned-source state is what exercises
+	// the rewrite. signableScratchRepo would pre-sign the commits and skip it.
+	repo := newScratchRepo(t)
+	configureSigningKeyT(t, repo)
 	ctx := context.Background()
 
 	wt, err := Ensure(ctx, repo, "task-1")
@@ -50,8 +52,8 @@ func TestComplete_MergesBackAndCleansUp(t *testing.T) {
 }
 
 func TestComplete_KeepBranch(t *testing.T) {
-	// Complete's merge signs unsigned source commits before landing them; see
-	// TestComplete_MergesBackAndCleansUp.
+	// Complete mints a merge commit and must sign it, so this fixture needs a
+	// resolvable key under isolation from the host's own config.
 	repo := signableScratchRepo(t)
 	ctx := context.Background()
 
@@ -144,8 +146,8 @@ func TestComplete_DirtyRefusalMatchesSharedRuleText(t *testing.T) {
 // branch itself is left intact rather than deleted out from under a merge
 // that never fully completed.
 func TestComplete_DirtyRefusalDoesNotUndoTheMerge(t *testing.T) {
-	// Complete's merge signs unsigned source commits before landing them; see
-	// TestComplete_MergesBackAndCleansUp.
+	// Complete mints a merge commit and must sign it, so this fixture needs a
+	// resolvable key under isolation from the host's own config.
 	repo := signableScratchRepo(t)
 	ctx := context.Background()
 
@@ -171,9 +173,9 @@ func TestComplete_DirtyRefusalDoesNotUndoTheMerge(t *testing.T) {
 }
 
 func TestComplete_ConflictLeavesWorktreeIntact(t *testing.T) {
-	// Complete signs the source branch's unsigned commits before attempting
-	// the merge, ahead of the conflict this test provokes; see
-	// TestComplete_MergesBackAndCleansUp.
+	// Complete's signing gate runs ahead of the conflict this test provokes,
+	// so the fixture needs a resolvable key under isolation from the host's
+	// own config.
 	repo := signableScratchRepo(t)
 	ctx := context.Background()
 
