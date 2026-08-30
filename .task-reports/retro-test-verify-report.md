@@ -65,8 +65,8 @@ git repos under `/tmp`, not the worktree):
 |---|---|---|
 | Sentinel hostnames (`foo.internal.test`, `bar.internal.example`, `baz.internal.localhost`), tier `public --strict` | `scan privacy` | `exit_code:0`, `privacy_violations_found:0`, `privacy_warnings_found:0` -- no violation, confirming the RFC 6761 sentinel fix |
 | Real internal hostname, no sentinel suffix (`jenkins-01.internal`), tier `public --strict` | `scan privacy` | `exit_code:30`, flags `rule: internal_identifier`, `message: "internal identifier — internal hostname"` -- DOES flag |
-| AWS example key `AKIAIOSFODNN7EXAMPLE` + Slack example token `xoxb-ab59EXAMPLETOKEN`, tier `public --strict` | `scan privacy` and `scan secrets` | both `exit_code:0`, zero findings -- neither flags (exact-match exemptions hold) |
-| Real-looking non-exempted secret (`AKIAABCD1234EFGH5678`) | `scan secrets` (isolated) and `scan privacy` (combined dir) | flags `rule: aws_access_key_id` in both -- DOES flag |
+| AWS example key `` `AKIAIOSFODNN7` + `EXAMPLE` `` + Slack example token `` `xoxb-ab59` + `EXAMPLETOKEN` ``, tier `public --strict` | `scan privacy` and `scan secrets` | both `exit_code:0`, zero findings -- neither flags (exact-match exemptions hold) |
+| Real-looking non-exempted secret (`` `AKIAABCD1234` + `EFGH5678` ``) | `scan secrets` (isolated) and `scan privacy` (combined dir) | flags `rule: aws_access_key_id` in both -- DOES flag |
 | Tier coverage: `public`, `confidential`, `private`, each with and without `--strict` | `scan privacy --privacy-tier <tier> [--strict]` | all three tier names accepted (no usage error). Severity differs: `public` treats the internal hostname as a warning without `--strict` and promotes it to a blocking error with `--strict`; `confidential`/`private` never flag it at all (0 warnings, 0 violations) — internal hostnames are within-scope for those tiers by design. The AWS key violation is a hard error at every tier regardless of `--strict`. |
 
 Isolated single-file repros (one file per scratch repo) were also run to
