@@ -74,10 +74,10 @@ plainly whether a publish happened, true only when --push was given and a
 real merge landed.
 
 An explicit --message is checked against the repository's own configured
-commit-msg hook before anything else runs: merge delegates to that hook
-rather than judging the message itself, so a repository with no hook
-configured sees no check at all, and a rejection there is reported as a
-precondition, before the signing gate does any re-signing work.
+commit-msg hook, ahead of both the content scan and the signing gate: merge
+delegates to that hook rather than judging the message itself, so a
+repository with no hook configured sees no check at all, and a rejection
+there is reported as a precondition before the gate does any re-signing work.
 
 Exit codes:
   0  success              the sources merged (with any re-signing reported)

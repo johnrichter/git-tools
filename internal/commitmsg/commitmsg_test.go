@@ -9,13 +9,43 @@ import (
 	"testing"
 )
 
+// initRepo creates a scratch repository whose configured commit-msg hook is
+// whatever the case itself plants, and nothing else.
+//
+// The two GIT_CONFIG_* overrides are load-bearing, not hygiene: a host whose
+// own global core.hooksPath already names a real, executable commit-msg hook
+// (a corporate secrets scanner, say) makes every unisolated case here resolve
+// that hook instead of the one it planted. The no-op cases would then run the
+// host's hook and pass only because it happens to accept a benign message,
+// and the default-.git/hooks cases would exercise a file they never wrote.
+// Both pass either way, so the coupling is silent -- hence the override, plus
+// the assertion below that it actually took effect. Check reads git config
+// through this process's own environment, so setting it here reaches both the
+// resolution calls and the hook invocation.
 func initRepo(t *testing.T) string {
 	t.Helper()
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
 	dir := t.TempDir()
 	run(t, dir, "init", "-q", "-b", "main")
 	run(t, dir, "config", "user.name", "Test User")
 	run(t, dir, "config", "user.email", "test@example.com")
+	requireNoHooksPathConfigured(t, dir)
 	return dir
+}
+
+// requireNoHooksPathConfigured fails unless dir resolves no core.hooksPath at
+// all -- the state initRepo's overrides are there to produce, asserted rather
+// than assumed so a case meaning to exercise git's default .git/hooks
+// resolution cannot quietly start exercising a host hook instead.
+func requireNoHooksPathConfigured(t *testing.T, dir string) {
+	t.Helper()
+	cmd := exec.Command("git", "config", "--get", "core.hooksPath")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err == nil {
+		t.Fatalf("core.hooksPath resolves to %q; this fixture needs it unset (isolation from the host's git config failed)", strings.TrimSpace(string(out)))
+	}
 }
 
 func run(t *testing.T, dir string, args ...string) string {

@@ -120,39 +120,14 @@ func TestLED118_QA_HookRejects_MergeBlockedNothingMoves(t *testing.T) {
 	}
 }
 
-// TestLED118_QA_HostGlobalHookIsInherited_NotActuallyNoHook is a finding,
-// not a straightforward pass/fail check: this sandbox's own git installation
-// carries a real global core.hooksPath (/usr/local/lib/dd-git-hooks, set in
-// $HOME/.gitconfig by the host, not by git-tools or this test), with an
-// executable commit-msg script there. That means a freshly initialized repo
-// in this environment is never actually "no hook configured" unless a test
-// explicitly isolates itself from the host's global git config -- the
-// engineer's own TestCheck_NoHookConfigured_IsNoOp and
-// TestMerge_CommitMessageHook_NoneConfigured_ProceedsNormally do not do
-// this, so in this sandbox they exercise the delegation path (the host's
-// real hook actually runs and accepts the benign test message) rather than
-// the true no-op path their names claim. This test pins that down directly:
-// Check resolves and actually runs the host's hook here.
-func TestLED118_QA_HostGlobalHookIsInherited_NotActuallyNoHook(t *testing.T) {
-	dir := t.TempDir()
-	runGit(t, dir, "init", "-q", "-b", "main")
-	hooksPath, err := exec.Command("git", "-C", dir, "config", "--get", "core.hooksPath").CombinedOutput()
-	if err != nil {
-		t.Skip("qa: this host carries no global core.hooksPath; the 'no hook configured' tests are exercising a true no-op here, nothing to flag")
-	}
-	resolved := strings.TrimSpace(string(hooksPath))
-	if _, statErr := os.Stat(filepath.Join(resolved, "commit-msg")); statErr != nil {
-		t.Skipf("qa: global core.hooksPath %q carries no commit-msg script; nothing to flag", resolved)
-	}
-	t.Logf("qa FINDING: a fresh repo in this sandbox inherits a real, executable global commit-msg hook at %s -- 'no hook configured' tests that do not isolate GIT_CONFIG_GLOBAL/HOME are not exercising a true no-op in this environment", filepath.Join(resolved, "commit-msg"))
-}
-
 // TestLED118_QA_TrueNoHook_MergeUnaffected isolates the CLI subprocess and
-// its git config from this host's real global commit-msg hook (via
+// its git config from any global commit-msg hook the host carries (via
 // GIT_CONFIG_GLOBAL=/dev/null, GIT_CONFIG_SYSTEM=/dev/null), producing an
-// actual, verified no-hook-configured repository -- the genuine scenario
-// (c) the dispatch asked for, not the host-global-hook-happens-to-accept
-// case the existing suite runs today.
+// actual, verified no-hook-configured repository. It keeps its own fixture
+// and its own subprocess-level environment deliberately: the shipped
+// no-hook case in merge_commit_message_hook_test.go isolates at the process
+// level through shared helpers, so covering the same outcome by a different
+// route keeps this evidence independent rather than an echo.
 func TestLED118_QA_TrueNoHook_MergeUnaffected(t *testing.T) {
 	bin := buildCLI(t)
 	dir := t.TempDir()

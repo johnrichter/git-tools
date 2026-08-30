@@ -1,11 +1,13 @@
 // LED-118: merge checks an explicit --message against the repository's own
-// configured commit-msg hook before anything else runs. These tests cover
+// configured commit-msg hook, ahead of the content scan and the signing
+// gate. These tests cover
 // the three outcomes that hook can produce: no hook configured (a no-op),
 // a hook that accepts, and a hook that rejects.
 package cli_test
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -37,10 +39,42 @@ func installCommitMsgHook(t *testing.T, dir string, accept bool) (hooksDir, mark
 	return hooksDir, markerPath
 }
 
+// requireNoCommitMsgHook fails unless dir genuinely has no commit-msg hook to
+// delegate to: no core.hooksPath resolved anywhere, and no hook at git's own
+// default location. A "no hook configured" case has to assert this rather
+// than assume it -- see isolateHostGitConfig.
+func requireNoCommitMsgHook(t *testing.T, dir string) {
+	t.Helper()
+	cmd := exec.Command("git", "config", "--get", "core.hooksPath")
+	cmd.Dir = dir
+	if out, err := cmd.Output(); err == nil {
+		t.Fatalf("core.hooksPath resolves to %q; this case needs no hook configured at all", strings.TrimSpace(string(out)))
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".git", "hooks", "commit-msg")); err == nil {
+		t.Fatal("the default .git/hooks/commit-msg exists; this case needs no hook configured at all")
+	}
+}
+
+// isolateHostGitConfig detaches this case from the host's own global and
+// system git config. On a machine whose global core.hooksPath already names a
+// real, executable commit-msg hook, an unisolated scratch repo inherits it --
+// so a case meant to cover the no-hook no-op would instead exercise the
+// delegation path and pass only because the host's hook accepts the message.
+// runGit and runCLI both let their child inherit this process's environment,
+// so one call here covers the fixture's git calls and the CLI subprocess
+// alike. Call it before the fixture is built.
+func isolateHostGitConfig(t *testing.T) {
+	t.Helper()
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
+}
+
 func TestMerge_CommitMessageHook_NoneConfigured_ProceedsNormally(t *testing.T) {
+	isolateHostGitConfig(t)
 	bin := buildCLI(t)
 	dir := signingRepo(t)
 	signedBranch(t, dir, "feature")
+	requireNoCommitMsgHook(t, dir)
 
 	r, exit := runCLI(t, bin, "--repo", dir, "merge", "feature", "--fast-forward", "never", "--message", "merge feature into main")
 	if r.Status != "success" || exit != 0 {
