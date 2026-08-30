@@ -22,7 +22,7 @@ import (
 func TestMain(m *testing.M) {
 	code := m.Run()
 	if cliBinDir != "" {
-		os.RemoveAll(cliBinDir)
+		_ = os.RemoveAll(cliBinDir)
 	}
 	os.Exit(code)
 }

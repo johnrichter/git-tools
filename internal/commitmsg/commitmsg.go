@@ -66,7 +66,7 @@ func Check(ctx context.Context, dir, message string) (*Refusal, error) {
 	if err != nil {
 		return nil, fmt.Errorf("commitmsg: create scratch message file: %w", err)
 	}
-	defer os.Remove(tmp.Name())
+	defer func() { _ = os.Remove(tmp.Name()) }()
 	_, writeErr := tmp.WriteString(message)
 	closeErr := tmp.Close()
 	if writeErr != nil {
