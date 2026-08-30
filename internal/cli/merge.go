@@ -74,7 +74,7 @@ real merge landed.
 
 Exit codes:
   0  success              the sources merged (with any re-signing reported)
-  10 caveats              the merge landed, but an opted-in cleanup or publish did not complete, or the minted commit's signature failed to verify
+  10 caveats              the merge landed; its signature did not verify, or a publish or cleanup did not complete
   20 gate_negative        every source was already in the target, so nothing landed
   30 precondition_unmet   a content guardrail flagged a file, or signing could not be satisfied; nothing was merged
   40 not_found            --repo is not a git working tree
@@ -269,6 +269,14 @@ $PATH, does not satisfy it, and is denied from a primary checkout.`,
 				data["commits_landed"] = commits
 			}
 
+			// FB24: whether this invocation also published the target is
+			// reported plainly rather than left for a caller to infer from
+			// other fields — false unless --push was given and a real merge
+			// landed. Set before the checks below so every exit from here on,
+			// caveats included, carries the field rather than leaving a caller
+			// to read its absence as either answer.
+			data["published"] = false
+
 			// The gate above re-signs every incoming range, and the probe before
 			// the merge proves signing is possible before -S is passed — but
 			// neither confirms the minted commit's own signature actually
@@ -290,11 +298,9 @@ $PATH, does not satisfy it, and is denied from a primary checkout.`,
 				}
 			}
 
-			// FB24: whether this invocation also published the target is
-			// reported plainly rather than left for a caller to infer from
-			// other fields — false unless --push was given and a real merge
-			// landed.
-			data["published"] = false
+			// A publish runs only on a real merge whose tip verified above: an
+			// unsigned tip returns before this point, so nothing here can
+			// publish a merge the check refused to call signed.
 			if push && !result.DryRun {
 				if pubErr := publishTarget(cmd.Context(), cfg, repo.Dir, target); pubErr != nil {
 					return finishCaveat(cmd, data, "caveats.git.merge_publish_failed",
@@ -522,12 +528,13 @@ func publishTarget(ctx context.Context, cfg *Config, dir, target string) error {
 	if hadRemote && remoteSHA == localSHA {
 		return nil
 	}
-	res, err := gitexec.RunGit(ctx, dir, "push", cfg.Remote, fullRef+":"+fullRef)
+	args := []string{"push", cfg.Remote, fullRef + ":" + fullRef}
+	res, err := gitexec.RunGit(ctx, dir, args...)
 	if err != nil {
 		return fmt.Errorf("push %s to %s: %w", fullRef, cfg.Remote, err)
 	}
 	if res.ExitCode != 0 {
-		return fmt.Errorf("%s", strings.TrimSpace(string(res.Stderr)))
+		return &git.CommandError{Args: args, ExitCode: res.ExitCode, Stderr: strings.TrimSpace(string(res.Stderr))}
 	}
 	return nil
 }

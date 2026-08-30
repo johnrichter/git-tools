@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -1366,4 +1367,133 @@ func TestMerge_Publish_DryRunNeverPublishes(t *testing.T) {
 	if after := runGit(t, bare, "rev-parse", "refs/heads/main"); after != before {
 		t.Fatalf("a dry run with --push published anyway: %s -> %s", before, after)
 	}
+}
+
+// The commit count on the shape most likely to expose an arithmetic shortcut:
+// a three-way octopus whose sources contribute different numbers of commits
+// (one, two, three). The answer is seven — six carried plus the one minted
+// merge commit — which neither a per-source count, a sum of the largest
+// source, nor a parent count lands on by accident. The reported value is
+// checked against a rev-list count this test runs itself, so the assertion
+// does not depend on merge.go's own helper being right about the range.
+func TestMerge_CommitsLanded_ThreeWayUnequalOctopusMatchesRevList(t *testing.T) {
+	bin := buildCLI(t)
+	dir := signingRepo(t)
+	for _, source := range []struct {
+		branch string
+		files  []string
+	}{
+		{"alpha", []string{"alpha-one.txt"}},
+		{"beta", []string{"beta-one.txt", "beta-two.txt"}},
+		{"gamma", []string{"gamma-one.txt", "gamma-two.txt", "gamma-three.txt"}},
+	} {
+		runGit(t, dir, "checkout", "-q", "-b", source.branch, "main")
+		for _, file := range source.files {
+			commitFile(t, dir, file, file+"\n", source.branch+" adds "+file)
+		}
+		runGit(t, dir, "checkout", "-q", "main")
+	}
+	oldHead := runGit(t, dir, "rev-parse", "HEAD")
+
+	r, exit := runCLI(t, bin, "--repo", dir, "merge", "alpha", "beta", "gamma", "--message", "merge alpha beta gamma")
+	if r.Status != "success" || exit != 0 {
+		t.Fatalf("status=%s exit=%d, want success/0: %+v", r.Status, exit, r)
+	}
+	newHead, _ := r.Data["new_head"].(string)
+	if newHead == "" {
+		t.Fatalf("result carries no new_head: %+v", r.Data)
+	}
+	// A genuine octopus: git fast-forwards the unmoved main onto the first
+	// source and then mints one commit over the three source tips, so the
+	// landed head has three parents and the count below is over a real
+	// multi-parent range.
+	if parents := runGit(t, dir, "rev-list", "--parents", "-1", newHead); len(strings.Fields(parents)) != 4 {
+		t.Fatalf("landed head is not a three-parent octopus merge commit: %q", parents)
+	}
+	landed, ok := r.Data["commits_landed"].(float64)
+	if !ok {
+		t.Fatalf("data[commits_landed] is not a number: %+v", r.Data)
+	}
+	independent, err := strconv.Atoi(runGit(t, dir, "rev-list", "--count", oldHead+".."+newHead))
+	if err != nil {
+		t.Fatalf("independent rev-list count: %v", err)
+	}
+	if int(landed) != independent {
+		t.Fatalf("data[commits_landed] = %d, want %d (independent rev-list --count %s..%s)", int(landed), independent, oldHead, newHead)
+	}
+	if int(landed) != 7 {
+		t.Fatalf("data[commits_landed] = %d, want 7 (1 + 2 + 3 carried, plus the minted merge commit)", int(landed))
+	}
+}
+
+// The post-merge signature check's negative branch, end to end through the
+// real merge command rather than only through headSigState: the merge is a
+// genuine non-fast-forward that mints a signed commit, and a repository-local
+// post-merge hook amends that commit without a signature the moment
+// `git merge -S` returns. So the merge succeeds, the pre-merge signing probe
+// is satisfied, and the commit merge finds at HEAD is still genuinely
+// unsigned — the one condition the check exists for, standing in for anything
+// (a hook, a wrapper, a concurrent tool) that can rewrite the tip between the
+// merge and the check. merge must report that as the unsigned caveat, never as
+// a plain success, and must not unwind the merge that landed.
+func TestMerge_PostMergeTipUnsigned_ReportsUnsignedCaveat(t *testing.T) {
+	bin := buildCLI(t)
+	dir := signingRepo(t)
+	signedBranch(t, dir, "feature")
+	commitFile(t, dir, "main.txt", "main\n", "diverge main")
+	stripSignatureAfterMerge(t, dir)
+
+	r, exit := runCLI(t, bin, "--repo", dir, "merge", "feature", "--message", "merge feature")
+	if r.Status != "caveats" || exit != 10 {
+		t.Fatalf("status=%s exit=%d, want caveats/10 (an unsigned tip is never a plain success): %+v", r.Status, exit, r)
+	}
+	if len(r.Caveats) != 1 {
+		t.Fatalf("caveats = %d, want exactly 1: %+v", len(r.Caveats), r.Caveats)
+	}
+	if code, _ := r.Caveats[0]["code"].(string); code != "caveats.git.merge_commit_unsigned" {
+		t.Fatalf("caveat code=%q, want caveats.git.merge_commit_unsigned: %+v", code, r.Caveats[0])
+	}
+	if state, _ := r.Caveats[0]["context"].(map[string]any)["sig_state"].(string); state != "N" {
+		t.Fatalf("caveat context sig_state=%q, want N (no signature): %+v", state, r.Caveats[0])
+	}
+	newHead, _ := r.Data["new_head"].(string)
+	if newHead == "" {
+		t.Fatalf("result carries no new_head: %+v", r.Data)
+	}
+	if got := runGit(t, dir, "rev-parse", "HEAD"); got != newHead {
+		t.Fatalf("the merge was unwound by the unsigned caveat: HEAD=%s, reported new_head=%s", got, newHead)
+	}
+	if parents := runGit(t, dir, "rev-list", "--parents", "-1", newHead); len(strings.Fields(parents)) != 3 {
+		t.Fatalf("landed head is not a genuine two-parent merge commit: %q", parents)
+	}
+	if state := runGit(t, dir, "log", "-1", "--format=%G?", newHead); state != "N" {
+		t.Fatalf("the fixture did not leave the tip unsigned: %%G?=%q, so this test proves nothing", state)
+	}
+	// Nothing past the check runs: the unsigned merge is not published.
+	if r.Data["published"] != false {
+		t.Fatalf("data[published] = %v, want false on the unsigned caveat: %+v", r.Data["published"], r.Data)
+	}
+}
+
+// stripSignatureAfterMerge points the repository at its own hooks directory
+// (overriding whatever the host configures globally) carrying one post-merge
+// hook that replaces the just-minted two-parent merge commit with an
+// identical but unsigned one. git ignores a post-merge hook's exit status, so
+// a hook that failed to run leaves the tip signed and the test asserting the
+// caveat fails rather than passing vacuously.
+func stripSignatureAfterMerge(t *testing.T, dir string) {
+	t.Helper()
+	hooks := t.TempDir()
+	// `git commit --amend` refuses while the merge state is still present, so
+	// the commit is rebuilt with plumbing instead: same tree, same two
+	// parents, no signature.
+	script := `#!/bin/sh
+tree=$(git rev-parse HEAD^{tree}) || exit 1
+unsigned=$(git commit-tree --no-gpg-sign "$tree" -p "$(git rev-parse HEAD^1)" -p "$(git rev-parse HEAD^2)" -m "unsigned merge") || exit 1
+exec git update-ref HEAD "$unsigned"
+`
+	if err := os.WriteFile(filepath.Join(hooks, "post-merge"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, dir, "config", "core.hooksPath", hooks)
 }

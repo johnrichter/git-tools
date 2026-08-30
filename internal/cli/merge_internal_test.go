@@ -3,55 +3,24 @@
 // rather than trusting `git merge -S`'s exit code) and commitsLanded (the
 // commit-count fix). Both run directly against a scratch repo, without going
 // through the built binary, since neither is reachable from package
-// cli_test.
+// cli_test. The repo and git helpers are this package's existing ones
+// (worktree_test.go's cleanupFixture, cgit and commitIn) -- a one-commit,
+// unsigned scratch repo is exactly what both tests need.
 package cli
 
 import (
 	"context"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"strings"
 	"testing"
 )
 
-func runGitHere(t *testing.T, dir string, args ...string) string {
-	t.Helper()
-	cmd := exec.Command("git", args...)
-	cmd.Dir = dir
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("git %v: %v\n%s", args, err, out)
-	}
-	return string(out)
-}
-
-func initScratchRepo(t *testing.T) string {
-	t.Helper()
-	dir := t.TempDir()
-	runGitHere(t, dir, "init", "-q", "-b", "main")
-	runGitHere(t, dir, "config", "user.name", "Test User")
-	runGitHere(t, dir, "config", "user.email", "test@example.com")
-	runGitHere(t, dir, "config", "commit.gpgsign", "false")
-	return dir
-}
-
-func commitHere(t *testing.T, dir, name, message string) string {
-	t.Helper()
-	if err := os.WriteFile(filepath.Join(dir, name), []byte("content\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	runGitHere(t, dir, "add", name)
-	runGitHere(t, dir, "commit", "-q", "-m", message)
-	return strings.TrimSpace(runGitHere(t, dir, "rev-parse", "HEAD"))
-}
-
 // headSigState on a genuinely unsigned commit must report "N" -- the exact
 // state the merge verb's post-merge check treats as a failed verification,
-// caveat-ing the merge as unsigned rather than reporting success.
+// caveat-ing the merge as unsigned rather than reporting success. The
+// end-to-end companion, through the real merge command, is
+// TestMerge_PostMergeTipUnsigned_ReportsUnsignedCaveat in merge_test.go.
 func TestHeadSigState_UnsignedCommit_ReportsN(t *testing.T) {
-	dir := initScratchRepo(t)
-	tip := commitHere(t, dir, "a.txt", "unsigned commit")
+	dir, _ := cleanupFixture(t)
+	tip := cgit(t, dir, "rev-parse", "HEAD")
 
 	state, err := headSigState(context.Background(), dir, tip)
 	if err != nil {
@@ -73,11 +42,12 @@ func TestHeadSigState_UnsignedCommit_ReportsN(t *testing.T) {
 // synthetic three-commit range rather than a real merge, isolating the
 // rev-list arithmetic from the merge verb's own gate and signing machinery.
 func TestCommitsLanded_CountsExactlyTheNewRange(t *testing.T) {
-	dir := initScratchRepo(t)
-	oldHead := commitHere(t, dir, "base.txt", "base")
-	commitHere(t, dir, "one.txt", "commit one")
-	commitHere(t, dir, "two.txt", "commit two")
-	newHead := commitHere(t, dir, "three.txt", "commit three")
+	dir, _ := cleanupFixture(t)
+	oldHead := cgit(t, dir, "rev-parse", "HEAD")
+	commitIn(t, dir, "one.txt", "commit one")
+	commitIn(t, dir, "two.txt", "commit two")
+	commitIn(t, dir, "three.txt", "commit three")
+	newHead := cgit(t, dir, "rev-parse", "HEAD")
 
 	n, err := commitsLanded(context.Background(), dir, oldHead, newHead)
 	if err != nil {
