@@ -16,6 +16,13 @@ import (
 // "tag" as its subcommand would mean some other verb started minting or
 // reading tags directly again, bypassing that migration -- exactly what this
 // guard exists to catch.
+//
+// Scope, so a reader does not over-trust it: this is a source-text check for
+// a literal "tag" subcommand argument. A call that builds its argument slice
+// first and passes it variadically (as signing.go's own merge-base helpers
+// do) is invisible here. It catches the casual regression -- someone typing
+// gitexec.RunGit(ctx, dir, "tag", ...) in a new verb -- not a determined
+// evasion, which would need type-checked call-graph analysis.
 func TestRawGitTagCallSite_ConfinedToTagGo(t *testing.T) {
 	repoRoot, err := filepath.Abs("../..")
 	if err != nil {
@@ -28,7 +35,10 @@ func TestRawGitTagCallSite_ConfinedToTagGo(t *testing.T) {
 		}
 		if info.IsDir() {
 			switch info.Name() {
-			case ".git", ".task-reports", ".dat":
+			// .claude holds this repo's agent worktrees, each a full
+			// checkout of some other branch: walking into them would judge
+			// this branch by another branch's call sites.
+			case ".git", ".claude", ".task-reports", ".dat":
 				return filepath.SkipDir
 			}
 			return nil

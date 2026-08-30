@@ -176,36 +176,50 @@ func TestTagCreate_NoSigningKey_RefusesBeforeAttemptingToSign(t *testing.T) {
 	}
 }
 
+// trustOnlyAnUnrelatedKey points dir's gpg.ssh.allowedSignersFile at a
+// freshly minted key pair that has nothing to do with the one signingRepo
+// configured for signing. That splits the two signing checks apart, which is
+// what makes the verify-failure path reachable at all: "git tag -s" never
+// consults the allowed-signers file, so signing still succeeds, while "git
+// tag -v" does consult it, so verification fails every time.
+func trustOnlyAnUnrelatedKey(t *testing.T, dir string) {
+	t.Helper()
+	keyDir := t.TempDir()
+	key := filepath.Join(keyDir, "unrelated-key")
+	if out, err := exec.Command("ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "unrelated", "-f", key).CombinedOutput(); err != nil {
+		t.Fatalf("ssh-keygen: %v\n%s", err, out)
+	}
+	pub, err := os.ReadFile(key + ".pub")
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowed := filepath.Join(keyDir, "allowed_signers")
+	if err := os.WriteFile(allowed, []byte(`test@example.com namespaces="git" `+string(pub)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, dir, "config", "gpg.ssh.allowedSignersFile", allowed)
+}
+
 // TestTagCreate_FailedPostCreationVerification_RollsBackAndRefuses forces
 // the one failure the up-front signing check cannot catch: signing succeeds
 // (the repository can produce a signature), but the tag's own signature does
-// not verify, because gpg.ssh.allowedSignersFile trusts a different key than
-// the one that actually signed it. "git tag -s" never consults that file, so
-// it succeeds; "git tag -v" then fails, and create must delete the tag it
-// just made and refuse rather than push it.
+// not verify, because the allowed-signers file trusts a different key than
+// the one that actually signed it. create must delete the tag it just made
+// and refuse rather than push it — and, since that rollback leaves the
+// repository exactly as it was found, refuse as an unmet precondition (30),
+// not an internal fault.
 func TestTagCreate_FailedPostCreationVerification_RollsBackAndRefuses(t *testing.T) {
 	bin := buildCLI(t)
 	dir := signingRepo(t)
 	bare := newBareRemote(t, dir)
-
-	otherKeyDir := t.TempDir()
-	otherKey := filepath.Join(otherKeyDir, "unrelated-key")
-	if out, err := exec.Command("ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "unrelated", "-f", otherKey).CombinedOutput(); err != nil {
-		t.Fatalf("ssh-keygen: %v\n%s", err, out)
-	}
-	otherPub, err := os.ReadFile(otherKey + ".pub")
-	if err != nil {
-		t.Fatal(err)
-	}
-	mismatchedAllowed := filepath.Join(otherKeyDir, "allowed_signers")
-	if err := os.WriteFile(mismatchedAllowed, []byte(`test@example.com namespaces="git" `+string(otherPub)), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	runGit(t, dir, "config", "gpg.ssh.allowedSignersFile", mismatchedAllowed)
+	trustOnlyAnUnrelatedKey(t, dir)
 
 	r, exit := runCLIIn(t, bin, dir, "tag", "create", "1.4.0", "--shape", "vX.Y.Z")
-	if r.Status != "internal" || exit != 90 {
-		t.Fatalf("status=%s exit=%d, want internal/90: %+v", r.Status, exit, r)
+	if r.Status != "precondition_unmet" || exit != 30 {
+		t.Fatalf("status=%s exit=%d, want precondition_unmet/30: %+v", r.Status, exit, r)
+	}
+	if code, _ := r.Errors[0]["code"].(string); code != "precondition_unmet.git.tag_signature_unverified" {
+		t.Fatalf("refusal code=%q, want precondition_unmet.git.tag_signature_unverified: %+v", code, r.Errors[0])
 	}
 	message, _ := r.Errors[0]["message"].(string)
 	if !strings.Contains(message, "failed its own post-creation signature verification") || !strings.Contains(message, "rolled back") {
@@ -245,7 +259,7 @@ func gitStubFailingOn(t *testing.T, failArgs ...string) []string {
 case " $* " in
   *" %s "*) echo "fatal: simulated failure (test stub) for: $*" >&2; exit 1 ;;
 esac
-exec %s "$@"
+exec "%s" "$@"
 `, match, realGit)
 	if err := os.WriteFile(stub, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
@@ -265,29 +279,18 @@ exec %s "$@"
 // path TestTagCreate_FailedPostCreationVerification_RollsBackAndRefuses
 // cannot reach: "git tag -v" fails (same mismatched-allowed-signers setup),
 // and the "git tag -d" rollback that follows also fails. create cannot
-// self-heal that, so it must say so and name the exact manual command
-// ("git tag -d <name>") to finish the job by hand — and, since the delete
-// never actually ran, the tag must still be sitting there locally
-// afterward for that manual command to act on.
+// self-heal that, so its triage must name the exact manual command
+// ("git tag -d <name>") for a caller to finish the job by hand — and, since
+// the delete never actually ran, the tag must still be sitting there
+// locally afterward for that command to act on. This is the one branch of
+// the pair that stays "internal" (90): unlike its sibling, it leaves
+// residue create cannot unwind, so it is not the clean precondition
+// refusal that sibling reports at 30.
 func TestTagCreate_RollbackDeleteAlsoFails_NamesManualCommand(t *testing.T) {
 	bin := buildCLI(t)
 	dir := signingRepo(t)
 	bare := newBareRemote(t, dir)
-
-	otherKeyDir := t.TempDir()
-	otherKey := filepath.Join(otherKeyDir, "unrelated-key")
-	if out, err := exec.Command("ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "unrelated", "-f", otherKey).CombinedOutput(); err != nil {
-		t.Fatalf("ssh-keygen: %v\n%s", err, out)
-	}
-	otherPub, err := os.ReadFile(otherKey + ".pub")
-	if err != nil {
-		t.Fatal(err)
-	}
-	mismatchedAllowed := filepath.Join(otherKeyDir, "allowed_signers")
-	if err := os.WriteFile(mismatchedAllowed, []byte(`test@example.com namespaces="git" `+string(otherPub)), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	runGit(t, dir, "config", "gpg.ssh.allowedSignersFile", mismatchedAllowed)
+	trustOnlyAnUnrelatedKey(t, dir)
 
 	cmd := exec.Command(bin, "tag", "create", "1.4.0", "--shape", "vX.Y.Z")
 	cmd.Dir = dir
@@ -302,12 +305,17 @@ func TestTagCreate_RollbackDeleteAlsoFails_NamesManualCommand(t *testing.T) {
 	if r.Status != "internal" || exit != 90 {
 		t.Fatalf("status=%s exit=%d, want internal/90: %+v", r.Status, exit, r)
 	}
+	if code, _ := r.Errors[0]["code"].(string); code != "internal.git.tag_rollback_failed" {
+		t.Fatalf("refusal code=%q, want internal.git.tag_rollback_failed: %+v", code, r.Errors[0])
+	}
 	message, _ := r.Errors[0]["message"].(string)
 	if !strings.Contains(message, "rollback delete also failed") {
 		t.Fatalf("governing error message %q does not say the rollback delete also failed", message)
 	}
-	if !strings.Contains(message, "git tag -d v1.4.0") {
-		t.Fatalf("governing error message %q does not name the manual `git tag -d` fallback", message)
+	triage, _ := r.Errors[0]["triage"].(map[string]any)
+	instruction, _ := triage["instruction"].(string)
+	if !strings.Contains(instruction, "git tag -d v1.4.0") {
+		t.Fatalf("triage does not name the manual `git tag -d` fallback: %+v", triage)
 	}
 	if tags := localTags(t, dir); tags != "v1.4.0" {
 		t.Fatalf("tag=%q, want the unsigned-off tag still present locally since its delete never actually ran", tags)
@@ -451,7 +459,7 @@ func TestTagCreate_UnreachableRemote_FailsCleanly(t *testing.T) {
 	}
 }
 
-// TestTagCreate_ExitCodeTable pins the full 0/40/41/50/90 contract create's
+// TestTagCreate_ExitCodeTable pins the full 0/30/40/41/50/90 contract create's
 // own --help documents against one representative case per code (60,
 // transient, is pinned separately in push's own diverged-history test: the
 // underlying rejection path is identical, and reproducing a genuine

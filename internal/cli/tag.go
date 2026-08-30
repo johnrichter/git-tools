@@ -81,16 +81,18 @@ Exit codes:
   0  success              the tag was created and pushed
   30 precondition_unmet   the content-guardrail scan found a marker, an
                            internal identifier, or a secret at the commit
-                           being tagged, or no key resolved to sign it;
-                           nothing was tagged
+                           being tagged, no key resolved to sign it, or the
+                           tag it made failed its own signature verification
+                           and was rolled back; no tag survives locally and
+                           nothing was pushed
   40 not_found            the working directory is not a git working tree
   41 conflict             a local tag by that derived name already exists
   50 usage                <version> or --shape is missing or malformed, or
                            --repo/--config was passed
   60 transient            the remote rejected the push; re-run to retry
   90 internal             an underlying git command failed unexpectedly, or
-                           the finished tag failed its own signature
-                           verification and was rolled back`,
+                           an unverifiable tag's own rollback delete failed,
+                           leaving it behind locally`,
 		Args: cobra.ExactArgs(1),
 		Example: strings.TrimLeft(`
   git-tools tag create 1.4.0 --shape vX.Y.Z
@@ -184,24 +186,46 @@ Exit codes:
 			// mismatched trust store can pass the former and fail the
 			// latter). Running this ahead of the push below means a failure
 			// here never has to touch the remote — only the local tag.
-			if verify, err := gitexec.RunGit(ctx, ".", "tag", "-v", tagName); err != nil {
+			verify, err := gitexec.RunGit(ctx, ".", "tag", "-v", tagName)
+			if err != nil {
 				return finishErr(cmd, nil, "internal.git.tag_verify_failed", fmt.Sprintf("verify tag %s", tagName), err)
-			} else if verify.ExitCode != 0 {
+			}
+			if verify.ExitCode != 0 {
 				verifyDetail := strings.TrimSpace(string(verify.Stderr))
 				del, delErr := gitexec.RunGit(ctx, ".", "tag", "-d", tagName)
 				if delErr != nil || del.ExitCode != 0 {
-					rollbackDetail := ""
+					// The one outcome here create can neither classify nor
+					// unwind: its own rollback failed, so an unverifiable tag
+					// is still sitting in the local repository and only a
+					// person can clear it. That is what "internal" is for.
+					var rollbackDetail string
 					if delErr != nil {
 						rollbackDetail = delErr.Error()
 					} else {
 						rollbackDetail = strings.TrimSpace(string(del.Stderr))
 					}
-					return finishErr(cmd, nil, "internal.git.tag_signature_unverified", fmt.Sprintf("verify tag %s", tagName),
-						fmt.Errorf("failed its own post-creation signature verification (%s), and the rollback delete also failed (%s); remove it manually with `git tag -d %s`",
-							verifyDetail, rollbackDetail, tagName))
+					// Not finishErr: its fixed "retry" triage is wrong advice
+					// here, since the surviving tag makes an identical re-run
+					// fail the existence check instead. The manual delete has
+					// to come first.
+					return finishDiagnostic(cmd, map[string]any{"tag": tagName}, clikit.NewInternal,
+						"internal.git.tag_rollback_failed",
+						fmt.Sprintf("tag %s failed its own post-creation signature verification (%s), and the rollback delete also failed (%s)", tagName, verifyDetail, rollbackDetail),
+						clikit.Manual(fmt.Sprintf("remove the tag by hand with `git tag -d %s` — it is still present locally and nothing was pushed — then fix this repository's signing trust configuration before re-running", tagName)),
+						map[string]any{"tag": tagName})
 				}
-				return finishErr(cmd, nil, "internal.git.tag_signature_unverified", fmt.Sprintf("verify tag %s", tagName),
-					fmt.Errorf("failed its own post-creation signature verification and was rolled back: %s", verifyDetail))
+				// A verify failure the rollback did unwind is the same unmet
+				// signing precondition the probe above reports, caught at the
+				// only checkpoint that can see it: the probe proves git can
+				// produce a signature, this proves the signature it produced
+				// verifies. The rollback leaves the repository exactly as
+				// create found it — no tag, nothing pushed — so this is a
+				// precondition refusal, not an internal fault.
+				return finishDiagnostic(cmd, map[string]any{"tag": tagName}, clikit.NewPreconditionUnmet,
+					"precondition_unmet.git.tag_signature_unverified",
+					fmt.Sprintf("tag %s failed its own post-creation signature verification and was rolled back: %s", tagName, verifyDetail),
+					clikit.Manual("fix this repository's signing trust configuration (the signing key, and the allowed-signers file or keyring the verifier reads) so a tag it signs also verifies, then re-run; no tag survives locally and nothing was pushed"),
+					map[string]any{"tag": tagName})
 			}
 
 			return pushRef(cmd, cfg, tagName, "tag", "refs/tags/"+tagName)
