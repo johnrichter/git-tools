@@ -108,14 +108,15 @@ jobs:
             exit 1
           fi
 
-      # internal/cli builds and runs the git-tools binary end-to-end per test
-      # case, so its wall time grows with every verb test added. Measured
-      # 2026-08-13: 651s, up from 322s at the M3 baseline -- already PAST Go's
-      # 600s per-package default, so a bare `go test ./...` fails on timeout
-      # alone. This explicit budget is a stopgap that restores the gate; it
-      # does not bound the growth. See harness-followup FB18: the durable fix
-      # is to stop rebuilding the binary per case and to fail the gate on a
-      # runtime budget, because 20m is only ~2x the current cost.
+      # internal/cli runs the git-tools binary end-to-end per test case, so its
+      # wall time grows with every verb test added. History: 322s at the M3
+      # baseline, 651s on 2026-08-13 -- already past Go's 600s per-package
+      # default, so a bare `go test ./...` failed on timeout alone, which this
+      # explicit budget restores. FB18's first half is now done: the binary is
+      # built once per package run, not per test case (see buildCLI in
+      # internal/cli/integration_test.go), which cut the package to ~390s of
+      # CPU time. FB18's second half -- failing the gate on a runtime budget --
+      # is still open, so this budget still does not bound the growth.
       - name: go test
         run: go test -timeout 20m ./...
 
@@ -142,8 +143,8 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: shellcheck scripts/surface-hygiene.sh (SC-SH-LINT)
-        run: shellcheck scripts/surface-hygiene.sh
+      - name: shellcheck scripts/*.sh (SC-SH-LINT)
+        run: shellcheck scripts/*.sh
 
       - name: SC10/SC11 surface hygiene (whole repo)
         run: bash scripts/surface-hygiene.sh
