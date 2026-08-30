@@ -7,28 +7,59 @@ import (
 	"testing"
 )
 
+// gitSpawnShapes lists every way a file in this module can hand git a
+// subcommand to run, and where that call's git words sit in its arguments.
+// All three matter: reading only the gitexec wrapper would leave a new `git
+// tag` invisible in worktree-gate -- the very package whose backup markers
+// D1 moved off tags -- because that package spawns git through its own
+// private runner instead.
+var gitSpawnShapes = []struct {
+	// marker is the call text to scan for, its own "(" included.
+	marker string
+	// sliceArg is true when the git words arrive as one []string{...}
+	// argument (sysops.Run's shape) rather than as a variadic tail
+	// (gitexec.RunGit's and worktree-gate's runGit's shape).
+	sliceArg bool
+}{
+	{marker: "gitexec.RunGit(", sliceArg: false},
+	{marker: "runGit(", sliceArg: false},
+	{marker: "sysops.Run(", sliceArg: true},
+}
+
 // TestRawGitTagCallSite_ConfinedToTagGo locks D1's migration in place: every
 // call site that used to mint or read a backup marker as a `git tag` was
 // moved onto go/git's BackupRef, leaving tag.go's own "create" verb as the
 // sole place in the module that still shells out to the raw git tag
 // subcommand (it uses three forms of it -- create, verify, rollback -- but
-// all three belong to the one verb). A gitexec.RunGit call elsewhere passing
-// "tag" as its subcommand would mean some other verb started minting or
+// all three belong to the one verb). A call anywhere else naming "tag" as
+// the subcommand it spawns would mean some other verb started minting or
 // reading tags directly again, bypassing that migration -- exactly what this
 // guard exists to catch.
 //
+// It reads the subcommand words of every git spawn shape in gitSpawnShapes,
+// not just the one wrapper internal/cli happens to use, and flags a literal
+// "tag" among them wherever it appears in those words rather than only in
+// first position -- deliberately over-flagging, since a `git push origin tag
+// v1` is also a site that mints or moves a tag and should come up for review.
+//
 // Scope, so a reader does not over-trust it: this is a source-text check for
-// a literal "tag" subcommand argument. A call that builds its argument slice
-// first and passes it variadically (as signing.go's own merge-base helpers
-// do) is invisible here. It catches the casual regression -- someone typing
-// gitexec.RunGit(ctx, dir, "tag", ...) in a new verb -- not a determined
-// evasion, which would need type-checked call-graph analysis.
+// a literal "tag" argument. A call that builds its argument slice into a
+// variable first and passes that (as scan.go's own listCandidates does) is
+// invisible here, and so is a git spawn through a fourth shape nobody has
+// added to gitSpawnShapes yet -- which is why the shapes are self-checked
+// below. It catches the casual regression -- someone typing "tag" as a
+// subcommand in a new verb -- not a determined evasion, which would need
+// type-checked call-graph analysis.
 func TestRawGitTagCallSite_ConfinedToTagGo(t *testing.T) {
 	repoRoot, err := filepath.Abs("../..")
 	if err != nil {
 		t.Fatal(err)
 	}
 	var sites []string
+	// Per-shape call counts, so a shape whose marker has gone stale (its
+	// runner renamed, its package retired) fails loudly instead of quietly
+	// checking nothing forever.
+	callsPerShape := make(map[string]int, len(gitSpawnShapes))
 	walkErr := filepath.Walk(repoRoot, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -50,10 +81,13 @@ func TestRawGitTagCallSite_ConfinedToTagGo(t *testing.T) {
 		if readErr != nil {
 			return readErr
 		}
-		for _, call := range extractCalls(string(src), "gitexec.RunGit(") {
-			for _, arg := range splitTopLevelArgs(call) {
-				if strings.TrimSpace(arg) == `"tag"` {
-					sites = append(sites, path)
+		for _, shape := range gitSpawnShapes {
+			for _, call := range extractCalls(string(src), shape.marker) {
+				callsPerShape[shape.marker]++
+				for _, arg := range gitSubcommandWords(call, shape.sliceArg) {
+					if strings.TrimSpace(arg) == `"tag"` {
+						sites = append(sites, path)
+					}
 				}
 			}
 		}
@@ -61,6 +95,11 @@ func TestRawGitTagCallSite_ConfinedToTagGo(t *testing.T) {
 	})
 	if walkErr != nil {
 		t.Fatal(walkErr)
+	}
+	for _, shape := range gitSpawnShapes {
+		if callsPerShape[shape.marker] == 0 {
+			t.Fatalf("no %s call site left in the module -- this guard's shape list is stale, update gitSpawnShapes", shape.marker)
+		}
 	}
 	if len(sites) == 0 {
 		t.Fatal("found no raw `git tag` call site to check -- the guard itself is broken")
@@ -70,6 +109,41 @@ func TestRawGitTagCallSite_ConfinedToTagGo(t *testing.T) {
 			t.Fatalf("raw `git tag` call site outside tag.go: %s", site)
 		}
 	}
+}
+
+// gitSubcommandWords returns the arguments a git spawn passes to git, given
+// the call's argument text and whether that spawn's shape carries its words
+// in a slice argument. Both shapes put a context first and the spawn's
+// target directory or program name second, so the words start at the third
+// argument either way. It returns nil when the call cannot be a git spawn at
+// all (sysops.Run of some other program, say) or when the words are not a
+// literal this check can read.
+func gitSubcommandWords(call string, sliceArg bool) []string {
+	args := splitTopLevelArgs(call)
+	if len(args) < 3 {
+		return nil
+	}
+	if !sliceArg {
+		return args[2:]
+	}
+	// sysops.Run(ctx, name, args, options): only a git spawn is ours to
+	// judge, and its words are the elements of the args slice literal.
+	if strings.TrimSpace(args[1]) != `"git"` {
+		return nil
+	}
+	return sliceLiteralElements(args[2])
+}
+
+// sliceLiteralElements splits a []string{...} composite literal into its
+// element texts, returning nil for an argument that is not one -- a variable
+// holding the elements is beyond what a source-text check can follow.
+func sliceLiteralElements(arg string) []string {
+	arg = strings.TrimSpace(arg)
+	const prefix = "[]string{"
+	if !strings.HasPrefix(arg, prefix) || !strings.HasSuffix(arg, "}") {
+		return nil
+	}
+	return splitTopLevelArgs(arg[len(prefix) : len(arg)-1])
 }
 
 // splitTopLevelArgs splits a balanced-paren call's argument text (as
