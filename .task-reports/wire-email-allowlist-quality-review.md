@@ -1,7 +1,7 @@
 # Quality review: wire-email-allowlist (go/githooks v0.7.0 repin)
 
-**Verdict: FIX-APPLIED** — one minor go.sum hygiene defect found and fixed; the
-wiring itself is correct and independently re-verified end-to-end.
+**Verdict: FIX-APPLIED** — one minor go.sum hygiene defect found and fixed.
+The wiring itself is correct and independently re-verified end-to-end.
 
 ## What this branch actually is
 
@@ -39,7 +39,7 @@ None.
   `go build`, `go test` — there is no `go mod tidy` check), but it leaves a
   stale hash for a version nothing in the graph requires, and it is the exact
   residue a by-hand `go.mod` edit leaves versus a `go get`+`tidy`. Fixed by
-  running `go mod tidy`; `go.mod` was unaffected.
+  running `go mod tidy`. `go.mod` was unaffected.
 - Process note, not a code defect: the test-verification report's §6 asserts
   the `go.mod`/`go.sum` diff is "exactly the v0.6.1 → v0.7.0 bump ... nothing
   else". True as a description of the diff, but it checked only for a `replace`
@@ -74,7 +74,7 @@ overlap with the report's `acme-corp.example` / `other-corp.io` fixtures.
 | B: config file present, key absent | `jane@example.com` | not flagged |
 | B | `ok@widget-works.test` | flagged |
 | C: **no** `git-tools.yaml` at all | `jane@example.com` / `ok@widget-works.test` | not flagged / flagged |
-| D: scalar (non-list) `allowed_email_domains: widget-works.test` | `ok@widget-works.test` | not flagged — koanf coerces a scalar to a one-element slice; lenient, not a defect |
+| D: scalar (non-list) `allowed_email_domains: widget-works.test` | `ok@widget-works.test` | not flagged — koanf coerces a scalar to a one-element slice, which is lenient but not a defect |
 | E: env layer, `GITTOOLS_ALLOWED_EMAIL_DOMAINS=widget-works.test`, no config file | `ok@widget-works.test` | not flagged — the new key resolves through the env layer too |
 
 All three configuration layers (file, env, default) reach
@@ -90,8 +90,8 @@ never used.
 `"allowed_email_domains": []string{}` seed → `internal/cli/scan.go:275`
 `employeeEmailCheck` → `PrivacyOptions.EmployeeEmail` at both call sites
 (`newScanPrivacyCmd` and `scanTree`, so the landing gate and the standalone
-scan share one path). Producer and consumer agree on the key; no dead helper,
-no orphaned field. Old key names (`employee_email_domains`,
+scan share one path). Producer and consumer agree on the key. There is no dead
+helper and no orphaned field. Old key names (`employee_email_domains`,
 `employee_email_allowlist`, `EmployeeEmailAllowedDomains`) appear nowhere
 outside historical `.task-reports/`.
 
@@ -101,7 +101,7 @@ outside historical `.task-reports/`.
 gofmt -l .              → clean
 go build ./...          → ok
 go vet ./...            → ok
-go test ./... -count=1  → all packages ok (internal/cli 23.256s; commitmsg,
+go test ./... -count=1  → all packages ok (internal/cli 23.256s, commitmsg,
                           gitexec, hooks, result, signing, worktreeclean,
                           worktree-gate/{detect,fixtures,lifecycle} all ok)
 ```
@@ -144,14 +144,14 @@ three by hand against the built binary.
   blocked — but any repo that turns on `strict` will block until it
   allow-lists `github.com`.
 - Exact-domain matching means a repo that allow-lists `corp.example` still
-  gets warnings for `user@mail.corp.example`. Documented upstream; worth
+  gets warnings for `user@mail.corp.example`. Documented upstream, and worth
   knowing before writing a consumer config.
 
 ## Plan feedback
 
 - The three real consumers that already carry the new key
   (`ai-shared-lib-datadog`, `knowledge-private-datadog`,
-  `marketplace-datadog`) all use `allowed_email_domains`; nothing anywhere
+  `marketplace-datadog`) all use `allowed_email_domains`. Nothing anywhere
   still sets the removed `employee_email_domains`/`employee_email_allowlist`.
   That is the deciding evidence for a minor rather than major bump — the
   key removal is source-breaking in principle but breaks no live config.
@@ -165,8 +165,8 @@ three by hand against the built binary.
   (`git@<host>:` / `git+ssh://git@<host>/`) from the employee-email pattern
   would remove the single largest false-positive class the inversion
   introduced, without weakening the check.
-- Consider adding a `go mod tidy` check to `.github/workflows/ci.yml`; this
-  release's one real defect would have been caught by it.
+- Consider adding a `go mod tidy` check to `.github/workflows/ci.yml`. That
+  check would have caught this release's one real defect.
 
 ## Release: v1.4.0 (tagged at 9ad0812)
 
@@ -187,26 +187,26 @@ posture gets stricter. Minor is nonetheless the right call on the evidence:
 every live consumer config in the platform (`ai-shared-lib-datadog`,
 `knowledge-private-datadog`, `marketplace-datadog`) already uses the new
 `allowed_email_domains` key and none sets either removed key, so nothing
-in-fleet breaks; the module exports no changed Go API (only `cmd/`,
-`internal/`, and an untouched `worktree-gate/`); and it matches this repo's
-own v1.0.0 → v1.3.0 all-minor cadence.
+in-fleet breaks. The module also exports no changed Go API (only `cmd/`,
+`internal/`, and an untouched `worktree-gate/`), and a minor bump matches this
+repo's own v1.0.0 → v1.3.0 all-minor cadence.
 
 ### Consumer-visible changes since v1.3.0
 
-`git log v1.3.0..main` is 12 commits; the source diff is only
+`git log v1.3.0..main` is 12 commits. The source diff is only
 `internal/cli/{config.go,scan.go,integration_test.go}` (+56/-56).
 
 1. **New config key `allowed_email_domains`** (af707fb, 33598ce) — replaces
    `employee_email_domains` and `employee_email_allowlist`, which are removed.
-   A repo names the mail domains its own people use; those domains stop being
-   flagged as internal identifiers. Resolves through all three layers (file,
+   A repo names the mail domains its own people use, and those domains stop
+   being flagged as internal identifiers. Resolves through all three layers (file,
    `GITTOOLS_ALLOWED_EMAIL_DOMAINS`, default).
 2. **Public-tier employee-email check is now always on** (316f06b, via
    `go/githooks` v0.6.1 → v0.7.0) — previously off unless a repo configured
    domains, and deny-list polarity. Now every email-shaped string is a
    candidate internal identifier unless its domain is `example.com` or is
    named in `allowed_email_domains`. Matching is literal and
-   case-insensitive; subdomains of an allowed domain are **not** covered.
+   case-insensitive. Subdomains of an allowed domain are **not** covered.
    Practical effect: `git@github.com:owner/repo` SSH URLs in docs now warn
    (12 such warnings in marketplace, 22 in git-tools itself). Warnings, not
    failures — landing verbs only refuse under `strict: true`, which no
