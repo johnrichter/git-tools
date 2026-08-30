@@ -7,6 +7,8 @@
 package cli_test
 
 import (
+	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -211,6 +213,104 @@ func TestTagCreate_FailedPostCreationVerification_RollsBackAndRefuses(t *testing
 	}
 	if tags := localTags(t, dir); tags != "" {
 		t.Fatalf("a tag that failed verification was not rolled back locally: %q", tags)
+	}
+	if out, err := exec.Command("git", "-C", bare, "tag", "-l").CombinedOutput(); err != nil {
+		t.Fatalf("git tag -l: %v\n%s", err, out)
+	} else if strings.TrimSpace(string(out)) != "" {
+		t.Fatalf("a tag that failed verification reached the remote: %q", out)
+	}
+}
+
+// gitStubFailingOn writes a "git" shim ahead of the real one on PATH: it
+// forwards every invocation to the real git binary except one whose leading
+// arguments exactly match failArgs, which it refuses outright without
+// touching the real git at all. Deterministically forcing "git tag -d" to
+// fail (the one case this task's rollback cannot self-heal) has no other
+// realistic hook: it isn't gated by any git-config the test could flip, and
+// racing a chmod against the real create/verify/delete sequence inside a
+// single CLI invocation would be a flake, not a proof. Interposing on the
+// binary the CLI actually spawns is the deterministic version of the same
+// idea sysops.Run already relies on: whatever resolves off PATH as "git" is
+// what runs.
+func gitStubFailingOn(t *testing.T, failArgs ...string) []string {
+	t.Helper()
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatalf("git not found on PATH: %v", err)
+	}
+	binDir := t.TempDir()
+	stub := filepath.Join(binDir, "git")
+	match := strings.Join(failArgs, " ")
+	script := fmt.Sprintf(`#!/bin/sh
+case " $* " in
+  *" %s "*) echo "fatal: simulated failure (test stub) for: $*" >&2; exit 1 ;;
+esac
+exec %s "$@"
+`, match, realGit)
+	if err := os.WriteFile(stub, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	env := os.Environ()
+	for i, kv := range env {
+		if strings.HasPrefix(kv, "PATH=") {
+			env[i] = "PATH=" + binDir + string(os.PathListSeparator) + strings.TrimPrefix(kv, "PATH=")
+			return env
+		}
+	}
+	t.Fatal("no PATH in environment")
+	return nil
+}
+
+// TestTagCreate_RollbackDeleteAlsoFails_NamesManualCommand forces the one
+// path TestTagCreate_FailedPostCreationVerification_RollsBackAndRefuses
+// cannot reach: "git tag -v" fails (same mismatched-allowed-signers setup),
+// and the "git tag -d" rollback that follows also fails. create cannot
+// self-heal that, so it must say so and name the exact manual command
+// ("git tag -d <name>") to finish the job by hand — and, since the delete
+// never actually ran, the tag must still be sitting there locally
+// afterward for that manual command to act on.
+func TestTagCreate_RollbackDeleteAlsoFails_NamesManualCommand(t *testing.T) {
+	bin := buildCLI(t)
+	dir := signingRepo(t)
+	bare := newBareRemote(t, dir)
+
+	otherKeyDir := t.TempDir()
+	otherKey := filepath.Join(otherKeyDir, "unrelated-key")
+	if out, err := exec.Command("ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "unrelated", "-f", otherKey).CombinedOutput(); err != nil {
+		t.Fatalf("ssh-keygen: %v\n%s", err, out)
+	}
+	otherPub, err := os.ReadFile(otherKey + ".pub")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mismatchedAllowed := filepath.Join(otherKeyDir, "allowed_signers")
+	if err := os.WriteFile(mismatchedAllowed, []byte(`test@example.com namespaces="git" `+string(otherPub)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, dir, "config", "gpg.ssh.allowedSignersFile", mismatchedAllowed)
+
+	cmd := exec.Command(bin, "tag", "create", "1.4.0", "--shape", "vX.Y.Z")
+	cmd.Dir = dir
+	cmd.Env = gitStubFailingOn(t, "tag", "-d")
+	out, _ := cmd.Output()
+	exit := cmd.ProcessState.ExitCode()
+	var r wireResult
+	if err := json.Unmarshal(out, &r); err != nil {
+		t.Fatalf("output is not valid JSON: %v\nraw: %s", err, out)
+	}
+
+	if r.Status != "internal" || exit != 90 {
+		t.Fatalf("status=%s exit=%d, want internal/90: %+v", r.Status, exit, r)
+	}
+	message, _ := r.Errors[0]["message"].(string)
+	if !strings.Contains(message, "rollback delete also failed") {
+		t.Fatalf("governing error message %q does not say the rollback delete also failed", message)
+	}
+	if !strings.Contains(message, "git tag -d v1.4.0") {
+		t.Fatalf("governing error message %q does not name the manual `git tag -d` fallback", message)
+	}
+	if tags := localTags(t, dir); tags != "v1.4.0" {
+		t.Fatalf("tag=%q, want the unsigned-off tag still present locally since its delete never actually ran", tags)
 	}
 	if out, err := exec.Command("git", "-C", bare, "tag", "-l").CombinedOutput(); err != nil {
 		t.Fatalf("git tag -l: %v\n%s", err, out)
