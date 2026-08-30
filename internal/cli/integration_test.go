@@ -21,8 +21,8 @@ import (
 // lives outside any single test's t.TempDir().
 func TestMain(m *testing.M) {
 	code := m.Run()
-	if cliBinPath != "" {
-		os.RemoveAll(filepath.Dir(cliBinPath))
+	if cliBinDir != "" {
+		os.RemoveAll(cliBinDir)
 	}
 	os.Exit(code)
 }
@@ -35,6 +35,9 @@ const plantedAWSAccessKeyID = "AKIA" + "TESTKEY1234567Z9"
 
 var (
 	cliBinOnce sync.Once
+	// cliBinDir is tracked separately from cliBinPath so TestMain still
+	// removes the temp directory when the build itself fails.
+	cliBinDir  string
 	cliBinPath string
 	cliBinErr  error
 )
@@ -50,6 +53,7 @@ func buildCLI(t *testing.T) string {
 			cliBinErr = err
 			return
 		}
+		cliBinDir = dir
 		bin := filepath.Join(dir, "git-tools")
 		repoRoot, err := filepath.Abs("../..")
 		if err != nil {

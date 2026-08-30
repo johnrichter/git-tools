@@ -38,7 +38,10 @@ names="$work/names.txt"
 
 # The full set of top-level tests this run is responsible for, known up
 # front so "remaining" never requires the caller to guess or recount.
-go test -list '.*' "$package" | grep -v '^ok' > "$names" || true
+# Keep only test-name-shaped lines: `go test -list` also prints per-package
+# status lines (`ok`, `?  ... [no test files]`, `FAIL ... [setup failed]`)
+# that would otherwise be counted as tests.
+go test -list '.*' "$package" | grep -E '^(Test|Benchmark|Fuzz|Example)' > "$names" || true
 total=$(wc -l < "$names" | tr -d ' ')
 
 start=$(date +%s)
@@ -50,9 +53,12 @@ elapsed=$(( $(date +%s) - start ))
 
 # Top-level (non-subtest) results only: a subtest's Test field contains a
 # "/", and only top-level names appear in the -list census above.
-completed_names=$(jq -r 'select(.Action=="pass" or .Action=="fail" or .Action=="skip") | select(.Test != null and (.Test | contains("/") | not)) | .Test' "$events" | sort -u)
+# Read line-by-line with `fromjson?` rather than as a JSON stream: killing
+# `go test -json` mid-write truncates the last line, and a hard jq parse
+# error there would suppress the very report this script exists to print.
+completed_names=$(jq -rR 'fromjson? | select(.Action=="pass" or .Action=="fail" or .Action=="skip") | select(.Test != null and (.Test | contains("/") | not)) | .Test' "$events" | sort -u)
 completed=$(printf '%s\n' "$completed_names" | grep -c . || true)
-failed=$(jq -r 'select(.Action=="fail") | select(.Test != null and (.Test | contains("/") | not)) | .Test' "$events" | sort -u | grep -c . || true)
+failed=$(jq -rR 'fromjson? | select(.Action=="fail") | select(.Test != null and (.Test | contains("/") | not)) | .Test' "$events" | sort -u | grep -c . || true)
 
 # A clean exit from `go test` itself (not from the timeout(1) wrapper)
 # means the whole census ran and passed; report that plainly rather than
@@ -82,15 +88,34 @@ suggested_timeout_str="${suggested_timeout}s"
 
 resume_run=$(printf '^(%s)$' "$(printf '%s' "$remaining_names" | paste -sd '|' -)")
 
+extra_suffix=""
+if [ "${#extra_args[@]}" -gt 0 ]; then
+  extra_suffix=" ${extra_args[*]}"
+fi
+
 {
-  printf 'FAIL - %s did not finish within %s (exit %d)\n' "$package" "$budget" "$run_status"
+  # `timeout --signal=KILL` shows up as exit 137; any other non-zero status
+  # is `go test` itself failing, which is a different thing to report.
+  if [ "$run_status" -eq 137 ]; then
+    printf 'FAIL - %s did not finish within %s (killed, exit 137)\n' "$package" "$budget"
+  else
+    printf 'FAIL - %s: go test exited %d\n' "$package" "$run_status"
+  fi
   printf '  tests completed:  %d/%d\n' "$completed" "$total"
   printf '  tests remaining:  %d\n' "$remaining"
   printf '  tests failed:     %d\n' "$failed"
   printf '  elapsed:          %ds\n' "$elapsed"
-  printf '  ETA to finish remaining: ~%ds\n' "$eta"
-  printf '  resume command:\n'
-  printf "    go test -run '%s' -timeout %s %s %s\n" "$resume_run" "$suggested_timeout_str" "$package" "${extra_args[*]}"
+  # Only offer a resume command when there is something left to resume: an
+  # empty -run regex would match nothing and pass vacuously.
+  if [ "$total" -eq 0 ]; then
+    printf '  no census: go test -list found no tests for this package (build failure?), so there is nothing to resume\n'
+  elif [ "$remaining" -eq 0 ]; then
+    printf '  every test in the census ran; nothing to resume\n'
+  else
+    printf '  ETA to finish remaining: ~%ds\n' "$eta"
+    printf '  resume command:\n'
+    printf "    go test -run '%s' -timeout %s %s%s\n" "$resume_run" "$suggested_timeout_str" "$package" "$extra_suffix"
+  fi
 } >&2
 
 exit 1
