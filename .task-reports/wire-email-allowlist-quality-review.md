@@ -167,3 +167,71 @@ three by hand against the built binary.
   introduced, without weakening the check.
 - Consider adding a `go mod tidy` check to `.github/workflows/ci.yml`; this
   release's one real defect would have been caught by it.
+
+## Release: v1.4.0 (tagged at 9ad0812)
+
+Landed `chore/wire-email-allowlist` into `main` via
+`git-tools merge` + `git-tools push main` (fast-forward to 9ad0812), re-ran
+the full suite on that exact commit (`go build`, `go vet`,
+`go test ./... -count=1` — all green), then
+`git-tools tag create 1.4.0 --shape vX.Y.Z`.
+
+### Why minor, not patch or major
+
+Patch is wrong: v1.4.0 carries a config surface that takes effect for the
+first time and a changed default scan posture. A strict semver reading would
+argue major, since v1.3.0 shipped `employee_email_domains` and
+`employee_email_allowlist` as working keys and this release removes both (a
+config that still sets them is now silently ignored), and since the default
+posture gets stricter. Minor is nonetheless the right call on the evidence:
+every live consumer config in the platform (`ai-shared-lib-datadog`,
+`knowledge-private-datadog`, `marketplace-datadog`) already uses the new
+`allowed_email_domains` key and none sets either removed key, so nothing
+in-fleet breaks; the module exports no changed Go API (only `cmd/`,
+`internal/`, and an untouched `worktree-gate/`); and it matches this repo's
+own v1.0.0 → v1.3.0 all-minor cadence.
+
+### Consumer-visible changes since v1.3.0
+
+`git log v1.3.0..main` is 12 commits; the source diff is only
+`internal/cli/{config.go,scan.go,integration_test.go}` (+56/-56).
+
+1. **New config key `allowed_email_domains`** (af707fb, 33598ce) — replaces
+   `employee_email_domains` and `employee_email_allowlist`, which are removed.
+   A repo names the mail domains its own people use; those domains stop being
+   flagged as internal identifiers. Resolves through all three layers (file,
+   `GITTOOLS_ALLOWED_EMAIL_DOMAINS`, default).
+2. **Public-tier employee-email check is now always on** (316f06b, via
+   `go/githooks` v0.6.1 → v0.7.0) — previously off unless a repo configured
+   domains, and deny-list polarity. Now every email-shaped string is a
+   candidate internal identifier unless its domain is `example.com` or is
+   named in `allowed_email_domains`. Matching is literal and
+   case-insensitive; subdomains of an allowed domain are **not** covered.
+   Practical effect: `git@github.com:owner/repo` SSH URLs in docs now warn
+   (12 such warnings in marketplace, 22 in git-tools itself). Warnings, not
+   failures — landing verbs only refuse under `strict: true`, which no
+   consumer sets.
+3. **Dependency repin** (316f06b): `go/githooks` v0.6.1 → v0.7.0, plus the
+   `go.sum` tidy in this review (9ad0812). No other dependency moved.
+4. **Report-only commits** (c38660d, bf31e70, 2c6ab4f, 8124bad, 9295c61,
+   b4f61ce, 1d01991, a4b01f9, 4fdf217): the D8 `check_privacy.py` shim
+   implementation and two quality reviews (the shim code itself lives in the
+   six consumer repos, not here), and retroactive test-engineer verification
+   of the D4 lint-guard widening, the D8 privacy-scan migration, and the
+   v1.3.0 release point. No behavior change.
+5. **Self-scan hygiene** (5ffba87): fragment-split literal AWS-key-shaped
+   strings inside a report so git-tools' own secret scan stays clean.
+   Affects this repo's scans of itself, not consumers.
+
+Correction to the task framing: the D4 lint-guard widening itself is **not**
+in this range — it shipped in v1.3.0, and only its retroactive verification
+report landed since.
+
+### Publication
+
+`SC-DISTRIBUTION release` run 33339040395 completed successfully in 54s.
+Release `v1.4.0` carries 11 assets: 8 platform tarballs (`git-tools` and
+`worktree-gate` x darwin/linux x amd64/arm64), `checksums.txt`,
+`contract-digests.txt`, and `binary-checksums.txt`. Downloaded
+`binary-checksums.txt` fresh: **8 rows**, one per platform binary, as
+expected (4 platforms x 2 binaries).
