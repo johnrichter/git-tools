@@ -5,12 +5,12 @@ Fix two pre-existing golangci-lint `errcheck` failures breaking CI on main.
 ## What changed
 
 - `internal/cli/integration_test.go:25` — `os.RemoveAll(cliBinDir)` → `_ = os.RemoveAll(cliBinDir)`.
-  Best-effort teardown of a shared scratch binary directory in `TestMain`; a
+  Best-effort teardown of a shared scratch binary directory in `TestMain`. A
   failure here has nothing meaningful to act on.
 - `internal/commitmsg/commitmsg.go:69` — `defer os.Remove(tmp.Name())` →
   `defer func() { _ = os.Remove(tmp.Name()) }()`. Best-effort cleanup of a
-  scratch temp file used to feed a commit-msg hook; deferred, so there's no
-  caller left to report an error to.
+  scratch temp file used to feed a commit-msg hook. The call is deferred, so
+  there is no caller left to report an error to.
 
 No established repo-wide pattern for this exact shape (ignored cleanup
 error) was found — other `os.Remove`/`os.RemoveAll` call sites in the repo
@@ -54,7 +54,7 @@ successfully — no need to defer to CI for confirmation.
 
 ## Hand-off notes
 
-- Both fixes are cleanup-only; no behavior change to test for beyond
+- Both fixes are cleanup-only. No behavior change to test for beyond
   confirming the existing test suites still pass (they do, see above).
 - Quality reviewer: confirm the anonymous-func wrapping in commitmsg.go
   reads as idiomatic Go for this codebase and doesn't warrant a named
