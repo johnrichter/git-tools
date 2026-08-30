@@ -7,6 +7,9 @@
 package cli_test
 
 import (
+	"encoding/json"
+	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -151,6 +154,179 @@ func TestTagCreate_SignsRegardlessOfForceSignAnnotated(t *testing.T) {
 	}
 }
 
+// TestTagCreate_NoSigningKey_RefusesBeforeAttemptingToSign proves the
+// precondition check ahead of "git tag -s": with no key resolved, create
+// refuses by name at exit 30 rather than letting "git tag -s" fail and
+// surface as create's one generic internal tag_create_failed code.
+func TestTagCreate_NoSigningKey_RefusesBeforeAttemptingToSign(t *testing.T) {
+	bin := buildCLI(t)
+	dir := signingRepo(t)
+	newBareRemote(t, dir)
+	breakSigningKey(t, dir)
+
+	r, exit := runCLIIn(t, bin, dir, "tag", "create", "1.4.0", "--shape", "vX.Y.Z")
+	if r.Status != "precondition_unmet" || exit != 30 {
+		t.Fatalf("status=%s exit=%d, want precondition_unmet/30: %+v", r.Status, exit, r)
+	}
+	if code, _ := r.Errors[0]["code"].(string); code != "precondition_unmet.git.signing_key_unresolved" {
+		t.Fatalf("refusal code=%q, want precondition_unmet.git.signing_key_unresolved: %+v", code, r.Errors[0])
+	}
+	if tags := localTags(t, dir); tags != "" {
+		t.Fatalf("refused create left a local tag behind: %q", tags)
+	}
+}
+
+// trustOnlyAnUnrelatedKey points dir's gpg.ssh.allowedSignersFile at a
+// freshly minted key pair that has nothing to do with the one signingRepo
+// configured for signing. That splits the two signing checks apart, which is
+// what makes the verify-failure path reachable at all: "git tag -s" never
+// consults the allowed-signers file, so signing still succeeds, while "git
+// tag -v" does consult it, so verification fails every time.
+func trustOnlyAnUnrelatedKey(t *testing.T, dir string) {
+	t.Helper()
+	keyDir := t.TempDir()
+	key := filepath.Join(keyDir, "unrelated-key")
+	if out, err := exec.Command("ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "unrelated", "-f", key).CombinedOutput(); err != nil {
+		t.Fatalf("ssh-keygen: %v\n%s", err, out)
+	}
+	pub, err := os.ReadFile(key + ".pub")
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowed := filepath.Join(keyDir, "allowed_signers")
+	if err := os.WriteFile(allowed, []byte(`test@example.com namespaces="git" `+string(pub)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, dir, "config", "gpg.ssh.allowedSignersFile", allowed)
+}
+
+// TestTagCreate_FailedPostCreationVerification_RollsBackAndRefuses forces
+// the one failure the up-front signing check cannot catch: signing succeeds
+// (the repository can produce a signature), but the tag's own signature does
+// not verify, because the allowed-signers file trusts a different key than
+// the one that actually signed it. create must delete the tag it just made
+// and refuse rather than push it — and, since that rollback leaves the
+// repository exactly as it was found, refuse as an unmet precondition (30),
+// not an internal fault.
+func TestTagCreate_FailedPostCreationVerification_RollsBackAndRefuses(t *testing.T) {
+	bin := buildCLI(t)
+	dir := signingRepo(t)
+	bare := newBareRemote(t, dir)
+	trustOnlyAnUnrelatedKey(t, dir)
+
+	r, exit := runCLIIn(t, bin, dir, "tag", "create", "1.4.0", "--shape", "vX.Y.Z")
+	if r.Status != "precondition_unmet" || exit != 30 {
+		t.Fatalf("status=%s exit=%d, want precondition_unmet/30: %+v", r.Status, exit, r)
+	}
+	if code, _ := r.Errors[0]["code"].(string); code != "precondition_unmet.git.tag_signature_unverified" {
+		t.Fatalf("refusal code=%q, want precondition_unmet.git.tag_signature_unverified: %+v", code, r.Errors[0])
+	}
+	message, _ := r.Errors[0]["message"].(string)
+	if !strings.Contains(message, "failed its own post-creation signature verification") || !strings.Contains(message, "rolled back") {
+		t.Fatalf("governing error message %q does not describe the verification failure and rollback", message)
+	}
+	if tags := localTags(t, dir); tags != "" {
+		t.Fatalf("a tag that failed verification was not rolled back locally: %q", tags)
+	}
+	if out, err := exec.Command("git", "-C", bare, "tag", "-l").CombinedOutput(); err != nil {
+		t.Fatalf("git tag -l: %v\n%s", err, out)
+	} else if strings.TrimSpace(string(out)) != "" {
+		t.Fatalf("a tag that failed verification reached the remote: %q", out)
+	}
+}
+
+// gitStubFailingOn writes a "git" shim ahead of the real one on PATH: it
+// forwards every invocation to the real git binary except one whose leading
+// arguments exactly match failArgs, which it refuses outright without
+// touching the real git at all. Deterministically forcing "git tag -d" to
+// fail (the one case this task's rollback cannot self-heal) has no other
+// realistic hook: it isn't gated by any git-config the test could flip, and
+// racing a chmod against the real create/verify/delete sequence inside a
+// single CLI invocation would be a flake, not a proof. Interposing on the
+// binary the CLI actually spawns is the deterministic version of the same
+// idea sysops.Run already relies on: whatever resolves off PATH as "git" is
+// what runs.
+func gitStubFailingOn(t *testing.T, failArgs ...string) []string {
+	t.Helper()
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatalf("git not found on PATH: %v", err)
+	}
+	binDir := t.TempDir()
+	stub := filepath.Join(binDir, "git")
+	match := strings.Join(failArgs, " ")
+	script := fmt.Sprintf(`#!/bin/sh
+case " $* " in
+  *" %s "*) echo "fatal: simulated failure (test stub) for: $*" >&2; exit 1 ;;
+esac
+exec "%s" "$@"
+`, match, realGit)
+	if err := os.WriteFile(stub, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	env := os.Environ()
+	for i, kv := range env {
+		if strings.HasPrefix(kv, "PATH=") {
+			env[i] = "PATH=" + binDir + string(os.PathListSeparator) + strings.TrimPrefix(kv, "PATH=")
+			return env
+		}
+	}
+	t.Fatal("no PATH in environment")
+	return nil
+}
+
+// TestTagCreate_RollbackDeleteAlsoFails_NamesManualCommand forces the one
+// path TestTagCreate_FailedPostCreationVerification_RollsBackAndRefuses
+// cannot reach: "git tag -v" fails (same mismatched-allowed-signers setup),
+// and the "git tag -d" rollback that follows also fails. create cannot
+// self-heal that, so its triage must name the exact manual command
+// ("git tag -d <name>") for a caller to finish the job by hand — and, since
+// the delete never actually ran, the tag must still be sitting there
+// locally afterward for that command to act on. This is the one branch of
+// the pair that stays "internal" (90): unlike its sibling, it leaves
+// residue create cannot unwind, so it is not the clean precondition
+// refusal that sibling reports at 30.
+func TestTagCreate_RollbackDeleteAlsoFails_NamesManualCommand(t *testing.T) {
+	bin := buildCLI(t)
+	dir := signingRepo(t)
+	bare := newBareRemote(t, dir)
+	trustOnlyAnUnrelatedKey(t, dir)
+
+	cmd := exec.Command(bin, "tag", "create", "1.4.0", "--shape", "vX.Y.Z")
+	cmd.Dir = dir
+	cmd.Env = gitStubFailingOn(t, "tag", "-d")
+	out, _ := cmd.Output()
+	exit := cmd.ProcessState.ExitCode()
+	var r wireResult
+	if err := json.Unmarshal(out, &r); err != nil {
+		t.Fatalf("output is not valid JSON: %v\nraw: %s", err, out)
+	}
+
+	if r.Status != "internal" || exit != 90 {
+		t.Fatalf("status=%s exit=%d, want internal/90: %+v", r.Status, exit, r)
+	}
+	if code, _ := r.Errors[0]["code"].(string); code != "internal.git.tag_rollback_failed" {
+		t.Fatalf("refusal code=%q, want internal.git.tag_rollback_failed: %+v", code, r.Errors[0])
+	}
+	message, _ := r.Errors[0]["message"].(string)
+	if !strings.Contains(message, "rollback delete also failed") {
+		t.Fatalf("governing error message %q does not say the rollback delete also failed", message)
+	}
+	triage, _ := r.Errors[0]["triage"].(map[string]any)
+	instruction, _ := triage["instruction"].(string)
+	if !strings.Contains(instruction, "git tag -d v1.4.0") {
+		t.Fatalf("triage does not name the manual `git tag -d` fallback: %+v", triage)
+	}
+	if tags := localTags(t, dir); tags != "v1.4.0" {
+		t.Fatalf("tag=%q, want the unsigned-off tag still present locally since its delete never actually ran", tags)
+	}
+	if out, err := exec.Command("git", "-C", bare, "tag", "-l").CombinedOutput(); err != nil {
+		t.Fatalf("git tag -l: %v\n%s", err, out)
+	} else if strings.TrimSpace(string(out)) != "" {
+		t.Fatalf("a tag that failed verification reached the remote: %q", out)
+	}
+}
+
 func TestTagCreate_PrefixedShape_CreatesAndPushes(t *testing.T) {
 	bin := buildCLI(t)
 	dir := initRepo(t)
@@ -283,7 +459,7 @@ func TestTagCreate_UnreachableRemote_FailsCleanly(t *testing.T) {
 	}
 }
 
-// TestTagCreate_ExitCodeTable pins the full 0/40/41/50/90 contract create's
+// TestTagCreate_ExitCodeTable pins the full 0/30/40/41/50/90 contract create's
 // own --help documents against one representative case per code (60,
 // transient, is pinned separately in push's own diverged-history test: the
 // underlying rejection path is identical, and reproducing a genuine
