@@ -30,6 +30,28 @@ var gitToolsSkipRules = append(append([]fsx.Rule(nil), githooks.DefaultSkipRules
 	Class:   githooks.SkipClass,
 })
 
+// codeMarkerExemptSuffixes are source-file extensions exempt from the
+// frontmatter-marker check by default, in every repo, with no config needed:
+// each legitimately embeds a literal "privacy:"/"owner:" string as source
+// text — a scanner's own pattern definition, a test's own fixture literal —
+// never as that file's real sensitivity/owner declaration. The secret and
+// internal-identifier checks still run on these files unchanged; only the
+// marker check is exempt.
+var codeMarkerExemptSuffixes = []string{
+	".py", ".go", ".sh", ".bash", ".rb", ".js", ".ts", ".java", ".rs", ".c", ".h", ".cpp",
+}
+
+// codeMarkerExemptRules is codeMarkerExemptSuffixes rendered as the
+// fsx.Rule ruleset privacyMarkerExemptRules always includes, ahead of any
+// repo-configured privacy_marker_exempt prefix.
+var codeMarkerExemptRules = func() []fsx.Rule {
+	rules := make([]fsx.Rule, len(codeMarkerExemptSuffixes))
+	for i, suffix := range codeMarkerExemptSuffixes {
+		rules[i] = fsx.Rule{Pattern: "**/*" + suffix, Class: githooks.SkipClass}
+	}
+	return rules
+}()
+
 func newScanCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "scan",
@@ -189,14 +211,16 @@ func malformedPrivacyMarkerExempt(prefixes []string) (string, bool) {
 
 // privacyMarkerExemptRules converts cfg's privacy_marker_exempt path-prefix
 // list into the fsx.Rule ruleset githooks.PrivacyOptions.MarkerExemptRules
-// expects. Each prefix exempts both itself, as a single named file, and
-// everything under it, as a directory — a consuming repo's test/eval fixture
-// path can name either shape without knowing which glob githooks needs. This
-// only ever feeds MarkerExemptRules, never SkipRules: an exempt path still
-// gets the secret and internal-identifier scan, just not the frontmatter-
-// marker check.
+// expects, ahead of which it always includes codeMarkerExemptRules: a source
+// file is marker-exempt in every repo, with no config needed, regardless of
+// what privacy_marker_exempt names. Each configured prefix exempts both
+// itself, as a single named file, and everything under it, as a directory —
+// a consuming repo's test/eval fixture path can name either shape without
+// knowing which glob githooks needs. This only ever feeds MarkerExemptRules,
+// never SkipRules: an exempt path still gets the secret and
+// internal-identifier scan, just not the frontmatter-marker check.
 func privacyMarkerExemptRules(prefixes []string) []fsx.Rule {
-	var rules []fsx.Rule
+	rules := append([]fsx.Rule(nil), codeMarkerExemptRules...)
 	for _, p := range prefixes {
 		trimmed := strings.TrimSuffix(p, "/")
 		rules = append(rules,

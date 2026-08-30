@@ -58,3 +58,40 @@ func TestGitToolsSkipRules_IsDefensiveCopyOfDefaultSkipRules(t *testing.T) {
 		t.Fatal("gitToolsSkipRules shares its backing array with githooks.DefaultSkipRules — mutating one through its shared storage could mutate the other")
 	}
 }
+
+// TestCodeMarkerExemptRules_MatchesEveryCodeSuffixAnywhereInTree proves each
+// codeMarkerExemptRules pattern matches its own suffix at any depth,
+// including at the scanned root (unlike gitToolsSkipRules' root-anchored
+// worktree pattern, this exemption must fire wherever a source file sits),
+// and does not match an unrelated suffix or a suffix that merely appears
+// mid-name rather than as the file's own extension.
+func TestCodeMarkerExemptRules_MatchesEveryCodeSuffixAnywhereInTree(t *testing.T) {
+	if len(codeMarkerExemptRules) != len(codeMarkerExemptSuffixes) {
+		t.Fatalf("codeMarkerExemptRules has %d rules, want one per suffix (%d)", len(codeMarkerExemptRules), len(codeMarkerExemptSuffixes))
+	}
+	for i, suffix := range codeMarkerExemptSuffixes {
+		rule := codeMarkerExemptRules[i]
+		if rule.Class != githooks.SkipClass {
+			t.Fatalf("codeMarkerExemptRules[%d].Class = %q, want githooks.SkipClass", i, rule.Class)
+		}
+		cases := []struct {
+			path string
+			want bool
+		}{
+			{"check_privacy" + suffix, true},
+			{"scripts/check_privacy" + suffix, true},
+			{"a/b/c" + suffix, true},
+			{"check_privacy" + suffix + ".bak", false},
+			{"check_privacy.md", false},
+		}
+		for _, c := range cases {
+			matched, err := doublestar.Match(rule.Pattern, c.path)
+			if err != nil {
+				t.Fatalf("doublestar.Match(%q, %q): %v", rule.Pattern, c.path, err)
+			}
+			if matched != c.want {
+				t.Errorf("suffix %s: doublestar.Match(%q, %q) = %v, want %v", suffix, rule.Pattern, c.path, matched, c.want)
+			}
+		}
+	}
+}
