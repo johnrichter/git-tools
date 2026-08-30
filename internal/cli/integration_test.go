@@ -7,12 +7,25 @@ package cli_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
+
+// TestMain builds git-tools once (see buildCLI) and cleans up the shared
+// binary's temp directory after the whole package's tests finish, since it
+// lives outside any single test's t.TempDir().
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if cliBinPath != "" {
+		os.RemoveAll(filepath.Dir(cliBinPath))
+	}
+	os.Exit(code)
+}
 
 // plantedAWSAccessKeyID is an AWS-access-key-id-shaped string that ScanSecrets
 // and ScanPrivacy still flag: githooks carries an exact-match exemption for
@@ -20,22 +33,41 @@ import (
 // detection needs a different 20-character AKIA id.
 const plantedAWSAccessKeyID = "AKIA" + "TESTKEY1234567Z9"
 
-// buildCLI compiles git-tools once per test binary run and returns the path
-// to the resulting executable.
+var (
+	cliBinOnce sync.Once
+	cliBinPath string
+	cliBinErr  error
+)
+
+// buildCLI compiles git-tools once for the whole test binary run (guarded by
+// cliBinOnce) and returns the path to the resulting executable. Every test
+// case shares this one binary instead of paying for its own `go build`.
 func buildCLI(t *testing.T) string {
 	t.Helper()
-	bin := filepath.Join(t.TempDir(), "git-tools")
-	repoRoot, err := filepath.Abs("../..")
-	if err != nil {
-		t.Fatal(err)
+	cliBinOnce.Do(func() {
+		dir, err := os.MkdirTemp("", "git-tools-cli-test-")
+		if err != nil {
+			cliBinErr = err
+			return
+		}
+		bin := filepath.Join(dir, "git-tools")
+		repoRoot, err := filepath.Abs("../..")
+		if err != nil {
+			cliBinErr = err
+			return
+		}
+		cmd := exec.Command("go", "build", "-o", bin, "./cmd/git-tools")
+		cmd.Dir = repoRoot
+		if out, err := cmd.CombinedOutput(); err != nil {
+			cliBinErr = fmt.Errorf("go build git-tools: %w\n%s", err, out)
+			return
+		}
+		cliBinPath = bin
+	})
+	if cliBinErr != nil {
+		t.Fatal(cliBinErr)
 	}
-	cmd := exec.Command("go", "build", "-o", bin, "./cmd/git-tools")
-	cmd.Dir = repoRoot
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("go build git-tools: %v\n%s", err, out)
-	}
-	return bin
+	return cliBinPath
 }
 
 type wireResult struct {
