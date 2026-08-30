@@ -12,12 +12,15 @@ Fix two pre-existing golangci-lint `errcheck` failures breaking CI on main.
   scratch temp file used to feed a commit-msg hook. The call is deferred, so
   there is no caller left to report an error to.
 
-No established repo-wide pattern for this exact shape (ignored cleanup
-error) was found — other `os.Remove`/`os.RemoveAll` call sites in the repo
+The `os.Remove`/`os.RemoveAll` call sites in the repo
 (`worktree-gate/lifecycle/reap.go`, `reap.go` tests, `activity.go`) all check
 and propagate the error meaningfully, which doesn't apply here since these
 two are deliberate best-effort cleanups. Used the minimal `_ = ...`
-suppression called out as the fallback in the task instructions.
+suppression, which is the established repo dialect for a discarded error
+(`worktree-gate/lifecycle/reap.go:78,117,145`,
+`worktree-gate/detect/hook.go:72,84`) — and for the deferred variant
+specifically, `worktree-gate/lifecycle/lock.go:50`
+(`defer func() { _ = fl.Unlock() }()`) is an exact-shape precedent.
 
 ## Acceptance
 
@@ -43,9 +46,9 @@ successfully — no need to defer to CI for confirmation.
 
 ## Assumptions & deviations
 
-- No existing repo pattern for ignored cleanup errors of this exact shape
-  existed to match, so used `_ = ...`, the fallback explicitly authorized by
-  the task instructions.
+- Used `_ = ...`, the fallback explicitly authorized by the task
+  instructions, which also matches the repo's existing dialect for discarded
+  errors — including `lock.go:50` for the deferred-cleanup shape.
 - For the deferred call in `commitmsg.go`, wrapped in an anonymous func
   (`defer func() { _ = os.Remove(tmp.Name()) }()`) since `defer _ =
   os.Remove(...)` is not valid Go syntax — `defer` requires a function call
@@ -56,7 +59,7 @@ successfully — no need to defer to CI for confirmation.
 
 - Both fixes are cleanup-only. No behavior change to test for beyond
   confirming the existing test suites still pass (they do, see above).
-- Quality reviewer: confirm the anonymous-func wrapping in commitmsg.go
-  reads as idiomatic Go for this codebase and doesn't warrant a named
-  helper (none exists elsewhere in the repo for this shape, so inline is
-  consistent with there being no precedent to follow).
+- Quality reviewer: confirmed. The inline anonymous func matches
+  `worktree-gate/lifecycle/lock.go:50` character-for-character in form; no
+  named helper is warranted. See
+  `.task-reports/fix-lint-errcheck-quality-review.md`.
