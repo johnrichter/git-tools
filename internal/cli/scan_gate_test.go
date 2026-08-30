@@ -346,7 +346,9 @@ func TestScanGate_MarkerBlocksTagCreate(t *testing.T) {
 // exemption merge and push honor also releases create's own gate.
 func TestScanGate_PrivacyMarkerExemptConfigAllowsTagCreate(t *testing.T) {
 	bin := buildCLI(t)
-	dir := initRepo(t)
+	// create signs the tag it makes; see
+	// TestTagCreate_BareShape_CreatesAndPushes in tag_test.go.
+	dir := signingRepo(t)
 	writeConfig(t, dir, "privacy_marker_exempt:\n  - fixtures\n")
 	newBareRemote(t, dir)
 	tip := commitNestedFile(t, dir, "fixtures/sample.md", markerFrontmatter, "add fixture sample")

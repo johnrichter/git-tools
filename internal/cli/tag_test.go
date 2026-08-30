@@ -108,7 +108,10 @@ func TestTagCreate_RetargetingFlagsRefused(t *testing.T) {
 
 func TestTagCreate_BareShape_CreatesAndPushes(t *testing.T) {
 	bin := buildCLI(t)
-	dir := initRepo(t)
+	// create always signs the tag it makes, so this fixture needs a signing
+	// key that resolves under isolation from the host's own config --
+	// signingRepo's local ephemeral key, not initRepo's unsigned setup.
+	dir := signingRepo(t)
 	bare := newBareRemote(t, dir)
 
 	r, exit := runCLIIn(t, bin, dir, "tag", "create", "1.4.0", "--shape", "vX.Y.Z")
@@ -329,7 +332,8 @@ func TestTagCreate_RollbackDeleteAlsoFails_NamesManualCommand(t *testing.T) {
 
 func TestTagCreate_PrefixedShape_CreatesAndPushes(t *testing.T) {
 	bin := buildCLI(t)
-	dir := initRepo(t)
+	// create always signs the tag it makes; see TestTagCreate_BareShape_CreatesAndPushes.
+	dir := signingRepo(t)
 	bare := newBareRemote(t, dir)
 
 	r, exit := runCLIIn(t, bin, dir, "tag", "create", "0.4.0", "--shape", "go/toolchain/vX.Y.Z")
@@ -366,7 +370,8 @@ func TestTagCreate_PinnedShapeForms_MatchLanguageToolsContract(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.shape, func(t *testing.T) {
-			dir := initRepo(t)
+			// create always signs the tag it makes; see TestTagCreate_BareShape_CreatesAndPushes.
+			dir := signingRepo(t)
 			newBareRemote(t, dir)
 			r, exit := runCLIIn(t, bin, dir, "tag", "create", tc.version, "--shape", tc.shape)
 			if r.Status != "success" || exit != 0 {
@@ -381,7 +386,9 @@ func TestTagCreate_PinnedShapeForms_MatchLanguageToolsContract(t *testing.T) {
 
 func TestTagCreate_ExistingTag_RefusedCleanly(t *testing.T) {
 	bin := buildCLI(t)
-	dir := initRepo(t)
+	// The first create below must sign successfully; see
+	// TestTagCreate_BareShape_CreatesAndPushes.
+	dir := signingRepo(t)
 	bare := newBareRemote(t, dir)
 
 	if r, exit := runCLIIn(t, bin, dir, "tag", "create", "1.0.0", "--shape", "vX.Y.Z"); r.Status != "success" || exit != 0 {
@@ -410,7 +417,8 @@ func TestTagCreate_ExistingTag_RefusedCleanly(t *testing.T) {
 // from.
 func TestTagCreate_DetachedHEAD_Succeeds(t *testing.T) {
 	bin := buildCLI(t)
-	dir := initRepo(t)
+	// create always signs the tag it makes; see TestTagCreate_BareShape_CreatesAndPushes.
+	dir := signingRepo(t)
 	bare := newBareRemote(t, dir)
 	tip := runGit(t, dir, "rev-parse", "HEAD")
 	runGit(t, dir, "checkout", "-q", "--detach", tip)
@@ -433,7 +441,10 @@ func TestTagCreate_DetachedHEAD_Succeeds(t *testing.T) {
 // a local path nothing has ever created.
 func TestTagCreate_NoOriginRemote_FailsCleanly(t *testing.T) {
 	bin := buildCLI(t)
-	dir := initRepo(t) // newBareRemote is never called: no "origin" exists.
+	// create signs the tag locally before the failed push; see
+	// TestTagCreate_BareShape_CreatesAndPushes. newBareRemote is never
+	// called: no "origin" exists.
+	dir := signingRepo(t)
 
 	r, exit := runCLIIn(t, bin, dir, "tag", "create", "1.0.0", "--shape", "vX.Y.Z")
 	if r.Status != "internal" || exit != 90 {
@@ -446,7 +457,9 @@ func TestTagCreate_NoOriginRemote_FailsCleanly(t *testing.T) {
 
 func TestTagCreate_UnreachableRemote_FailsCleanly(t *testing.T) {
 	bin := buildCLI(t)
-	dir := initRepo(t)
+	// create signs the tag locally before the failed push; see
+	// TestTagCreate_BareShape_CreatesAndPushes.
+	dir := signingRepo(t)
 	unreachable := filepath.Join(t.TempDir(), "never-created.git")
 	runGit(t, dir, "remote", "add", "origin", unreachable)
 
@@ -476,7 +489,9 @@ func TestTagCreate_ExitCodeTable(t *testing.T) {
 		{
 			name: "success",
 			setup: func(t *testing.T) string {
-				dir := initRepo(t)
+				// create signs the tag it makes; see
+				// TestTagCreate_BareShape_CreatesAndPushes.
+				dir := signingRepo(t)
 				newBareRemote(t, dir)
 				return dir
 			},
@@ -526,7 +541,9 @@ func TestTagCreate_ExitCodeTable(t *testing.T) {
 		{
 			name: "internal: no remote to push to",
 			setup: func(t *testing.T) string {
-				return initRepo(t)
+				// create signs the tag locally before the failed push; see
+				// TestTagCreate_BareShape_CreatesAndPushes.
+				return signingRepo(t)
 			},
 			args:     []string{"tag", "create", "1.0.0", "--shape", "vX.Y.Z"},
 			wantExit: 90,

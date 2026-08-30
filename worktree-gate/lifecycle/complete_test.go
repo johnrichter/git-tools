@@ -13,7 +13,10 @@ import (
 )
 
 func TestComplete_MergesBackAndCleansUp(t *testing.T) {
-	repo := newScratchRepo(t)
+	// Complete's merge signs unsigned source commits before landing them, so
+	// this fixture needs a signing key that resolves under isolation from
+	// the host's own config.
+	repo := signableScratchRepo(t)
 	ctx := context.Background()
 
 	wt, err := Ensure(ctx, repo, "task-1")
@@ -47,7 +50,9 @@ func TestComplete_MergesBackAndCleansUp(t *testing.T) {
 }
 
 func TestComplete_KeepBranch(t *testing.T) {
-	repo := newScratchRepo(t)
+	// Complete's merge signs unsigned source commits before landing them; see
+	// TestComplete_MergesBackAndCleansUp.
+	repo := signableScratchRepo(t)
 	ctx := context.Background()
 
 	wt, err := Ensure(ctx, repo, "task-1")
@@ -139,7 +144,9 @@ func TestComplete_DirtyRefusalMatchesSharedRuleText(t *testing.T) {
 // branch itself is left intact rather than deleted out from under a merge
 // that never fully completed.
 func TestComplete_DirtyRefusalDoesNotUndoTheMerge(t *testing.T) {
-	repo := newScratchRepo(t)
+	// Complete's merge signs unsigned source commits before landing them; see
+	// TestComplete_MergesBackAndCleansUp.
+	repo := signableScratchRepo(t)
 	ctx := context.Background()
 
 	wt, err := Ensure(ctx, repo, "task-1")
@@ -164,7 +171,10 @@ func TestComplete_DirtyRefusalDoesNotUndoTheMerge(t *testing.T) {
 }
 
 func TestComplete_ConflictLeavesWorktreeIntact(t *testing.T) {
-	repo := newScratchRepo(t)
+	// Complete signs the source branch's unsigned commits before attempting
+	// the merge, ahead of the conflict this test provokes; see
+	// TestComplete_MergesBackAndCleansUp.
+	repo := signableScratchRepo(t)
 	ctx := context.Background()
 
 	wt, err := Ensure(ctx, repo, "task-1")

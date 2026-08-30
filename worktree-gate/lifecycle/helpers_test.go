@@ -56,6 +56,11 @@ func breakSigningKeyT(t *testing.T, dir string) {
 // lands next to it but still fully inside the test's isolated temp tree.
 func newScratchRepo(t *testing.T) string {
 	t.Helper()
+	// Isolate from the host's global/system git config, most importantly
+	// core.hooksPath -- without this, every commit below runs whatever hook
+	// the host has configured globally.
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
 	base := t.TempDir()
 	dir := filepath.Join(base, "repo")
 	if err := os.Mkdir(dir, 0o755); err != nil {

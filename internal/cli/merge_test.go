@@ -37,10 +37,23 @@ import (
 // gated range's fork point, and the gate must not care what sits below it.
 func signingRepo(t *testing.T) string {
 	t.Helper()
+	dir := initRepo(t)
+	configureSigningKey(t, dir)
+	runGit(t, dir, "config", "commit.gpgsign", "true")
+	return dir
+}
+
+// configureSigningKey gives dir a real, resolvable ssh signing key without
+// turning commit.gpgsign on — for fixtures whose ordinary commits must stay
+// unsigned (e.g. sign/resign's own tests, which prove those verbs turn an
+// unsigned commit into a signed one) but whose CLI-under-test invocation
+// still needs a key to sign with, isolated from the host's own config the
+// same way signingRepo is.
+func configureSigningKey(t *testing.T, dir string) {
+	t.Helper()
 	if _, err := exec.LookPath("ssh-keygen"); err != nil {
 		t.Fatalf("ssh-keygen is required to sign this fixture's commits: %v", err)
 	}
-	dir := initRepo(t)
 	keyDir := t.TempDir()
 	key := filepath.Join(keyDir, "signing-key")
 	if out, err := exec.Command("ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "git-tools signing fixture", "-f", key).CombinedOutput(); err != nil {
@@ -57,8 +70,6 @@ func signingRepo(t *testing.T) string {
 	runGit(t, dir, "config", "gpg.format", "ssh")
 	runGit(t, dir, "config", "user.signingkey", key+".pub")
 	runGit(t, dir, "config", "gpg.ssh.allowedSignersFile", allowed)
-	runGit(t, dir, "config", "commit.gpgsign", "true")
-	return dir
 }
 
 // featureWorktree adds a linked worktree on a new branch off main, commits one

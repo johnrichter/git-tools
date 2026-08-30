@@ -23,6 +23,11 @@ import (
 //     own no-work-loss guard, which runs unconditionally regardless of who
 //     is permitted to invoke it.
 func TestSDET_SC15_BranchDelete_GateSanctionsButGuardStillRefuses(t *testing.T) {
+	// Isolate from the host's global/system git config, most importantly
+	// core.hooksPath -- without this, every commit below runs whatever hook
+	// the host has configured globally.
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
 	bin := filepath.Join(t.TempDir(), "git-tools")
 	repoRoot, err := filepath.Abs("../..")
 	if err != nil {

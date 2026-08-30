@@ -91,6 +91,11 @@ func cgit(t *testing.T, dir string, args ...string) string {
 // an opened Repo.
 func cleanupFixture(t *testing.T) (string, *git.Repo) {
 	t.Helper()
+	// Isolate from the host's global/system git config, most importantly
+	// core.hooksPath -- without this, every commit below runs whatever hook
+	// the host has configured globally.
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
 	dir := t.TempDir()
 	cgit(t, dir, "init", "-q", "-b", "main")
 	cgit(t, dir, "config", "user.email", "t@example.com")

@@ -116,6 +116,13 @@ func runGit(t *testing.T, dir string, args ...string) string {
 // ephemeral signing key over this — merge signs what it lands.
 func initRepo(t *testing.T) string {
 	t.Helper()
+	// Isolate this fixture (and the CLI binary it drives) from the host's
+	// global/system git config, most importantly core.hooksPath: without
+	// this, every commit made here runs whatever hook the host has
+	// configured globally, which can dominate the test's wall time. Set at
+	// process level so it also reaches runCLI's subprocess.
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
 	dir := t.TempDir()
 	runGit(t, dir, "init", "-q", "-b", "main")
 	runGit(t, dir, "config", "user.name", "Test User")
@@ -198,7 +205,12 @@ func TestRequireRepo_NotAGitTree_IsNotFound(t *testing.T) {
 
 func TestSign_ResignsTipCommitWithIdenticalTree(t *testing.T) {
 	bin := buildCLI(t)
+	// sign turns an unsigned tip into a signed one, so this fixture's own
+	// commits must stay unsigned (unlike signingRepo) while still carrying a
+	// key that resolves under isolation from the host's own config, for
+	// `sign` itself to sign with.
 	dir := initRepo(t)
+	configureSigningKey(t, dir)
 	oldHead := commitFile(t, dir, "next.txt", "next\n", "next")
 	oldTree := runGit(t, dir, "rev-parse", "HEAD^{tree}")
 
@@ -230,7 +242,12 @@ func TestSign_RootCommit_IsUsageError(t *testing.T) {
 
 func TestResign_RangeAcrossBase(t *testing.T) {
 	bin := buildCLI(t)
+	// resign turns unsigned commits into signed ones, so this fixture's own
+	// commits must stay unsigned (unlike signingRepo) while still carrying a
+	// key that resolves under isolation from the host's own config, for
+	// `resign` itself to sign with.
 	dir := initRepo(t)
+	configureSigningKey(t, dir)
 	base := runGit(t, dir, "rev-parse", "HEAD")
 	commitFile(t, dir, "a.txt", "a\n", "a")
 	oldHead := commitFile(t, dir, "b.txt", "b\n", "b")
