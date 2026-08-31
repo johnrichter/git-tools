@@ -23,6 +23,19 @@ const (
 	fixtureLeakCreditCard = "41111111111111" + "11"
 )
 
+// fixtureNearMissInvalidAreaSSN and fixtureNearMissLuhnInvalidCard are
+// checksum-invalid near misses: an SSN with an invalid (000) area number, and
+// a credit-card number one digit off a Luhn-valid one. Mirrors the exact
+// fixture shapes go/githooks' own
+// TestScanCredentialsBaseConfigPIIFinancialRulesFireAndCategorize uses to
+// prove its pii-ssn/financial-credit-card-number rules don't over-match —
+// applied here at the git-tools CLI level, through the same scanCredentials
+// call the valid-fixture test above exercises.
+const (
+	fixtureNearMissInvalidAreaSSN  = "000-45-" + "6789"
+	fixtureNearMissLuhnInvalidCard = "4111111111111" + "12"
+)
+
 // testBetterleaksBinary returns the path to a real betterleaks binary for
 // this subprocess-level integration test, taken from the BETTERLEAKS_TEST_BIN
 // environment variable — the same provisioning convention githooks' own
@@ -82,5 +95,36 @@ func TestScanAll_ReportsNonZeroPIIAndFinancialCountsViaScanCredentials(t *testin
 	}
 	if !sawCard {
 		t.Fatalf("no reported error names leak.txt with rule financial-credit-card-number: %+v", r.Errors)
+	}
+}
+
+// TestScanAll_DoesNotFlagChecksumInvalidNearMissPIIFinancial proves the
+// pii-ssn/financial-credit-card-number rules reaching the CLI through
+// scanCredentials don't over-match on checksum-invalid near misses: an SSN
+// with an invalid area number and a card number one digit off Luhn-valid
+// must never surface as a finding, even though a genuine valid fixture
+// committed in the same repo does. Without this, a naive pattern-only rule
+// (or a scanner-side bug swallowing betterleaks' own checksum validation)
+// would silently flag anything digit-shaped as PII/financial.
+func TestScanAll_DoesNotFlagChecksumInvalidNearMissPIIFinancial(t *testing.T) {
+	bin := buildCLI(t)
+	betterleaksBin := testBetterleaksBinary(t)
+	dir := initRepo(t)
+	commitFile(t, dir, "leak.txt", "ssn: "+fixtureLeakSSN+"\ncard: "+fixtureLeakCreditCard+"\n", "add fixture leak")
+	commitFile(t, dir, "near_miss.txt",
+		"ssn: "+fixtureNearMissInvalidAreaSSN+"\ncard: "+fixtureNearMissLuhnInvalidCard+"\n",
+		"add near-miss fixture")
+	t.Setenv("GIT_TOOLS_BETTERLEAKS_BIN", betterleaksBin)
+
+	r, exit := runCLI(t, bin, "--repo", dir, "scan", "all")
+	if r.Status != "precondition_unmet" || exit != 30 {
+		t.Fatalf("status=%s exit=%d, want precondition_unmet/30 (leak.txt alone must still refuse): %+v", r.Status, exit, r)
+	}
+
+	for _, e := range r.Errors {
+		context, _ := e["context"].(map[string]any)
+		if path, _ := context["path"].(string); path == "near_miss.txt" {
+			t.Errorf("near_miss.txt must never be flagged (checksum-invalid PII/financial near miss), but got: %+v", e)
+		}
 	}
 }
