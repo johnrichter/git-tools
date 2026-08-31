@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/bmatcuk/doublestar/v4"
@@ -13,6 +14,100 @@ import (
 	"github.com/johnrichter/claude-shared-tooling/go/githooks"
 	"github.com/johnrichter/claude-shared-tooling/go/sysops"
 )
+
+// betterleaksBinEnvVar names the environment variable holding a resolved,
+// absolute path to the betterleaks binary the credential scan shells out to.
+// A path, never a $PATH lookup: this fleet's own governance plugin is
+// responsible for provisioning that binary and setting this variable — a
+// separate provisioning task, not this one — so git-tools itself only reads
+// it. Deliberately outside the GITTOOLS_* config-env prefix (envPrefix):
+// unlike privacy_tier/secret_scan_exempt and the rest of Config, this is not
+// a per-repo setting a git-tools.yaml or that prefix's env layer should ever
+// resolve — it is a provisioned runtime dependency's location, the same kind
+// of value an environment sets for a build tool's compiler path.
+const betterleaksBinEnvVar = "GIT_TOOLS_BETTERLEAKS_BIN"
+
+// resolveBetterleaksPath reads betterleaksBinEnvVar, returning "" and an
+// informational stderr note (never an error) when it is unset — the
+// credential scan degrades to a no-op until a governance plugin sets it,
+// rather than the process ever crashing or refusing to run over its absence.
+func resolveBetterleaksPath() string {
+	path := os.Getenv(betterleaksBinEnvVar)
+	if path == "" {
+		fmt.Fprintf(os.Stderr, "info: %s is not set; skipping the betterleaks-based credential scan\n", betterleaksBinEnvVar)
+	}
+	return path
+}
+
+// betterleaksExtraRules converts cfg's secret_scan_extra_rules entries into
+// the githooks.BetterleaksRule slice githooks.ScanCredentials' opts.ExtraRules
+// expects. Only ID and Regex carry through: githooks.BetterleaksRule has no
+// Category field, so every betterleaks finding is still tagged "credentials"
+// regardless of an extra rule's own Category (see Config.SecretScanExtraRules).
+func betterleaksExtraRules(rules []SecretScanExtraRule) []githooks.BetterleaksRule {
+	out := make([]githooks.BetterleaksRule, len(rules))
+	for i, r := range rules {
+		out[i] = githooks.BetterleaksRule{ID: r.ID, Regex: r.Regex}
+	}
+	return out
+}
+
+// betterleaksExtraAllowlist converts cfg's secret_scan_extra_allowlist
+// entries into the githooks.BetterleaksAllowlistEntry slice
+// githooks.ScanCredentials' opts.ExtraAllowlist expects.
+func betterleaksExtraAllowlist(entries []SecretScanExtraAllowlistEntry) []githooks.BetterleaksAllowlistEntry {
+	out := make([]githooks.BetterleaksAllowlistEntry, len(entries))
+	for i, e := range entries {
+		out[i] = githooks.BetterleaksAllowlistEntry{RuleID: e.RuleID, Value: e.Value, Regex: e.Regex}
+	}
+	return out
+}
+
+// scanCredentials runs the betterleaks-based scan over dir, using cfg's
+// extra-rules/extra-allowlist config, and returns its findings unchanged for
+// the caller to merge into a ScanOutcome's Secrets. It returns (nil, nil)
+// without invoking betterleaks at all when betterleaksBinEnvVar is unset.
+func scanCredentials(dir string, cfg *Config) ([]githooks.Finding, error) {
+	path := resolveBetterleaksPath()
+	if path == "" {
+		return nil, nil
+	}
+	return githooks.ScanCredentials(dir, path, githooks.BetterleaksOptions{
+		SkipRules:      gitToolsSkipRules,
+		ExtraRules:     betterleaksExtraRules(cfg.SecretScanExtraRules),
+		ExtraAllowlist: betterleaksExtraAllowlist(cfg.SecretScanExtraAllowlist),
+	})
+}
+
+// categoryCountKeys maps a Finding.Category value onto the ScanOutcome data
+// key its count is reported under. Empty Category (every non-betterleaks,
+// non-PII/financial finding kind) has no key here and is not counted.
+var categoryCountKeys = map[string]string{
+	"credentials": "credentials_found",
+	"pii":         "pii_found",
+	"financial":   "financial_found",
+}
+
+// addCategoryCounts sets outcome data's category-grouped keys
+// (credentials_found, pii_found, financial_found) on result, computed from
+// secrets — the merged Secrets slice a ScanOutcome carries once
+// scanCredentials' findings are folded in. secrets_found (result.Data's
+// existing, githooks-computed key) is untouched: it still reports the total
+// regardless of category.
+func addCategoryCounts(result *clikit.Result, secrets []githooks.Finding) {
+	counts := map[string]int{"credentials_found": 0, "pii_found": 0, "financial_found": 0}
+	for _, f := range secrets {
+		if key, ok := categoryCountKeys[f.Category]; ok {
+			counts[key]++
+		}
+	}
+	if result.Data == nil {
+		result.Data = map[string]any{}
+	}
+	for key, count := range counts {
+		result.Data[key] = count
+	}
+}
 
 // gitToolsSkipRules layers one git-tools-specific exclusion on top of
 // githooks.DefaultSkipRules: nested Claude Code worktrees at
@@ -82,7 +177,11 @@ func newScanSecretsCmd() *cobra.Command {
 			if err != nil {
 				return finishErr(cmd, nil, "internal.githooks.scan_secrets_failed", "scan for secrets", err)
 			}
-			return emitScan(cmd, githooks.ScanOutcome{Secrets: findings})
+			credFindings, err := scanCredentials(cfg.Repo, cfg)
+			if err != nil {
+				return finishErr(cmd, nil, "internal.githooks.scan_credentials_failed", "scan for credentials", err)
+			}
+			return emitScan(cmd, githooks.ScanOutcome{Secrets: append(findings, credFindings...)})
 		},
 	}
 	return cmd
@@ -276,13 +375,18 @@ func employeeEmailCheck(cfg *Config) githooks.EmployeeEmailCheck {
 }
 
 // emitScan hands outcome to githooks' own result-builder, which produces the
-// full clikit envelope (success/caveats/precondition_unmet) in one call.
+// full clikit envelope (success/caveats/precondition_unmet), adds this CLI's
+// own category-grouped counts (see addCategoryCounts) on top, then emits it.
 func emitScan(cmd *cobra.Command, outcome githooks.ScanOutcome) error {
-	code, err := githooks.EmitHookResult(cmd.OutOrStdout(), commandPath(cmd), outcome)
+	result, err := githooks.BuildHookResult(commandPath(cmd), outcome)
 	if err != nil {
 		return finishErr(cmd, nil, "internal.result.build_failed", "build scan result", err)
 	}
-	return finishCode(code)
+	addCategoryCounts(result, outcome.Secrets)
+	if err := clikit.Emit(cmd.OutOrStdout(), result); err != nil {
+		return finishErr(cmd, nil, "internal.result.build_failed", "build scan result", err)
+	}
+	return finishCode(result.ExitCode)
 }
 
 // scanTree runs every scanner over dir and folds the results into one
@@ -297,6 +401,11 @@ func scanTree(ctx context.Context, dir string, cfg *Config, staged bool) (githoo
 	if err != nil {
 		return githooks.ScanOutcome{}, fmt.Errorf("scan for secrets: %w", err)
 	}
+	credFindings, err := scanCredentials(dir, cfg)
+	if err != nil {
+		return githooks.ScanOutcome{}, fmt.Errorf("scan for credentials: %w", err)
+	}
+	secrets = append(secrets, credFindings...)
 	candidates, err := listCandidates(ctx, dir, staged)
 	if err != nil {
 		return githooks.ScanOutcome{}, fmt.Errorf("list candidate files: %w", err)
@@ -363,9 +472,13 @@ func scanGate(cmd *cobra.Command, cfg *Config, dir, verb string, data map[string
 	}
 	path, _ := finding.Context["path"].(string)
 	rule, _ := finding.Context["rule"].(string)
+	// category is "" for every finding kind outside the credentials/pii/
+	// financial taxonomy (see githooks' Finding.Category) — carried through
+	// only when the governing finding's own context already names one.
+	category, _ := finding.Context["category"].(string)
 	return finishDiagnostic(cmd, data, clikit.NewPreconditionUnmet, finding.Code, finding.Message,
 		clikit.Manual(fmt.Sprintf("fix or remove the flagged content at %s and re-run; nothing was %s", path, pastTense(verb))),
-		map[string]any{"path": path, "rule": rule, "findings": len(result.Errors)})
+		map[string]any{"path": path, "rule": rule, "findings": len(result.Errors), "category": category})
 }
 
 // pastTense renders verb ("merge", "push", "rebase", "tag") as the participle

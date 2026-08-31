@@ -65,6 +65,43 @@ type Config struct {
 	// that organization's value, so it belongs in the repo that needs it, not
 	// in this CLI's shared source, which serves any repo and ships publicly.
 	AllowedEmailDomains []string `koanf:"allowed_email_domains"`
+	// SecretScanExtraRules are a repo's own additional betterleaks detection
+	// rules (githooks.ScanCredentials' opts.ExtraRules), layered on top of
+	// the compiled-in base ruleset that scan can only ever extend, never
+	// weaken. Each entry's Category is carried through config for a repo's
+	// own record-keeping only — githooks.BetterleaksRule has no Category
+	// field, so every betterleaks finding still reports Category
+	// "credentials" regardless of what an extra rule's Category names.
+	SecretScanExtraRules []SecretScanExtraRule `koanf:"secret_scan_extra_rules"`
+	// SecretScanExtraAllowlist are a repo's own additional betterleaks
+	// exemptions (githooks.ScanCredentials' opts.ExtraAllowlist), layered on
+	// top of the compiled-in base allowlist the same way SecretScanExtraRules
+	// layers onto the base ruleset.
+	SecretScanExtraAllowlist []SecretScanExtraAllowlistEntry `koanf:"secret_scan_extra_allowlist"`
+}
+
+// SecretScanExtraRule is one secret_scan_extra_rules entry: a repo-supplied
+// betterleaks detection rule, in exactly the shape githooks.BetterleaksRule
+// needs plus a Category label this CLI does not otherwise act on (see
+// Config.SecretScanExtraRules).
+type SecretScanExtraRule struct {
+	ID       string `koanf:"id"`
+	Regex    string `koanf:"regex"`
+	Category string `koanf:"category"`
+}
+
+// SecretScanExtraAllowlistEntry is one secret_scan_extra_allowlist entry: a
+// repo-supplied betterleaks exemption, in exactly the shape
+// githooks.BetterleaksAllowlistEntry needs. RuleID names which rule (base or
+// extra) this narrows — "" or "*" applies across every rule, matching
+// BetterleaksAllowlistEntry's own semantics. Exactly one of Value (an exact
+// secret value) or Regex (a secret-value regex) is expected to be set; that
+// requirement is enforced by githooks.ScanCredentials itself, not
+// re-validated here.
+type SecretScanExtraAllowlistEntry struct {
+	RuleID string `koanf:"rule_id"`
+	Value  string `koanf:"value"`
+	Regex  string `koanf:"regex"`
 }
 
 // defaultConfig seeds koanf's lowest-precedence layer. Every key here must
@@ -73,14 +110,16 @@ type Config struct {
 // across default/file/env/flag layers.
 func defaultConfig() map[string]interface{} {
 	return map[string]interface{}{
-		"repo":                  ".",
-		"remote":                "origin",
-		"privacy_tier":          "public",
-		"strict":                false,
-		"max_binary_bytes":      githooks.DefaultMaxBytes,
-		"privacy_marker_exempt": []string{},
-		"secret_scan_exempt":    []string{},
-		"allowed_email_domains": []string{},
+		"repo":                        ".",
+		"remote":                      "origin",
+		"privacy_tier":                "public",
+		"strict":                      false,
+		"max_binary_bytes":            githooks.DefaultMaxBytes,
+		"privacy_marker_exempt":       []string{},
+		"secret_scan_exempt":          []string{},
+		"allowed_email_domains":       []string{},
+		"secret_scan_extra_rules":     []map[string]interface{}{},
+		"secret_scan_extra_allowlist": []map[string]interface{}{},
 	}
 }
 

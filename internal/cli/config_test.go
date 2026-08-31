@@ -294,6 +294,66 @@ func TestLoadConfig_NoWarningOnCleanTrackedConfig(t *testing.T) {
 	}
 }
 
+// TestLoadConfig_SecretScanExtraRulesAndAllowlist proves
+// secret_scan_extra_rules/secret_scan_extra_allowlist unmarshal from a
+// git-tools.yaml into Config.SecretScanExtraRules/SecretScanExtraAllowlist
+// with every field carried through, the same koanf slice-of-struct pattern
+// AllowedEmailDomains and SecretScanExempt already use for scalar slices.
+func TestLoadConfig_SecretScanExtraRulesAndAllowlist(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "cfg.yaml")
+	yaml := "secret_scan_extra_rules:\n" +
+		"  - id: fixture-marker\n" +
+		"    regex: fixture-[0-9]+\n" +
+		"    category: credentials\n" +
+		"secret_scan_extra_allowlist:\n" +
+		"  - rule_id: fixture-marker\n" +
+		"    value: fixture-value\n"
+	if err := os.WriteFile(cfgPath, []byte(yaml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	fs := rootFlags()
+	if err := fs.Set("config", cfgPath); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := loadConfig(fs)
+	if err != nil {
+		t.Fatalf("loadConfig: %v", err)
+	}
+	if len(cfg.SecretScanExtraRules) != 1 {
+		t.Fatalf("SecretScanExtraRules = %+v, want one entry", cfg.SecretScanExtraRules)
+	}
+	rule := cfg.SecretScanExtraRules[0]
+	if rule.ID != "fixture-marker" || rule.Regex != "fixture-[0-9]+" || rule.Category != "credentials" {
+		t.Errorf("SecretScanExtraRules[0] = %+v, want id/regex/category from the config file", rule)
+	}
+	if len(cfg.SecretScanExtraAllowlist) != 1 {
+		t.Fatalf("SecretScanExtraAllowlist = %+v, want one entry", cfg.SecretScanExtraAllowlist)
+	}
+	entry := cfg.SecretScanExtraAllowlist[0]
+	if entry.RuleID != "fixture-marker" || entry.Value != "fixture-value" {
+		t.Errorf("SecretScanExtraAllowlist[0] = %+v, want rule_id/value from the config file", entry)
+	}
+}
+
+// TestLoadConfig_SecretScanExtraRulesDefaultToEmpty proves both new fields
+// default to an empty (not nil-panicking, not populated) slice when a repo's
+// config names neither — the same default shape defaultConfig() gives every
+// other slice-valued Config field.
+func TestLoadConfig_SecretScanExtraRulesDefaultToEmpty(t *testing.T) {
+	cfg, err := loadConfig(rootFlags())
+	if err != nil {
+		t.Fatalf("loadConfig: %v", err)
+	}
+	if len(cfg.SecretScanExtraRules) != 0 {
+		t.Errorf("SecretScanExtraRules = %+v, want empty by default", cfg.SecretScanExtraRules)
+	}
+	if len(cfg.SecretScanExtraAllowlist) != 0 {
+		t.Errorf("SecretScanExtraAllowlist = %+v, want empty by default", cfg.SecretScanExtraAllowlist)
+	}
+}
+
 func TestLoadConfig_ImplicitMissingConfigFileIsNotAnError(t *testing.T) {
 	dir := t.TempDir()
 	cwd, err := os.Getwd()

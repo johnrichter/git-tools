@@ -1,11 +1,13 @@
 package cli
 
 import (
+	"strings"
 	"testing"
 	"unsafe"
 
 	"github.com/bmatcuk/doublestar/v4"
 
+	"github.com/johnrichter/claude-shared-tooling/go/clikit"
 	"github.com/johnrichter/claude-shared-tooling/go/githooks"
 )
 
@@ -92,6 +94,122 @@ func TestCodeMarkerExemptRules_MatchesEveryCodeSuffixAnywhereInTree(t *testing.T
 			if matched != c.want {
 				t.Errorf("suffix %s: doublestar.Match(%q, %q) = %v, want %v", suffix, rule.Pattern, c.path, matched, c.want)
 			}
+		}
+	}
+}
+
+// TestResolveBetterleaksPath_UnsetSkipsGracefully proves an unset
+// betterleaksBinEnvVar yields "" and an informational stderr note, not an
+// error — a missing binary is a normal, unprovisioned state, not a fault.
+func TestResolveBetterleaksPath_UnsetSkipsGracefully(t *testing.T) {
+	t.Setenv(betterleaksBinEnvVar, "")
+	var path string
+	stderr := captureStderr(t, func() {
+		path = resolveBetterleaksPath()
+	})
+	if path != "" {
+		t.Fatalf("resolveBetterleaksPath() = %q, want \"\" when %s is unset", path, betterleaksBinEnvVar)
+	}
+	if !strings.Contains(stderr, betterleaksBinEnvVar) {
+		t.Errorf("stderr = %q, want a note naming %s", stderr, betterleaksBinEnvVar)
+	}
+}
+
+// TestResolveBetterleaksPath_SetReturnsItUnchanged proves the happy path:
+// a set env var passes straight through with no transformation and no note.
+func TestResolveBetterleaksPath_SetReturnsItUnchanged(t *testing.T) {
+	t.Setenv(betterleaksBinEnvVar, "/opt/fixture-tools/betterleaks")
+	var path string
+	stderr := captureStderr(t, func() {
+		path = resolveBetterleaksPath()
+	})
+	if path != "/opt/fixture-tools/betterleaks" {
+		t.Fatalf("resolveBetterleaksPath() = %q, want the configured path unchanged", path)
+	}
+	if stderr != "" {
+		t.Errorf("stderr = %q, want no note when %s is set", stderr, betterleaksBinEnvVar)
+	}
+}
+
+// TestScanCredentials_UnsetEnvVarSkipsWithoutInvokingBetterleaks proves
+// scanCredentials never shells out at all when the binary path is
+// unresolved: it returns (nil, nil) rather than attempting to run anything
+// (which would otherwise fail loudly against a nonexistent binary).
+func TestScanCredentials_UnsetEnvVarSkipsWithoutInvokingBetterleaks(t *testing.T) {
+	t.Setenv(betterleaksBinEnvVar, "")
+	findings, err := scanCredentials(t.TempDir(), &Config{})
+	if err != nil {
+		t.Fatalf("scanCredentials returned an error instead of skipping: %v", err)
+	}
+	if findings != nil {
+		t.Fatalf("scanCredentials returned %+v, want nil findings when the binary path is unresolved", findings)
+	}
+}
+
+// TestBetterleaksExtraRules_ConvertsIDAndRegexOnly proves the config-to-
+// githooks conversion carries ID and Regex through and drops Category:
+// githooks.BetterleaksRule has no Category field, so every betterleaks
+// finding still reports Category "credentials" regardless of what an extra
+// rule's own Category names (see Config.SecretScanExtraRules).
+func TestBetterleaksExtraRules_ConvertsIDAndRegexOnly(t *testing.T) {
+	in := []SecretScanExtraRule{
+		{ID: "fixture-marker", Regex: "fixture-[0-9]+", Category: "financial"},
+	}
+	out := betterleaksExtraRules(in)
+	if len(out) != 1 || out[0].ID != "fixture-marker" || out[0].Regex != "fixture-[0-9]+" {
+		t.Fatalf("betterleaksExtraRules(%+v) = %+v, want ID/Regex carried through unchanged", in, out)
+	}
+}
+
+// TestBetterleaksExtraAllowlist_ConvertsAllThreeFields proves the
+// config-to-githooks allowlist conversion carries RuleID, Value, and Regex
+// through unchanged.
+func TestBetterleaksExtraAllowlist_ConvertsAllThreeFields(t *testing.T) {
+	in := []SecretScanExtraAllowlistEntry{
+		{RuleID: "fixture-marker", Value: "fixture-value", Regex: "fixture-.*"},
+	}
+	out := betterleaksExtraAllowlist(in)
+	if len(out) != 1 || out[0].RuleID != "fixture-marker" || out[0].Value != "fixture-value" || out[0].Regex != "fixture-.*" {
+		t.Fatalf("betterleaksExtraAllowlist(%+v) = %+v, want RuleID/Value/Regex carried through unchanged", in, out)
+	}
+}
+
+// TestAddCategoryCounts_GroupsFindingsByCategory proves the three
+// category-grouped output keys count only their own Category's findings,
+// an empty Category (every scanner outside the credentials/pii/financial
+// taxonomy) counts toward none of them, and an unrecognized Category is
+// likewise ignored rather than crashing.
+func TestAddCategoryCounts_GroupsFindingsByCategory(t *testing.T) {
+	secrets := []githooks.Finding{
+		{Path: "a", Category: "credentials"},
+		{Path: "b", Category: "credentials"},
+		{Path: "c", Category: "pii"},
+		{Path: "d", Category: "financial"},
+		{Path: "e", Category: ""},
+		{Path: "f", Category: "unrecognized"},
+	}
+	result := &clikit.Result{}
+	addCategoryCounts(result, secrets)
+	want := map[string]int{"credentials_found": 2, "pii_found": 1, "financial_found": 1}
+	for key, count := range want {
+		got, _ := result.Data[key].(int)
+		if got != count {
+			t.Errorf("result.Data[%q] = %v, want %d", key, result.Data[key], count)
+		}
+	}
+}
+
+// TestAddCategoryCounts_ZeroFindingsStillSetsAllThreeKeys proves the three
+// keys are always present at zero, never simply absent, so a consumer never
+// has to distinguish "no credentials findings" from "this key was never
+// computed".
+func TestAddCategoryCounts_ZeroFindingsStillSetsAllThreeKeys(t *testing.T) {
+	result := &clikit.Result{}
+	addCategoryCounts(result, nil)
+	for _, key := range []string{"credentials_found", "pii_found", "financial_found"} {
+		got, ok := result.Data[key].(int)
+		if !ok || got != 0 {
+			t.Errorf("result.Data[%q] = %v (ok=%v), want 0", key, result.Data[key], ok)
 		}
 	}
 }
