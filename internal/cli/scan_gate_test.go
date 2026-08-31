@@ -5,6 +5,7 @@
 package cli_test
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -819,5 +820,84 @@ func TestScanGate_AllThreeWriteVerbsCallTheSharedEntryPoint(t *testing.T) {
 	}
 	if got := strings.Count(string(scanSrc), "func scanGate("); got != 1 {
 		t.Fatalf("scan.go declares scanGate %d times, want exactly 1", got)
+	}
+}
+
+// fixtureBetterleaksRuleID and fixtureBetterleaksValue are the stand-in
+// credential finding's rule id and matched value. Both are deliberately
+// abstract: no identifier or literal here is real-vendor-shaped or reads as a
+// live credential. The value never has to match a real detection pattern —
+// the fixture betterleaks binary below decides what it reports.
+const (
+	fixtureBetterleaksRuleID = "fixture-widget-rule"
+	fixtureBetterleaksValue  = "abstract-fixture-value"
+)
+
+// fixtureBetterleaksReport renders one entry of betterleaks' own JSON report
+// format — the exact field names and casing githooks' ScanCredentials decodes
+// (RuleID, Description, Secret, File), with File relative to the scanned root.
+func fixtureBetterleaksReport(rule, value, path string) string {
+	return fmt.Sprintf(`[{"RuleID":%q,"Description":%q,"Secret":%q,"File":%q}]`+"\n",
+		rule, "fixture rule matched a fixture value", value, path)
+}
+
+// writeFixtureBetterleaksBinary writes an executable shell-script stand-in for
+// the betterleaks binary and returns its path. It lives in its own temp
+// directory, never inside the scanned repo, so the script is not itself a scan
+// candidate. It ignores every argument githooks passes it and prints report on
+// stdout, then exits 1 — the code real betterleaks uses when it has findings,
+// which ScanCredentials deliberately ignores in favour of whether stdout parses
+// as JSON.
+func writeFixtureBetterleaksBinary(t *testing.T, report string) string {
+	t.Helper()
+	bin := filepath.Join(t.TempDir(), "fixture-betterleaks")
+	script := "#!/bin/sh\ncat <<'FIXTURE_REPORT'\n" + report + "FIXTURE_REPORT\nexit 1\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return bin
+}
+
+// TestScanGate_GoverningDiagnosticCategoryMatchesFindingCategory drives the
+// full real path — the built CLI's merge command → scanGate → scanTree →
+// scanCredentials → githooks.ScanCredentials → githooks.BuildHookResult — and
+// asserts the refusal's governing diagnostic carries the governing finding's
+// own category. scanGate reads that from finding.Context["category"], so this
+// is the one test that proves the whole chain actually threads a category
+// through rather than reporting a hardcoded or empty one.
+//
+// Expected to FAIL against go/githooks v0.8.0: envelope.go's BuildHookResult
+// builds each diagnostic's context as {"path", "rule"} only, never copying
+// Finding.Category in, so the field reads "" no matter what the scanner
+// reported. The fix belongs upstream in envelope.go, not in this repo — this
+// test is the handoff evidence for the pin bump that carries it.
+func TestScanGate_GoverningDiagnosticCategoryMatchesFindingCategory(t *testing.T) {
+	bin := buildCLI(t)
+	dir := initRepo(t)
+	head := commitFile(t, dir, "widget.conf", "widget_value = "+fixtureBetterleaksValue+"\n", "add widget config")
+	runGit(t, dir, "branch", "feature")
+	runGit(t, dir, "checkout", "-q", "feature")
+	commitFile(t, dir, "feature.txt", "feature\n", "feature work")
+	runGit(t, dir, "checkout", "-q", "main")
+
+	t.Setenv("GIT_TOOLS_BETTERLEAKS_BIN", writeFixtureBetterleaksBinary(t,
+		fixtureBetterleaksReport(fixtureBetterleaksRuleID, fixtureBetterleaksValue, "widget.conf")))
+
+	r, exit := runCLI(t, bin, "--repo", dir, "merge", "feature")
+	if r.Status != "precondition_unmet" || exit != 30 {
+		t.Fatalf("status=%s exit=%d, want precondition_unmet/30: %+v", r.Status, exit, r)
+	}
+	assertRefusalNamesFinding(t, r, "widget.conf")
+	context, _ := r.Errors[0]["context"].(map[string]any)
+	// Guard the premise: no other scanner may own the governing diagnostic,
+	// or the category assertion below would be checking the wrong finding.
+	if rule, _ := context["rule"].(string); rule != fixtureBetterleaksRuleID {
+		t.Fatalf("governing diagnostic names rule %q, want the fixture credential rule %q — another scanner's finding is governing, so this case is not exercising the credentials category: %+v", rule, fixtureBetterleaksRuleID, r.Errors[0])
+	}
+	if category, _ := context["category"].(string); category != "credentials" {
+		t.Fatalf("context[\"category\"] = %q, want %q — the credentials finding's category is not reaching the governing diagnostic", category, "credentials")
+	}
+	if got := runGit(t, dir, "rev-parse", "HEAD"); got != head {
+		t.Fatalf("HEAD moved from %s to %s — merge landed despite the guardrail finding", head, got)
 	}
 }
