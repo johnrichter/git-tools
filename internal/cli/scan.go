@@ -406,11 +406,6 @@ func scanTree(ctx context.Context, dir string, cfg *Config, staged bool) (githoo
 		return githooks.ScanOutcome{}, fmt.Errorf("scan for credentials: %w", err)
 	}
 	secrets = append(secrets, credFindings...)
-	piiFinancialFindings, err := githooks.ScanPIIFinancial(dir, gitToolsSkipRules)
-	if err != nil {
-		return githooks.ScanOutcome{}, fmt.Errorf("scan for PII/financial data: %w", err)
-	}
-	secrets = append(secrets, piiFinancialFindings...)
 	candidates, err := listCandidates(ctx, dir, staged)
 	if err != nil {
 		return githooks.ScanOutcome{}, fmt.Errorf("list candidate files: %w", err)

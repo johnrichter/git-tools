@@ -1,10 +1,6 @@
 package cli
 
 import (
-	"context"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"strings"
 	"testing"
 	"unsafe"
@@ -215,89 +211,5 @@ func TestAddCategoryCounts_ZeroFindingsStillSetsAllThreeKeys(t *testing.T) {
 		if !ok || got != 0 {
 			t.Errorf("result.Data[%q] = %v (ok=%v), want 0", key, result.Data[key], ok)
 		}
-	}
-}
-
-// fixtureScanTreeSSN and fixtureScanTreeCreditCard are structurally valid,
-// checksum-passing test values matching githooks' own piifinancial_test.go
-// fixture convention (fixtureValidSSN, fixtureRealVisaShape) - fabricated,
-// never a real person's SSN or a real-vendor-shaped card number.
-// Fragment-assembled so this source line never carries an unbroken
-// sensitive-looking literal.
-var (
-	fixtureScanTreeSSN        = "123-45-" + "6789"
-	fixtureScanTreeCreditCard = "412345678901234" + "9"
-)
-
-// initScanTreeDir creates a minimal git repo with one committed file:
-// scanTree's raw-binary check drives off `git ls-files`, so it needs a real
-// repo even though the secrets/PII-financial/privacy checks below it walk
-// the filesystem directly.
-func initScanTreeDir(t *testing.T) string {
-	t.Helper()
-	dir := t.TempDir()
-	run := func(args ...string) {
-		cmd := exec.Command("git", args...)
-		cmd.Dir = dir
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v\n%s", args, err, out)
-		}
-	}
-	run("init", "-q", "-b", "main")
-	run("config", "user.name", "Test User")
-	run("config", "user.email", "test@example.com")
-	run("config", "commit.gpgsign", "false")
-	if err := os.WriteFile(filepath.Join(dir, "base.txt"), []byte("base\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	run("add", "base.txt")
-	run("commit", "-q", "-m", "base")
-	return dir
-}
-
-// commitScanTreeFile writes name under dir and commits it, for planting a
-// PII/financial fixture scanTree's filesystem-walking scanners will see.
-func commitScanTreeFile(t *testing.T, dir, name, content string) {
-	t.Helper()
-	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	cmd := exec.Command("git", "add", name)
-	cmd.Dir = dir
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("git add %s: %v\n%s", name, err, out)
-	}
-	cmd = exec.Command("git", "commit", "-q", "-m", "add "+name)
-	cmd.Dir = dir
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("git commit %s: %v\n%s", name, err, out)
-	}
-}
-
-// TestScanTree_MergesPIIFinancialFindingsIntoSecrets proves scanTree wires
-// githooks.ScanPIIFinancial the same way it already wires scanCredentials:
-// a committed file carrying an SSN-shaped and a credit-card-shaped fixture
-// value yields "pii" and "financial" categorized findings in the returned
-// ScanOutcome.Secrets, not just in scanCredentials' betterleaks findings.
-func TestScanTree_MergesPIIFinancialFindingsIntoSecrets(t *testing.T) {
-	t.Setenv(betterleaksBinEnvVar, "")
-	dir := initScanTreeDir(t)
-	commitScanTreeFile(t, dir, "leak.txt", "ssn: "+fixtureScanTreeSSN+"\ncard: "+fixtureScanTreeCreditCard+"\n")
-
-	cfg := &Config{PrivacyTier: "public", MaxBinaryBytes: githooks.DefaultMaxBytes}
-	outcome, err := scanTree(context.Background(), dir, cfg, false)
-	if err != nil {
-		t.Fatalf("scanTree: %v", err)
-	}
-
-	categories := map[string]int{}
-	for _, f := range outcome.Secrets {
-		categories[f.Category]++
-	}
-	if categories["pii"] == 0 {
-		t.Errorf("outcome.Secrets carries no pii-categorized finding: %+v", outcome.Secrets)
-	}
-	if categories["financial"] == 0 {
-		t.Errorf("outcome.Secrets carries no financial-categorized finding: %+v", outcome.Secrets)
 	}
 }
