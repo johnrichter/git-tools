@@ -475,6 +475,17 @@ func scanGate(cmd *cobra.Command, cfg *Config, dir, verb string, data map[string
 	// category is "" for every finding kind outside the credentials/pii/
 	// financial taxonomy (see githooks' Finding.Category) — carried through
 	// only when the governing finding's own context already names one.
+	//
+	// Known gap, deliberately deferred: the governing finding is whichever
+	// error BuildHookResult emits first, and scanTree appends the categorized
+	// credential findings behind the uncategorized ScanSecrets ones, so a tree
+	// tripping both reports "" here even though a categorized finding sits
+	// further down the same result. A refusal collapses to this one
+	// diagnostic, so unlike the scan subcommands — which carry every finding's
+	// own category plus the per-category counts — the gate has no second place
+	// to read the taxonomy from. Closing it means ordering findings by
+	// category before choosing the governing one, which changes which path
+	// every existing refusal names; that is its own task, not this one's.
 	category, _ := finding.Context["category"].(string)
 	return finishDiagnostic(cmd, data, clikit.NewPreconditionUnmet, finding.Code, finding.Message,
 		clikit.Manual(fmt.Sprintf("fix or remove the flagged content at %s and re-run; nothing was %s", path, pastTense(verb))),
