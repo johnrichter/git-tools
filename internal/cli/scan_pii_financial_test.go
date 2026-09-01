@@ -51,6 +51,20 @@ func testBetterleaksBinary(t *testing.T) string {
 	return bin
 }
 
+// blockCategorizedFindings pins secret_scan_categorized_severity to "block" in
+// dir's own git-tools.yaml. Every finding in this file is PII- or
+// financial-categorized, so under Config.SecretScanCategorizedSeverity's
+// "warn" default each would only ever caveat — and both cases below are about
+// which findings a hard refusal reports, not about the warn/block posture
+// (secret_scan_categorized_severity_test.go covers that on its own).
+// Untracked on purpose: `scan all` reads dir's own working-tree config
+// directly, unlike merge's gate, which reads the prospective tree's (see
+// writeConfig's own doc comment).
+func blockCategorizedFindings(t *testing.T, dir string) {
+	t.Helper()
+	writeConfig(t, dir, "secret_scan_categorized_severity: block\n")
+}
+
 // TestScanAll_ReportsNonZeroPIIAndFinancialCountsViaScanCredentials proves
 // pii_found and financial_found reach the CLI's own output through
 // scanCredentials' one betterleaks subprocess call — the same call
@@ -61,6 +75,7 @@ func TestScanAll_ReportsNonZeroPIIAndFinancialCountsViaScanCredentials(t *testin
 	betterleaksBin := testBetterleaksBinary(t)
 	dir := initRepo(t)
 	commitFile(t, dir, "leak.txt", "ssn: "+fixtureLeakSSN+"\ncard: "+fixtureLeakCreditCard+"\n", "add fixture leak")
+	blockCategorizedFindings(t, dir)
 	t.Setenv(betterleaksBinEnvVar, betterleaksBin)
 
 	r, exit := runCLI(t, bin, "--repo", dir, "scan", "all")
@@ -114,6 +129,7 @@ func TestScanAll_DoesNotFlagChecksumInvalidNearMissPIIFinancial(t *testing.T) {
 	commitFile(t, dir, "near_miss.txt",
 		"ssn: "+fixtureNearMissInvalidAreaSSN+"\ncard: "+fixtureNearMissLuhnInvalidCard+"\n",
 		"add near-miss fixture")
+	blockCategorizedFindings(t, dir)
 	t.Setenv(betterleaksBinEnvVar, betterleaksBin)
 
 	r, exit := runCLI(t, bin, "--repo", dir, "scan", "all")

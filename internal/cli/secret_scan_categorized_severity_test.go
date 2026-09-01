@@ -191,6 +191,45 @@ func TestSecretScanCategorizedSeverity_ExplicitBlockRefusesMerge(t *testing.T) {
 	}
 }
 
+// TestSecretScanCategorizedSeverity_DefaultWarnLandsPushAsCaveat is the merge
+// case above for the second, separately wired caveat-threading path: merge
+// folds scanGate's caveats in at its own terminal result, while push, tag
+// create, and rebase route theirs through pushRef/finishResult instead. The
+// defect this branch fixed (scanGate discarding its caveats) was invisible
+// end to end until a test asserted the caveat on a command's own result, so
+// each distinct threading path needs one such assertion rather than trusting
+// the shared helper.
+func TestSecretScanCategorizedSeverity_DefaultWarnLandsPushAsCaveat(t *testing.T) {
+	bin := buildCLI(t)
+	dir := initRepo(t)
+	t.Setenv(betterleaksBinEnvVar, writeFixtureBetterleaksBinary(t,
+		fixtureBetterleaksReport(fixtureBetterleaksRuleID, fixtureBetterleaksValue, "widget.conf")))
+	bare := newBareRemote(t, dir)
+	before := runGit(t, bare, "rev-parse", "refs/heads/main")
+	tip := commitFile(t, dir, "widget.conf", "widget_value = "+fixtureBetterleaksValue+"\n", "add widget config")
+
+	r, exit := runCLIIn(t, bin, dir, "push", "main")
+	if r.Status != "caveats" || exit != 10 {
+		t.Fatalf("status=%s exit=%d, want caveats/10 (a categorized finding must warn, not block, and the caveat must reach push's own result): %+v", r.Status, exit, r)
+	}
+	var sawFinding bool
+	for _, c := range r.Caveats {
+		if code, _ := c["code"].(string); code != "caveats.githooks.categorized_secret_detected" {
+			continue
+		}
+		context, _ := c["context"].(map[string]any)
+		if path, _ := context["path"].(string); path == "widget.conf" {
+			sawFinding = true
+		}
+	}
+	if !sawFinding {
+		t.Fatalf("push's own result does not carry the gate's warn-only caveat naming widget.conf: %+v", r.Caveats)
+	}
+	if got := runGit(t, bare, "rev-parse", "refs/heads/main"); got != tip {
+		t.Fatalf("remote main is at %s, want the pushed tip %s (was %s) — the warn-only posture must still publish", got, tip, before)
+	}
+}
+
 // TestSecretScanCategorizedSeverity_UncategorizedFindingAlwaysBlocks proves
 // the posture only ever governs betterleaks-sourced, categorized findings: a
 // plain ScanSecrets finding (no Category) still hard-blocks the merge even
@@ -198,7 +237,11 @@ func TestSecretScanCategorizedSeverity_ExplicitBlockRefusesMerge(t *testing.T) {
 func TestSecretScanCategorizedSeverity_UncategorizedFindingAlwaysBlocks(t *testing.T) {
 	bin := buildCLI(t)
 	dir := initRepo(t)
-	writeConfig(t, dir, "secret_scan_categorized_severity: warn\n")
+	// Committed, not merely written: merge's gate reads git-tools.yaml from the
+	// prospective, trial-merged tree, so an untracked "warn" here would never
+	// reach it — the case would then only re-prove the default rather than the
+	// explicit setting it claims to test.
+	commitConfig(t, dir, "secret_scan_categorized_severity: warn\n", "configure the warn-only posture explicitly")
 	head := commitNestedFile(t, dir, "config/prod.env", secretFixtureSecret, "add prod config")
 	runGit(t, dir, "branch", "feature")
 	runGit(t, dir, "checkout", "-q", "feature")

@@ -250,5 +250,10 @@ tmp/
 # Agent task reports -- working-tree scratch, never version-controlled
 ###############################################################################
 
+# Two naming schemes are in use at the repository root and both must be
+# covered, or a stage-everything sweeps in whichever one the rules miss:
+# <slug>-report.md / <slug>-review.md, and <ROLE>_REPORT_<slug>.md.
 /*-report.md
 /*-review.md
+/*_REPORT_*.md
+/*_REVIEW_*.md

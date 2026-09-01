@@ -34,7 +34,7 @@ const (
 // when handed none — the config bodies these cases toggle between. Every
 // rendering also pins secret_scan_categorized_severity to "block": every
 // fixture finding here is a plain betterleaks rule id (no "pii-"/"financial-"
-// prefix), which categorizeForRuleID buckets as "credentials" — so under this
+// prefix), which githooks' categoryForRuleID buckets as "credentials" — so under this
 // package's own "warn" default, an unexempted finding would only ever caveat,
 // never refuse, and every case here that asserts a hard refusal on the
 // finding an exemption does not reach would falsely pass no matter which
