@@ -23,11 +23,14 @@ import (
 )
 
 // findingMarker is a fabricated, SSN-shaped PII literal this file's own
-// fixture scanner treats as its one finding signature. It matches no real
-// vendor secret format and is never a real person's SSN — its only job is to
-// be a literal these tests can plant, remove, or leave in place and then
-// check for verbatim in a resulting tree, proving which tree was scanned.
-const findingMarker = "231-95-" + "3287"
+// fixture scanner treats as its one finding signature. Its only job is to be
+// a literal these tests can plant, remove, or leave in place and then check
+// for verbatim in a resulting tree, proving which tree was scanned. The
+// leading group is one the Social Security Administration has never issued
+// and never will, so this cannot be any real person's number — a shape-only
+// claim about a plausible-looking group would not carry that guarantee. It is
+// written in fragments so the file never carries the value contiguously.
+const findingMarker = "666-95-" + "3287"
 
 // findingMarkerRuleID is the fixture rule id the scanner below reports the
 // finding under, given a "pii-" prefix so githooks.categoryForRuleID buckets
@@ -384,6 +387,139 @@ func TestProspectiveMergeScan_DryRunReflectsProspectiveResult(t *testing.T) {
 		assertRefusalNamesFinding(t, r, "widget.conf")
 		if got := runGit(t, dir, "rev-parse", "HEAD"); got != head {
 			t.Fatalf("a dry-run refusal still moved HEAD: got %s want %s", got, head)
+		}
+		assertNoLeakedWorktree(t, dir, before)
+	})
+}
+
+// installApprovingCommitMsgHook gives dir a commit-msg hook that accepts only
+// a message beginning "approved:" — the shape of a repository that enforces a
+// message convention. Git composes its own default message for a merge commit
+// no one supplied one for, so this hook rejects a trial merge that commits and
+// accepts the operator's own --message: exactly the divergence case 8 exists
+// to hold closed.
+func installApprovingCommitMsgHook(t *testing.T, dir string) {
+	t.Helper()
+	hook := filepath.Join(dir, ".git", "hooks", "commit-msg")
+	script := "#!/bin/sh\ngrep -q '^approved:' \"$1\" || { echo 'message not approved' >&2; exit 1; }\n"
+	if err := os.WriteFile(hook, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Case 8 (the skip-on-failed-trial claim, adversarial): the claim that a
+// failed trial merge is safe to skip the scan over rests on the trial failing
+// only where the real merge cannot succeed either. A repository enforcing a
+// commit-message convention breaks that if the trial commits anything: the
+// trial's message is git's own default, which the hook rejects, while the
+// operator's --message is one the hook already accepted — so the trial fails
+// and the real merge lands. The merge must be refused on its content anyway.
+// The clean sub-case holds the other half: disarming the trial must not
+// disarm the hook's authority over the merge that really lands.
+func TestProspectiveMergeScan_CommitMsgHookDoesNotLetAMergeLandUnscanned(t *testing.T) {
+	t.Run("finding_still_refuses", func(t *testing.T) {
+		bin := buildCLI(t)
+		dir := signingRepo(t)
+		setContentAwareBetterleaks(t)
+		head := runGit(t, dir, "rev-parse", "HEAD")
+
+		runGit(t, dir, "branch", "feature")
+		runGit(t, dir, "checkout", "-q", "feature")
+		commitFile(t, dir, "widget.conf", findingBearingConfig(), "add widget config with finding")
+		runGit(t, dir, "checkout", "-q", "main")
+		installApprovingCommitMsgHook(t, dir)
+
+		before := worktreePaths(t, dir)
+
+		r, exit := runCLI(t, bin, "--repo", dir, "merge", "feature", "--fast-forward", "never", "--message", "approved: land feature")
+		if r.Status != "precondition_unmet" || exit != 30 {
+			t.Fatalf("status=%s exit=%d, want precondition_unmet/30 (a commit-msg hook the trial cannot satisfy must not let the merge land unscanned): %+v", r.Status, exit, r)
+		}
+		assertRefusalNamesFinding(t, r, "widget.conf")
+		if got := runGit(t, dir, "rev-parse", "HEAD"); got != head {
+			t.Fatalf("HEAD moved from %s to %s — the merge landed without its content ever being scanned", head, got)
+		}
+		assertNoLeakedWorktree(t, dir, before)
+	})
+
+	t.Run("clean_merge_still_lands_under_the_hook", func(t *testing.T) {
+		bin := buildCLI(t)
+		dir := signingRepo(t)
+		setContentAwareBetterleaks(t)
+
+		runGit(t, dir, "branch", "feature")
+		runGit(t, dir, "checkout", "-q", "feature")
+		commitFile(t, dir, "feature.txt", "feature\n", "feature work")
+		runGit(t, dir, "checkout", "-q", "main")
+		installApprovingCommitMsgHook(t, dir)
+
+		before := worktreePaths(t, dir)
+
+		r, exit := runCLI(t, bin, "--repo", dir, "merge", "feature", "--fast-forward", "never", "--message", "approved: land feature")
+		if r.Status != "success" || exit != 0 {
+			t.Fatalf("status=%s exit=%d, want success/0: %+v", r.Status, exit, r)
+		}
+		assertNoLeakedWorktree(t, dir, before)
+
+		r, exit = runCLI(t, bin, "--repo", dir, "merge", "feature", "--fast-forward", "never", "--message", "unapproved message")
+		if r.Status != "precondition_unmet" || exit != 30 {
+			t.Fatalf("status=%s exit=%d, want precondition_unmet/30 (the hook still governs the message the real merge commits): %+v", r.Status, exit, r)
+		}
+	})
+}
+
+// Case 9 (octopus): two sources at once is the shape where a trial merge is
+// most likely to diverge from the real one, since one source can be clean
+// while another is not. Both halves must hold: the scan must see the tree the
+// whole octopus would produce, and a partially-conflicting octopus must fail
+// the trial and fall through to the real merge's own conflict handling rather
+// than landing anything unscanned.
+func TestProspectiveMergeScan_OctopusScansTheWholeProspectiveResult(t *testing.T) {
+	t.Run("finding_in_one_source_refuses_the_whole_octopus", func(t *testing.T) {
+		bin := buildCLI(t)
+		dir := signingRepo(t)
+		setContentAwareBetterleaks(t)
+		head := runGit(t, dir, "rev-parse", "HEAD")
+
+		runGit(t, dir, "checkout", "-q", "-b", "clean-source", "main")
+		commitFile(t, dir, "clean.txt", "clean\n", "clean source work")
+		runGit(t, dir, "checkout", "-q", "-b", "flagged-source", "main")
+		commitFile(t, dir, "widget.conf", findingBearingConfig(), "add widget config with finding")
+		runGit(t, dir, "checkout", "-q", "main")
+
+		before := worktreePaths(t, dir)
+
+		r, exit := runCLI(t, bin, "--repo", dir, "merge", "clean-source", "flagged-source")
+		if r.Status != "precondition_unmet" || exit != 30 {
+			t.Fatalf("status=%s exit=%d, want precondition_unmet/30 (one flagged source must refuse the whole octopus): %+v", r.Status, exit, r)
+		}
+		assertRefusalNamesFinding(t, r, "widget.conf")
+		if got := runGit(t, dir, "rev-parse", "HEAD"); got != head {
+			t.Fatalf("HEAD moved from %s to %s — the octopus landed despite the finding", head, got)
+		}
+		assertNoLeakedWorktree(t, dir, before)
+	})
+
+	t.Run("one_conflicting_source_falls_through_to_conflict_handling", func(t *testing.T) {
+		bin := buildCLI(t)
+		dir := signingRepo(t)
+		setContentAwareBetterleaks(t)
+
+		runGit(t, dir, "checkout", "-q", "-b", "clean-source", "main")
+		commitFile(t, dir, "clean.txt", "clean\n", "clean source work")
+		runGit(t, dir, "checkout", "-q", "-b", "conflicting-source", "main")
+		commitFile(t, dir, "base.txt", "source change "+findingMarker+"\n", "conflicting source carries a finding")
+		runGit(t, dir, "checkout", "-q", "main")
+		head := commitFile(t, dir, "base.txt", "main change\n", "main changes base")
+
+		before := worktreePaths(t, dir)
+
+		r, exit := runCLI(t, bin, "--repo", dir, "merge", "clean-source", "conflicting-source")
+		if exit == 0 {
+			t.Fatalf("a partially-conflicting octopus must not land: status=%s exit=%d %+v", r.Status, exit, r)
+		}
+		if got := runGit(t, dir, "rev-parse", "HEAD"); got != head {
+			t.Fatalf("HEAD moved from %s to %s — a refused octopus must not touch the target", head, got)
 		}
 		assertNoLeakedWorktree(t, dir, before)
 	})
