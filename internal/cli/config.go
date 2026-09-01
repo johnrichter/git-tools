@@ -134,7 +134,7 @@ func normalizeKey(s string) string {
 // already-parsed flags. Each layer is loaded only — nothing here writes
 // back to a file or the environment.
 func loadConfig(fs *pflag.FlagSet) (*Config, error) {
-	return loadConfigForDir(fs, repoDirForConfig(fs))
+	return loadConfigForDir(fs, repoDirForConfig(fs), true)
 }
 
 // loadConfigForDir resolves Config exactly as loadConfig does, except the
@@ -144,14 +144,24 @@ func loadConfig(fs *pflag.FlagSet) (*Config, error) {
 // own git-tools.yaml rather than the real repository's: an explicit --config
 // still names one fixed file regardless of dir, exactly as loadConfig itself
 // treats it.
-func loadConfigForDir(fs *pflag.FlagSet, dir string) (*Config, error) {
+//
+// warnIfTampered is what loadConfig always passes true and a prospective-tree
+// caller always passes false. That warning reports a config file an operator
+// can act on, in a checkout they can look at; a machine-built prospective
+// tree is neither. Its git-tools.yaml differs from that tree's own HEAD
+// precisely because the trial merge under test put it there, which is the
+// arrangement being judged rather than tampering, so warning there would fire
+// on every merge that touches the file and name a scratch path already
+// deleted by the time anyone read it. The operator's own checkout still gets
+// the warning, from loadConfig itself.
+func loadConfigForDir(fs *pflag.FlagSet, dir string, warnIfTampered bool) (*Config, error) {
 	k := koanf.New(".")
 
 	if err := k.Load(confmap.Provider(defaultConfig(), "."), nil); err != nil {
 		return nil, fmt.Errorf("cli: load config defaults: %w", err)
 	}
 
-	if err := loadConfigFile(k, fs, dir); err != nil {
+	if err := loadConfigFile(k, fs, dir, warnIfTampered); err != nil {
 		return nil, err
 	}
 
@@ -186,7 +196,9 @@ func loadConfigForDir(fs *pflag.FlagSet, dir string) (*Config, error) {
 // unrelated git-tools.yaml the cwd happens to carry). An explicit --config
 // ignores implicitDefaultDir entirely: it names one fixed file, and that
 // file's identity has nothing to do with which directory a caller passes.
-func loadConfigFile(k *koanf.Koanf, fs *pflag.FlagSet, implicitDefaultDir string) error {
+// warnIfTampered gates the tampered-config warning only; see loadConfigForDir
+// for which callers suppress it and why.
+func loadConfigFile(k *koanf.Koanf, fs *pflag.FlagSet, implicitDefaultDir string, warnIfTampered bool) error {
 	explicit := fs.Changed("config")
 	path, _ := fs.GetString("config")
 	if path == "" {
@@ -203,7 +215,9 @@ func loadConfigFile(k *koanf.Koanf, fs *pflag.FlagSet, implicitDefaultDir string
 	if err := k.Load(file.Provider(path), yaml.Parser()); err != nil {
 		return fmt.Errorf("cli: load config file %s: %w", path, err)
 	}
-	warnIfConfigTampered(path)
+	if warnIfTampered {
+		warnIfConfigTampered(path)
+	}
 	return nil
 }
 

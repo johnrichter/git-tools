@@ -6,30 +6,64 @@
 package cli_test
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
-// configScanFixedMarker and configScanFixedRuleID name the finding case 1's
+// configScanFixedMarker and configScanFixedRuleID name the finding case A's
 // source branch resolves by editing the flagged file itself, leaving no
-// trace of the finding in the prospective tree.
+// trace of the finding in the prospective tree. The remaining pairs are
+// findings a config entry either exempts or stops exempting.
 const (
 	configScanFixedMarker  = "widget-marker-fixed-483"
 	configScanFixedRuleID  = "fixture-widget-fixed-rule"
 	configScanExemptMarker = "widget-marker-exempt-756"
 	configScanExemptRuleID = "fixture-widget-exempt-rule"
+	configScanSecondMarker = "widget-marker-second-219"
+	configScanSecondRuleID = "fixture-widget-second-rule"
 )
 
-// configScanAllowlistYAML renders a git-tools.yaml carrying exactly one
-// secret_scan_extra_allowlist entry naming marker/ruleID, or no key at all
-// (an empty marker) — the two config bodies these cases toggle between.
-func configScanAllowlistYAML(marker, ruleID string) string {
-	if marker == "" {
+// configScanAllowlistYAML renders a git-tools.yaml carrying one
+// secret_scan_extra_allowlist entry per marker/ruleID pair, or no key at all
+// when handed none — the config bodies these cases toggle between.
+func configScanAllowlistYAML(pairs ...[2]string) string {
+	if len(pairs) == 0 {
 		return "repo: .\n"
 	}
-	return fmt.Sprintf("secret_scan_extra_allowlist:\n  - rule_id: %s\n    value: %s\n", ruleID, marker)
+	body := "secret_scan_extra_allowlist:\n"
+	for _, p := range pairs {
+		body += fmt.Sprintf("  - rule_id: %s\n    value: %s\n", p[1], p[0])
+	}
+	return body
+}
+
+// exempt names one marker/ruleID pair for configScanAllowlistYAML, so a case
+// reads as the exemption set it commits rather than as index arithmetic.
+func exempt(marker, ruleID string) [2]string { return [2]string{marker, ruleID} }
+
+// runCLICapturingStderr is runCLI plus the CLI's stderr, which runCLI
+// discards. The gate's own diagnostics travel in the JSON record on stdout;
+// stderr carries only out-of-band warnings, so a case asserting one is or is
+// not emitted needs this rather than the decoded record.
+func runCLICapturingStderr(t *testing.T, bin string, args ...string) (wireResult, int, string) {
+	t.Helper()
+	cmd := exec.Command(bin, args...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	_ = cmd.Run()
+	exit := cmd.ProcessState.ExitCode()
+	var r wireResult
+	if err := json.Unmarshal(stdout.Bytes(), &r); err != nil {
+		t.Fatalf("output is not valid JSON: %v\nraw: %s", err, stdout.String())
+	}
+	return r, exit, stderr.String()
 }
 
 // writeConfigAwareBetterleaksBinary is writeContentAwareBetterleaksBinary
@@ -107,7 +141,7 @@ func TestProspectiveMergeScan_SourceContentFixAndConfigExemptionBothTakeEffect(t
 	runGit(t, dir, "branch", "feature")
 	runGit(t, dir, "checkout", "-q", "feature")
 	commitFile(t, dir, "widget-a.conf", "widget_value = clean\n", "remediate widget-a")
-	tip := commitFile(t, dir, "git-tools.yaml", configScanAllowlistYAML(configScanExemptMarker, configScanExemptRuleID), "exempt widget-b's finding")
+	tip := commitFile(t, dir, "git-tools.yaml", configScanAllowlistYAML(exempt(configScanExemptMarker, configScanExemptRuleID)), "exempt widget-b's finding")
 	runGit(t, dir, "checkout", "-q", "main")
 
 	r, exit := runCLI(t, bin, "--repo", dir, "merge", "feature")
@@ -133,7 +167,7 @@ func TestProspectiveMergeScan_ConfigOnlyExemptionTakesEffectWithNoContentChange(
 	commitFile(t, dir, "widget.conf", "widget_value = "+configScanExemptMarker+"\n", "add widget with a finding")
 	runGit(t, dir, "branch", "feature")
 	runGit(t, dir, "checkout", "-q", "feature")
-	tip := commitFile(t, dir, "git-tools.yaml", configScanAllowlistYAML(configScanExemptMarker, configScanExemptRuleID), "exempt the finding")
+	tip := commitFile(t, dir, "git-tools.yaml", configScanAllowlistYAML(exempt(configScanExemptMarker, configScanExemptRuleID)), "exempt the finding")
 	runGit(t, dir, "checkout", "-q", "main")
 
 	r, exit := runCLI(t, bin, "--repo", dir, "merge", "feature")
@@ -159,14 +193,14 @@ func TestProspectiveMergeScan_ExplicitConfigFlagIgnoresBranchsOwnImplicitDefault
 		[2]string{configScanExemptMarker, configScanExemptRuleID}))
 
 	externalConfig := filepath.Join(t.TempDir(), "external-git-tools.yaml")
-	if err := os.WriteFile(externalConfig, []byte(configScanAllowlistYAML("", "")), 0o644); err != nil {
+	if err := os.WriteFile(externalConfig, []byte(configScanAllowlistYAML()), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	head := commitFile(t, dir, "widget.conf", "widget_value = "+configScanExemptMarker+"\n", "add widget with a finding")
 	runGit(t, dir, "branch", "feature")
 	runGit(t, dir, "checkout", "-q", "feature")
-	commitFile(t, dir, "git-tools.yaml", configScanAllowlistYAML(configScanExemptMarker, configScanExemptRuleID), "exempt the finding (ignored: --config overrides this)")
+	commitFile(t, dir, "git-tools.yaml", configScanAllowlistYAML(exempt(configScanExemptMarker, configScanExemptRuleID)), "exempt the finding (ignored: --config overrides this)")
 	runGit(t, dir, "checkout", "-q", "main")
 
 	r, exit := runCLI(t, bin, "--repo", dir, "--config", externalConfig, "merge", "feature")
@@ -195,10 +229,10 @@ func TestProspectiveMergeScan_SourceNarrowingConfigMakesTheMergeStricter(t *test
 		[2]string{configScanExemptMarker, configScanExemptRuleID}))
 
 	commitFile(t, dir, "widget.conf", "widget_value = "+configScanExemptMarker+"\n", "add widget with a finding")
-	head := commitFile(t, dir, "git-tools.yaml", configScanAllowlistYAML(configScanExemptMarker, configScanExemptRuleID), "exempt the finding")
+	head := commitFile(t, dir, "git-tools.yaml", configScanAllowlistYAML(exempt(configScanExemptMarker, configScanExemptRuleID)), "exempt the finding")
 	runGit(t, dir, "branch", "feature")
 	runGit(t, dir, "checkout", "-q", "feature")
-	commitFile(t, dir, "git-tools.yaml", configScanAllowlistYAML("", ""), "narrow: drop the exemption")
+	commitFile(t, dir, "git-tools.yaml", configScanAllowlistYAML(), "narrow: drop the exemption")
 	runGit(t, dir, "checkout", "-q", "main")
 
 	r, exit := runCLI(t, bin, "--repo", dir, "merge", "feature")
@@ -211,5 +245,150 @@ func TestProspectiveMergeScan_SourceNarrowingConfigMakesTheMergeStricter(t *test
 	}
 	if got := runGit(t, dir, "rev-parse", "main"); got != head {
 		t.Fatalf("main advanced from %s to %s — merge landed despite the branch's narrower config refusing", head, got)
+	}
+}
+
+// Case E (one commit both widens and narrows): cases B and D each move the
+// exemption set in one direction only, so either could pass against a config
+// that is really main's unioned with the branch's. Here one commit drops the
+// exemption for widget-a's finding and adds one for widget-b's, and the
+// prospective tree still carries both findings — so each of the three
+// candidate configs names a different outcome, and only the branch's own,
+// governing exactly, refuses on widget-a: main's alone would refuse on
+// widget-b, and a union of the two would let the merge land.
+func TestProspectiveMergeScan_OneCommitWideningAndNarrowingIsReflectedBothWays(t *testing.T) {
+	bin := buildCLI(t)
+	dir := initRepo(t)
+	t.Setenv("GIT_TOOLS_BETTERLEAKS_BIN", writeConfigAwareBetterleaksBinary(t,
+		[2]string{configScanExemptMarker, configScanExemptRuleID},
+		[2]string{configScanSecondMarker, configScanSecondRuleID}))
+
+	commitFile(t, dir, "widget-a.conf", "widget_value = "+configScanExemptMarker+"\n", "add widget-a with a finding")
+	commitFile(t, dir, "widget-b.conf", "widget_value = "+configScanSecondMarker+"\n", "add widget-b with a different finding")
+	head := commitFile(t, dir, "git-tools.yaml", configScanAllowlistYAML(exempt(configScanExemptMarker, configScanExemptRuleID)), "exempt widget-a's finding only")
+	runGit(t, dir, "branch", "feature")
+	runGit(t, dir, "checkout", "-q", "feature")
+	commitFile(t, dir, "git-tools.yaml", configScanAllowlistYAML(exempt(configScanSecondMarker, configScanSecondRuleID)), "swap which finding is exempt")
+	runGit(t, dir, "checkout", "-q", "main")
+
+	r, exit := runCLI(t, bin, "--repo", dir, "merge", "feature")
+	if r.Status != "precondition_unmet" || exit != 30 {
+		t.Fatalf("status=%s exit=%d, want precondition_unmet/30 (a union of both sides' exemptions would wrongly let this land): %+v", r.Status, exit, r)
+	}
+	assertRefusalNamesFinding(t, r, "widget-a.conf")
+	if got := runGit(t, dir, "rev-parse", "main"); got != head {
+		t.Fatalf("main advanced from %s to %s — merge landed despite the exemption the branch dropped", head, got)
+	}
+}
+
+// Case F (octopus): with two sources, the exemption and the finding it covers
+// can live in different sources, so neither source's own tree decides the
+// answer on its own — only the combined trial-merged tree does. Both halves
+// must hold: the exemption one source carries clears a finding another source
+// brings, and a finding no source's config exempts still refuses.
+func TestProspectiveMergeScan_OctopusJudgesTheCombinedTreesConfig(t *testing.T) {
+	t.Run("exemption_in_one_source_clears_a_finding_from_another", func(t *testing.T) {
+		bin := buildCLI(t)
+		dir := signingRepo(t)
+		t.Setenv("GIT_TOOLS_BETTERLEAKS_BIN", writeConfigAwareBetterleaksBinary(t,
+			[2]string{configScanExemptMarker, configScanExemptRuleID}))
+
+		runGit(t, dir, "checkout", "-q", "-b", "config-source", "main")
+		commitFile(t, dir, "git-tools.yaml", configScanAllowlistYAML(exempt(configScanExemptMarker, configScanExemptRuleID)), "exempt the finding")
+		runGit(t, dir, "checkout", "-q", "-b", "content-source", "main")
+		commitFile(t, dir, "widget.conf", "widget_value = "+configScanExemptMarker+"\n", "add widget with a finding")
+		runGit(t, dir, "checkout", "-q", "main")
+
+		r, exit := runCLI(t, bin, "--repo", dir, "merge", "config-source", "content-source")
+		if r.Status != "success" || exit != 0 {
+			t.Fatalf("status=%s exit=%d, want success/0 (the octopus's own combined tree carries both the finding and its exemption): %+v", r.Status, exit, r)
+		}
+	})
+
+	t.Run("finding_no_sources_config_exempts_still_refuses", func(t *testing.T) {
+		bin := buildCLI(t)
+		dir := signingRepo(t)
+		t.Setenv("GIT_TOOLS_BETTERLEAKS_BIN", writeConfigAwareBetterleaksBinary(t,
+			[2]string{configScanExemptMarker, configScanExemptRuleID},
+			[2]string{configScanSecondMarker, configScanSecondRuleID}))
+		head := runGit(t, dir, "rev-parse", "HEAD")
+
+		runGit(t, dir, "checkout", "-q", "-b", "config-source", "main")
+		commitFile(t, dir, "git-tools.yaml", configScanAllowlistYAML(exempt(configScanExemptMarker, configScanExemptRuleID)), "exempt one finding only")
+		runGit(t, dir, "checkout", "-q", "-b", "content-source", "main")
+		commitFile(t, dir, "widget.conf", "widget_value = "+configScanSecondMarker+"\n", "add widget with an unexempted finding")
+		runGit(t, dir, "checkout", "-q", "main")
+
+		r, exit := runCLI(t, bin, "--repo", dir, "merge", "config-source", "content-source")
+		if r.Status != "precondition_unmet" || exit != 30 {
+			t.Fatalf("status=%s exit=%d, want precondition_unmet/30 (no side's config exempts this finding): %+v", r.Status, exit, r)
+		}
+		assertRefusalNamesFinding(t, r, "widget.conf")
+		if got := runGit(t, dir, "rev-parse", "main"); got != head {
+			t.Fatalf("main advanced from %s to %s — the octopus landed despite the finding", head, got)
+		}
+	})
+}
+
+// Case G (the prospective load is silent about the scratch tree): the scratch
+// worktree's git-tools.yaml differs from that worktree's own HEAD whenever the
+// merge changes it, which is the arrangement under test rather than tampering.
+// warnIfConfigTampered must therefore stay quiet for that load — otherwise
+// every merge touching the file would warn about a temporary path the operator
+// cannot inspect, training a real security warning into noise.
+func TestProspectiveMergeScan_ProspectiveConfigLoadEmitsNoTamperWarning(t *testing.T) {
+	bin := buildCLI(t)
+	dir := signingRepo(t)
+	t.Setenv("GIT_TOOLS_BETTERLEAKS_BIN", writeConfigAwareBetterleaksBinary(t,
+		[2]string{configScanExemptMarker, configScanExemptRuleID}))
+
+	commitFile(t, dir, "widget.conf", "widget_value = "+configScanExemptMarker+"\n", "add widget with a finding")
+	runGit(t, dir, "branch", "feature")
+	runGit(t, dir, "checkout", "-q", "feature")
+	commitFile(t, dir, "git-tools.yaml", configScanAllowlistYAML(exempt(configScanExemptMarker, configScanExemptRuleID)), "exempt the finding")
+	runGit(t, dir, "checkout", "-q", "main")
+
+	r, exit, stderr := runCLICapturingStderr(t, bin, "--repo", dir, "merge", "feature")
+	if r.Status != "success" || exit != 0 {
+		t.Fatalf("status=%s exit=%d, want success/0: %+v", r.Status, exit, r)
+	}
+	if strings.Contains(stderr, "git-tools.yaml is") {
+		t.Fatalf("the prospective config load warned about the scratch tree's own git-tools.yaml: %q", stderr)
+	}
+}
+
+// Case H (an unloadable prospective config is the operator's precondition):
+// a source branch whose git-tools.yaml does not parse leaves the gate with no
+// config it can honor, so the merge must refuse — but as a precondition
+// naming git-tools.yaml, not as an internal fault advising the operator to
+// file an issue about a scratch path this run has already deleted.
+func TestProspectiveMergeScan_UnloadableProspectiveConfigRefusesAsAPrecondition(t *testing.T) {
+	bin := buildCLI(t)
+	dir := signingRepo(t)
+	t.Setenv("GIT_TOOLS_BETTERLEAKS_BIN", writeConfigAwareBetterleaksBinary(t,
+		[2]string{configScanExemptMarker, configScanExemptRuleID}))
+
+	head := commitFile(t, dir, "widget.conf", "widget_value = clean\n", "add a clean widget")
+	runGit(t, dir, "branch", "feature")
+	runGit(t, dir, "checkout", "-q", "feature")
+	commitFile(t, dir, "git-tools.yaml", "secret_scan_extra_allowlist: [unclosed\n", "break the config")
+	runGit(t, dir, "checkout", "-q", "main")
+
+	r, exit := runCLI(t, bin, "--repo", dir, "merge", "feature")
+	if r.Status != "precondition_unmet" || exit != 30 {
+		t.Fatalf("status=%s exit=%d, want precondition_unmet/30 (a branch's own unparseable config is a precondition, not an internal fault): %+v", r.Status, exit, r)
+	}
+	if len(r.Errors) == 0 {
+		t.Fatal("refusal carries no error")
+	}
+	message, _ := r.Errors[0]["message"].(string)
+	if !strings.Contains(message, "git-tools.yaml") {
+		t.Fatalf("refusal does not name the file to fix: %+v", r.Errors[0])
+	}
+	if strings.Contains(message, "git-tools-merge-scan-") {
+		t.Fatalf("refusal names the deleted scratch worktree path: %+v", r.Errors[0])
+	}
+	if got := runGit(t, dir, "rev-parse", "main"); got != head {
+		t.Fatalf("main advanced from %s to %s — merge landed with a config the gate could not load", head, got)
 	}
 }

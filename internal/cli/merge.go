@@ -83,13 +83,17 @@ The content scan evaluates the tree this merge would actually produce —
 computed with a real trial merge in a disposable scratch worktree, discarded
 either way — not the target's current, pre-merge tree. A merge that resolves
 every pre-existing finding is allowed to land even when the target's current
-tree is not clean.
+tree is not clean. The git-tools.yaml governing that scan is read from that
+same prospective tree, so an exemption a source branch adds takes effect on
+the merge that lands it, and one it drops makes that same merge stricter. An
+explicit --config names one fixed file and is never re-resolved against that
+tree.
 
 Exit codes:
   0  success              the sources merged (with any re-signing reported)
   10 caveats              the merge landed; its signature did not verify, or a publish or cleanup did not complete
   20 gate_negative        every source was already in the target, so nothing landed
-  30 precondition_unmet   a content guardrail flagged a file, the configured commit-msg hook rejected --message, or signing could not be satisfied; nothing was merged
+  30 precondition_unmet   a content guardrail flagged a file, the tree the merge would produce carries a git-tools.yaml that cannot be loaded, the configured commit-msg hook rejected --message, or signing could not be satisfied; nothing was merged
   40 not_found            --repo is not a git working tree
   41 conflict             the merge would conflict; it was aborted
   50 usage                a flag value is not valid
@@ -227,9 +231,23 @@ $PATH, does not satisfy it, and is denied from a primary checkout.`,
 				// names one fixed file regardless of tree, so it is unaffected
 				// here — loadConfigForDir only changes the implicit default's
 				// resolution, exactly as loadConfig would apply it to scanDir.
-				scanCfg, err := loadConfigForDir(cmd.Flags(), scanDir)
+				scanCfg, err := loadConfigForDir(cmd.Flags(), scanDir, false)
 				if err != nil {
-					return finishErr(cmd, scanData, "internal.config.load_failed", "load configuration for the prospective merge result", err)
+					// Defaults, environment and flags resolve identically to the
+					// loadConfig above that already succeeded, so the only layer
+					// that can fail here is the prospective tree's own
+					// git-tools.yaml: content an operator committed on a branch, or
+					// content this merge produced by combining two sides' edits —
+					// a precondition they can fix, not an internal fault to file an
+					// issue about. Name that file as the repository sees it; the
+					// scratch path the underlying error carries is a temporary
+					// directory this run deletes on its way out.
+					detail := strings.ReplaceAll(sanitizeMessage(err.Error()), scanDir+string(filepath.Separator), "")
+					return finishDiagnostic(cmd, scanData, clikit.NewPreconditionUnmet,
+						"precondition_unmet.cli.merge_result_config_invalid",
+						fmt.Sprintf("%s in the tree this merge would produce could not be loaded: %s", defaultConfigFile, detail),
+						clikit.Manual(fmt.Sprintf("fix %s so the merge's own result parses — a merge can also combine two individually valid edits into one that does not — then re-run; nothing was merged", defaultConfigFile)),
+						map[string]any{"path": defaultConfigFile})
 				}
 				if err := scanGate(cmd, scanCfg, scanDir, "merge", scanData); err != nil {
 					return err
