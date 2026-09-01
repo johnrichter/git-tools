@@ -26,22 +26,28 @@ type exitError struct{ code int }
 func (e *exitError) Error() string { return fmt.Sprintf("exit code %d", e.code) }
 
 // newRootCmd builds the command tree: sign/resign, worktree, branch, merge,
-// rebase, publish, release tagging, content scans and installable git hooks.
+// rebase, publish, release tagging, and content scans. There is no installed
+// git-hook path: a plain `git commit`, run outside any of this CLI's own
+// write verbs, has no session to inherit a resolved betterleaks path from,
+// so a hook invoking `scan all` there would refuse every commit fleet-wide
+// the moment the credential scan became mandatory, with no way for an
+// operator to fix it short of editing the hook script itself. `merge`,
+// `push`, `rebase`, and `tag create` — this CLI's own sanctioned write
+// verbs — are the only enforcement points now, and each already runs
+// `scanGate` before it acts.
 func newRootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:   "git-tools",
 		Short: "Signing, rewrite, worktree/branch/merge/rebase/push and content-guardrail operations over a git repository",
 		Long: `git-tools composes the shared git, githooks, fsx, sysops and clikit
 libraries into one CLI: re-sign commit ranges, manage worktrees and branches,
-merge and rebase, publish a branch or cut and push a release tag, scan for
-secrets/raw-binaries/privacy violations, and install those scans as git
-hooks.`,
+merge and rebase, publish a branch or cut and push a release tag, and scan
+for secrets/raw-binaries/privacy violations.`,
 		Example: strings.TrimLeft(`
   git-tools resign --base main --repo . HEAD
   git-tools push main
   git-tools tag create 1.4.0 --shape vX.Y.Z
   git-tools scan all --staged --strict
-  git-tools hooks install --hook pre-commit
 `, "\n"),
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -62,7 +68,6 @@ hooks.`,
 	root.AddCommand(newPushCmd())
 	root.AddCommand(newTagCmd())
 	root.AddCommand(newScanCmd())
-	root.AddCommand(newHooksCmd())
 	return root
 }
 

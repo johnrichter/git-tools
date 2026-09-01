@@ -1,8 +1,7 @@
 // Integration tests exercise the built git-tools binary as a real
 // subprocess against scratch git repositories, per the task's test
 // strategy: resign/worktree/merge/rebase work, scans detect planted
-// findings, hooks install, --help is complete, and exit codes follow
-// clikit's taxonomy.
+// findings, --help is complete, and exit codes follow clikit's taxonomy.
 package cli_test
 
 import (
@@ -182,7 +181,7 @@ func TestHelp_TopLevelIsComplete(t *testing.T) {
 		t.Fatalf("--help exited non-zero: %v\n%s", err, out)
 	}
 	text := string(out)
-	for _, want := range []string{"sign", "resign", "worktree", "branch", "merge", "rebase", "scan", "hooks", "Examples:", "Usage:"} {
+	for _, want := range []string{"sign", "resign", "worktree", "branch", "merge", "rebase", "scan", "Examples:", "Usage:"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("--help missing %q:\n%s", want, text)
 		}
@@ -197,7 +196,6 @@ func TestHelp_EverySubcommandHasHelp(t *testing.T) {
 		{"branch", "--help"}, {"branch", "create", "--help"}, {"branch", "delete", "--help"}, {"branch", "list", "--help"},
 		{"merge", "--help"}, {"rebase", "--help"},
 		{"scan", "--help"}, {"scan", "secrets", "--help"}, {"scan", "lfs", "--help"}, {"scan", "privacy", "--help"}, {"scan", "all", "--help"},
-		{"hooks", "--help"}, {"hooks", "install", "--help"},
 	} {
 		out, err := exec.Command(bin, args...).CombinedOutput()
 		if err != nil {
@@ -929,57 +927,6 @@ func TestScanAll_CombinesEveryScanner(t *testing.T) {
 	}
 }
 
-func TestHooksInstall_WritesScriptAndSetsHooksPath(t *testing.T) {
-	bin := buildCLI(t)
-	dir := initRepo(t)
-
-	r, exit := runCLI(t, bin, "--repo", dir, "hooks", "install", "--hook", "pre-commit")
-	if r.Status != "success" || exit != 0 {
-		t.Fatalf("status=%s exit=%d, want success/0: %+v", r.Status, exit, r)
-	}
-	scriptPath := filepath.Join(dir, ".githooks", "pre-commit")
-	info, err := os.Stat(scriptPath)
-	if err != nil {
-		t.Fatalf("hook script not written: %v", err)
-	}
-	if info.Mode()&0o111 == 0 {
-		t.Fatal("hook script is not executable")
-	}
-	if got := runGit(t, dir, "config", "core.hooksPath"); got != ".githooks" {
-		t.Fatalf("core.hooksPath=%q, want .githooks", got)
-	}
-
-	// The hook itself fires: staging a planted secret and running it as
-	// pre-commit does through `git commit` should refuse the commit.
-	if err := os.WriteFile(filepath.Join(dir, "secret.env"), []byte("AWS_KEY="+"AKIA"+"IOSFODNN7"+"EXAMPLE"+"\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	runGit(t, dir, "add", "secret.env")
-	commit := exec.Command("git", "commit", "-q", "-m", "add secret")
-	commit.Dir = dir
-	if out, err := commit.CombinedOutput(); err == nil {
-		t.Fatalf("commit with a planted secret should have been blocked by the installed hook:\n%s", out)
-	}
-}
-
-// TestHooksInstall_RetiredTierWireValues_AreUsageErrors covers the other half
-// of the tier cutover: install embeds the tier verbatim in the script it
-// writes, so a retired value must be refused here rather than baked into a
-// hook that then fails every commit. Nothing is installed on refusal.
-func TestHooksInstall_RetiredTierWireValues_AreUsageErrors(t *testing.T) {
-	bin := buildCLI(t)
-	for _, tier := range []string{"datadog", "personal", "nonsense"} {
-		dir := initRepo(t)
-		r, exit := runCLI(t, bin, "--repo", dir, "hooks", "install", "--privacy-tier", tier)
-		if r.Status != "usage" || exit != 50 {
-			t.Errorf("--privacy-tier %s: status=%s exit=%d, want usage/50: %+v", tier, r.Status, exit, r)
-		}
-		if _, err := os.Stat(filepath.Join(dir, ".githooks", "pre-commit")); !os.IsNotExist(err) {
-			t.Errorf("--privacy-tier %s: a hook was installed despite the usage error (stat err = %v)", tier, err)
-		}
-	}
-}
-
 // TestAbandonmentRoute_MergedBranch_SucceedsInTwoActs and
 // TestAbandonmentRoute_UnmergedBranch_RefusedAtBothActs are R10's evidence:
 // cluster C (SC-C6, this abandonment route) lands only because SC-C7 shipped
@@ -1162,18 +1109,6 @@ func TestOtherVerbs_DataMaps_DoNotCarryMergeDataKeys(t *testing.T) {
 		assertNoMergeKeys(t, r)
 	})
 
-	t.Run("hooks install conflict", func(t *testing.T) {
-		dir := initRepo(t)
-		if r, exit := runCLI(t, bin, "--repo", dir, "hooks", "install"); r.Status != "success" || exit != 0 {
-			t.Fatalf("first install: status=%s exit=%d: %+v", r.Status, exit, r)
-		}
-		r, exit := runCLI(t, bin, "--repo", dir, "hooks", "install")
-		if r.Status != "conflict" || exit != 41 {
-			t.Fatalf("status=%s exit=%d, want conflict/41: %+v", r.Status, exit, r)
-		}
-		assertNoMergeKeys(t, r)
-	})
-
 	t.Run("push repo retargeting usage", func(t *testing.T) {
 		dir := initRepo(t)
 		r, exit := runCLIIn(t, bin, dir, "push", "main", "--repo", ".")
@@ -1182,26 +1117,4 @@ func TestOtherVerbs_DataMaps_DoNotCarryMergeDataKeys(t *testing.T) {
 		}
 		assertNoMergeKeys(t, r)
 	})
-}
-
-func TestHooksInstall_ExistingScriptWithoutForce_IsConflict(t *testing.T) {
-	bin := buildCLI(t)
-	dir := initRepo(t)
-
-	r, exit := runCLI(t, bin, "--repo", dir, "hooks", "install")
-	if r.Status != "success" || exit != 0 {
-		t.Fatalf("first install: status=%s exit=%d: %+v", r.Status, exit, r)
-	}
-	r, exit = runCLI(t, bin, "--repo", dir, "hooks", "install")
-	if r.Status != "conflict" || exit != 41 {
-		t.Fatalf("status=%s exit=%d, want conflict/41: %+v", r.Status, exit, r)
-	}
-
-	r, exit = runCLI(t, bin, "--repo", dir, "hooks", "install", "--force")
-	if r.Status != "success" || exit != 0 {
-		t.Fatalf("--force: status=%s exit=%d: %+v", r.Status, exit, r)
-	}
-	if overwritten, _ := r.Data["overwritten"].(bool); !overwritten {
-		t.Fatalf("--force install did not report overwritten=true: %+v", r.Data)
-	}
 }
