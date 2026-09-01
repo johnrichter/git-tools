@@ -82,8 +82,11 @@ func betterleaksExtraAllowlist(entries []SecretScanExtraAllowlistEntry) []githoo
 
 // scanSecretsRuleIDs are the four rule ids githooks.ScanSecrets' hand-rolled
 // patterns report (private_key_block, aws_access_key_id, slack_token,
-// github_token) — never a betterleaks rule-catalog id, which is always
-// hyphenated (e.g. "aws-secret-access-key").
+// github_token). None of the four is in betterleaks' own base rule catalog,
+// whose ids are hyphenated (e.g. "aws-secret-access-key"). A
+// secret_scan_extra_rules entry, whose id its author picks freely, is the one
+// way betterleaks' catalog can come to hold one of these names anyway — see
+// betterleaksScopedAllowlist.
 var scanSecretsRuleIDs = map[string]bool{
 	"private_key_block": true,
 	"aws_access_key_id": true,
@@ -92,17 +95,28 @@ var scanSecretsRuleIDs = map[string]bool{
 }
 
 // betterleaksScopedAllowlist drops every secret_scan_extra_allowlist entry
-// scoped to one of scanSecretsRuleIDs before it reaches
-// githooks.ScanCredentials: betterleaks' own config loader hard-rejects a
-// scoped allowlist entry naming a rule id outside its own catalog, and none
-// of ScanSecrets' hand-rolled labels are ever in it. An entry scoped to ""
-// or "*" (applies everywhere, betterleaks' own no-target-rules semantics) or
-// to one of betterleaks' own catalog ids passes through unchanged — only an
-// entry that could never mean anything to betterleaks is held back.
-func betterleaksScopedAllowlist(entries []SecretScanExtraAllowlistEntry) []SecretScanExtraAllowlistEntry {
+// betterleaks' own config loader would reject before it reaches
+// githooks.ScanCredentials. That loader hard-rejects a scoped allowlist entry
+// naming a rule id outside its own catalog, failing the whole credential scan
+// rather than ignoring the entry, so an entry scoped to one of
+// scanSecretsRuleIDs takes down every scan and write verb the moment a
+// git-tools.yaml adds it for the hand-rolled scanner it was written for.
+//
+// An entry scoped to "" or "*" (applies everywhere, betterleaks' own
+// no-target-rules semantics) or to a rule id betterleaks does resolve passes
+// through unchanged. extraRules is what makes that second case exact rather
+// than approximate: because a secret_scan_extra_rules id is author-chosen, one
+// can itself be named for a hand-rolled label, and where it is, that id is in
+// betterleaks' catalog for this run and the entry is withheld from neither
+// scanner.
+func betterleaksScopedAllowlist(entries []SecretScanExtraAllowlistEntry, extraRules []SecretScanExtraRule) []SecretScanExtraAllowlistEntry {
+	betterleaksResolves := make(map[string]bool, len(extraRules))
+	for _, r := range extraRules {
+		betterleaksResolves[r.ID] = true
+	}
 	out := make([]SecretScanExtraAllowlistEntry, 0, len(entries))
 	for _, e := range entries {
-		if scanSecretsRuleIDs[e.RuleID] {
+		if scanSecretsRuleIDs[e.RuleID] && !betterleaksResolves[e.RuleID] {
 			continue
 		}
 		out = append(out, e)
@@ -125,7 +139,7 @@ func scanCredentials(dir string, cfg *Config) ([]githooks.Finding, error) {
 	return githooks.ScanCredentials(dir, path, githooks.BetterleaksOptions{
 		SkipRules:      gitToolsSkipRules,
 		ExtraRules:     betterleaksExtraRules(cfg.SecretScanExtraRules),
-		ExtraAllowlist: betterleaksExtraAllowlist(betterleaksScopedAllowlist(cfg.SecretScanExtraAllowlist)),
+		ExtraAllowlist: betterleaksExtraAllowlist(betterleaksScopedAllowlist(cfg.SecretScanExtraAllowlist, cfg.SecretScanExtraRules)),
 	})
 }
 

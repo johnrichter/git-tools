@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"unsafe"
 
@@ -195,6 +196,45 @@ func TestBetterleaksExtraAllowlist_ConvertsAllThreeFields(t *testing.T) {
 	out := betterleaksExtraAllowlist(in)
 	if len(out) != 1 || out[0].RuleID != "fixture-marker" || out[0].Value != "fixture-value" || out[0].Regex != "fixture-.*" {
 		t.Fatalf("betterleaksExtraAllowlist(%+v) = %+v, want RuleID/Value/Regex carried through unchanged", in, out)
+	}
+}
+
+// TestBetterleaksScopedAllowlist_WithholdsOnlyWhatBetterleaksCannotResolve
+// proves the one-config-key split reaches betterleaks with exactly the
+// entries its config loader can resolve, and no fewer. An entry scoped to one
+// of githooks.ScanSecrets' four hand-rolled rule ids is withheld, because
+// betterleaks rejects an unknown target rule id by failing the entire
+// credential scan (exit 90, status "internal") rather than ignoring the
+// entry. Everything else — unscoped, "*"-scoped, scoped to a betterleaks
+// catalog id, or scoped to a hand-rolled name a secret_scan_extra_rules entry
+// has itself put in betterleaks' catalog for this run — passes through
+// unchanged and in order. Both ScanSecrets call sites deliberately pass the
+// unfiltered set instead, so a withheld entry still exempts the hand-rolled
+// scanner it was written for.
+func TestBetterleaksScopedAllowlist_WithholdsOnlyWhatBetterleaksCannotResolve(t *testing.T) {
+	entries := []SecretScanExtraAllowlistEntry{
+		{RuleID: "", Value: "unscoped"},
+		{RuleID: "*", Value: "every-rule"},
+		{RuleID: "private-key", Value: "betterleaks-catalog"},
+		{RuleID: "private_key_block", Value: "hand-rolled-1"},
+		{RuleID: "aws_access_key_id", Value: "hand-rolled-2"},
+		{RuleID: "slack_token", Value: "hand-rolled-3"},
+		{RuleID: "github_token", Value: "hand-rolled-4"},
+	}
+	got := betterleaksScopedAllowlist(entries, nil)
+	want := []SecretScanExtraAllowlistEntry{entries[0], entries[1], entries[2]}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("betterleaksScopedAllowlist(...) = %+v, want only the entries betterleaks resolves: %+v", got, want)
+	}
+	if len(betterleaksExtraAllowlist(entries)) != len(entries) {
+		t.Errorf("betterleaksExtraAllowlist dropped an entry; ScanSecrets must still receive all %d", len(entries))
+	}
+
+	extraRules := []SecretScanExtraRule{{ID: "github_token", Regex: "planted-[0-9]+"}}
+	got = betterleaksScopedAllowlist(entries, extraRules)
+	want = []SecretScanExtraAllowlistEntry{entries[0], entries[1], entries[2], entries[6]}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("betterleaksScopedAllowlist(..., %+v) = %+v, want the entry scoped to the extra rule's own id kept: %+v", extraRules, got, want)
 	}
 }
 

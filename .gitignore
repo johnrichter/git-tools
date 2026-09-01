@@ -252,8 +252,13 @@ tmp/
 
 # Two naming schemes are in use at the repository root and both must be
 # covered, or a stage-everything sweeps in whichever one the rules miss:
-# <slug>-report.md / <slug>-review.md, and <ROLE>_REPORT_<slug>.md.
+# <slug>-report.md / <slug>-review.md, and <ROLE>_REPORT_<slug>.md. Both are
+# written as .txt as often as .md, so both extensions are covered too.
 /*-report.md
 /*-review.md
 /*_REPORT_*.md
 /*_REVIEW_*.md
+/*-report.txt
+/*-review.txt
+/*_REPORT_*.txt
+/*_REVIEW_*.txt
