@@ -134,13 +134,24 @@ func normalizeKey(s string) string {
 // already-parsed flags. Each layer is loaded only — nothing here writes
 // back to a file or the environment.
 func loadConfig(fs *pflag.FlagSet) (*Config, error) {
+	return loadConfigForDir(fs, repoDirForConfig(fs))
+}
+
+// loadConfigForDir resolves Config exactly as loadConfig does, except the
+// implicit default config file (--config not given) is resolved against dir
+// rather than --repo's own target directory. This is how a caller judges a
+// prospective tree — e.g. a trial merge's scratch worktree — by that tree's
+// own git-tools.yaml rather than the real repository's: an explicit --config
+// still names one fixed file regardless of dir, exactly as loadConfig itself
+// treats it.
+func loadConfigForDir(fs *pflag.FlagSet, dir string) (*Config, error) {
 	k := koanf.New(".")
 
 	if err := k.Load(confmap.Provider(defaultConfig(), "."), nil); err != nil {
 		return nil, fmt.Errorf("cli: load config defaults: %w", err)
 	}
 
-	if err := loadConfigFile(k, fs); err != nil {
+	if err := loadConfigFile(k, fs, dir); err != nil {
 		return nil, err
 	}
 
@@ -168,16 +179,18 @@ func loadConfig(fs *pflag.FlagSet) (*Config, error) {
 // loadConfigFile loads the YAML config named by --config, or defaultConfigFile
 // if present and --config was not given. An explicitly named file that does
 // not exist is an error; an implicit default that does not exist is not. The
-// implicit default is resolved against --repo's own target directory, not
-// the invoking process's cwd — a caller running git-tools against a
-// different repo than the one it happens to be sitting in must still pick up
-// that repo's own git-tools.yaml, not silently fall back to no config (or,
-// worse, an unrelated git-tools.yaml the cwd happens to carry).
-func loadConfigFile(k *koanf.Koanf, fs *pflag.FlagSet) error {
+// implicit default is resolved against implicitDefaultDir, not the invoking
+// process's cwd — a caller running git-tools against a different repo than
+// the one it happens to be sitting in must still pick up that repo's own
+// git-tools.yaml, not silently fall back to no config (or, worse, an
+// unrelated git-tools.yaml the cwd happens to carry). An explicit --config
+// ignores implicitDefaultDir entirely: it names one fixed file, and that
+// file's identity has nothing to do with which directory a caller passes.
+func loadConfigFile(k *koanf.Koanf, fs *pflag.FlagSet, implicitDefaultDir string) error {
 	explicit := fs.Changed("config")
 	path, _ := fs.GetString("config")
 	if path == "" {
-		path = filepath.Join(repoDirForConfig(fs), defaultConfigFile)
+		path = filepath.Join(implicitDefaultDir, defaultConfigFile)
 	}
 
 	if _, err := os.Stat(path); err != nil {

@@ -215,12 +215,32 @@ const markerFrontmatterFindings = 2
 // loadConfigFile auto-discovers from --repo's own target directory when no
 // --config flag is passed. Untracked on purpose: a config file takes effect
 // without being committed — loadConfigFile warns but does not block — which
-// is the behavior these gate tests rely on to configure a scratch repo.
+// is the behavior push, tag create, and scan rely on here, since each of
+// those verbs scans dir itself rather than a prospective merge result.
+// merge's own gate judges a scratch, trial-merged tree instead (see
+// prospectiveMergeScanDir), which never carries dir's uncommitted content —
+// so a merge test needs commitConfig, not this, for its exemption to reach
+// that tree.
 func writeConfig(t *testing.T, dir, content string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(dir, "git-tools.yaml"), []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// commitConfig commits a git-tools.yaml into dir at the currently checked-out
+// branch, the shape a merge test needs so its exemption is actually present
+// in the scratch, trial-merged tree merge's own content-guardrail gate reads
+// its config from — see writeConfig's own doc comment for why an untracked
+// file does not reach that tree.
+func commitConfig(t *testing.T, dir, content, message string) string {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, "git-tools.yaml"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, dir, "add", "git-tools.yaml")
+	runGit(t, dir, "commit", "-q", "-m", message)
+	return runGit(t, dir, "rev-parse", "HEAD")
 }
 
 // commitNestedFile is commitFile for a fixture whose path carries a
@@ -287,7 +307,7 @@ func TestScanGate_PrivacyMarkerExemptConfigAllowsMergeAndPush(t *testing.T) {
 	t.Run("merge", func(t *testing.T) {
 		bin := buildCLI(t)
 		dir := signingRepo(t)
-		writeConfig(t, dir, "privacy_marker_exempt:\n  - fixtures\n")
+		commitConfig(t, dir, "privacy_marker_exempt:\n  - fixtures\n", "add config")
 		commitNestedFile(t, dir, "fixtures/sample.md", markerFrontmatter, "add fixture sample")
 		runGit(t, dir, "branch", "feature")
 		runGit(t, dir, "checkout", "-q", "feature")
@@ -379,7 +399,7 @@ func TestScanGate_PrivacyMarkerExemptConfigStaysScoped(t *testing.T) {
 	t.Run("merge", func(t *testing.T) {
 		bin := buildCLI(t)
 		dir := initRepo(t)
-		writeConfig(t, dir, "privacy_marker_exempt:\n  - fixtures\n")
+		commitConfig(t, dir, "privacy_marker_exempt:\n  - fixtures\n", "add config")
 		commitNestedFile(t, dir, "fixtures/sample.md", markerFrontmatter, "add fixture sample")
 		head := commitNestedFile(t, dir, "docs/real.md", markerFrontmatter, "add real doc")
 		runGit(t, dir, "branch", "feature")
@@ -426,7 +446,7 @@ func TestScanGate_PrivacyMarkerExemptConfigStaysScoped(t *testing.T) {
 func TestScanGate_PrivacyMarkerExemptConfigLoadedFromRepoFlagTarget(t *testing.T) {
 	bin := buildCLI(t)
 	dir := signingRepo(t)
-	writeConfig(t, dir, "privacy_marker_exempt:\n  - fixtures\n")
+	commitConfig(t, dir, "privacy_marker_exempt:\n  - fixtures\n", "add config")
 	commitNestedFile(t, dir, "fixtures/sample.md", markerFrontmatter, "add fixture sample")
 	runGit(t, dir, "branch", "feature")
 	runGit(t, dir, "checkout", "-q", "feature")
@@ -457,7 +477,7 @@ func TestScanGate_MalformedPrivacyMarkerExemptRefusesBeforeScanning(t *testing.T
 	t.Run("merge", func(t *testing.T) {
 		bin := buildCLI(t)
 		dir := initRepo(t)
-		writeConfig(t, dir, "privacy_marker_exempt:\n  - \"fixtures[\"\n")
+		commitConfig(t, dir, "privacy_marker_exempt:\n  - \"fixtures[\"\n", "add config")
 		head := commitNestedFile(t, dir, "docs/real.md", markerFrontmatter, "add real doc")
 		runGit(t, dir, "branch", "feature")
 		runGit(t, dir, "checkout", "-q", "feature")
@@ -605,7 +625,7 @@ func TestScanGate_SecretScanExemptConfigAllowsMergeAndPush(t *testing.T) {
 	t.Run("merge", func(t *testing.T) {
 		bin := buildCLI(t)
 		dir := signingRepo(t)
-		writeConfig(t, dir, "secret_scan_exempt:\n  - fixtures/sample.env\n")
+		commitConfig(t, dir, "secret_scan_exempt:\n  - fixtures/sample.env\n", "add config")
 		commitNestedFile(t, dir, "fixtures/sample.env", secretFixtureSecret, "add fixture sample")
 		runGit(t, dir, "branch", "feature")
 		runGit(t, dir, "checkout", "-q", "feature")
@@ -646,7 +666,7 @@ func TestScanGate_SecretScanExemptConfigStaysScoped(t *testing.T) {
 	t.Run("merge", func(t *testing.T) {
 		bin := buildCLI(t)
 		dir := initRepo(t)
-		writeConfig(t, dir, "secret_scan_exempt:\n  - fixtures/sample.env\n")
+		commitConfig(t, dir, "secret_scan_exempt:\n  - fixtures/sample.env\n", "add config")
 		commitNestedFile(t, dir, "fixtures/sample.env", secretFixtureSecret, "add fixture sample")
 		head := commitNestedFile(t, dir, "config/prod.env", secretFixtureSecret, "add prod config")
 		runGit(t, dir, "branch", "feature")
@@ -777,7 +797,7 @@ func TestScanGate_SecretScanExemptDoesNotExemptRawBinary(t *testing.T) {
 func TestScanGate_MalformedSecretScanExemptRefusesBeforeScanning(t *testing.T) {
 	bin := buildCLI(t)
 	dir := initRepo(t)
-	writeConfig(t, dir, "secret_scan_exempt:\n  - \"fixtures[\"\n")
+	commitConfig(t, dir, "secret_scan_exempt:\n  - \"fixtures[\"\n", "add config")
 	head := commitNestedFile(t, dir, "config/prod.env", secretFixtureSecret, "add prod config")
 	runGit(t, dir, "branch", "feature")
 	runGit(t, dir, "checkout", "-q", "feature")

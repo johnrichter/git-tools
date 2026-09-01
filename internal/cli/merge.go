@@ -218,7 +218,20 @@ $PATH, does not satisfy it, and is denied from a primary checkout.`,
 				return err
 			}
 			if scanDir != "" {
-				if err := scanGate(cmd, cfg, scanDir, "merge", scanData); err != nil {
+				// The scan judges the tree a merge would actually produce, so it
+				// must judge that tree's own git-tools.yaml too, not the target's
+				// pre-merge copy cfg already carries: a source branch that adds
+				// both a fix and the config entry exempting a different,
+				// still-present finding needs that entry to take effect on the
+				// same prospective tree the fix lands on. An explicit --config
+				// names one fixed file regardless of tree, so it is unaffected
+				// here — loadConfigForDir only changes the implicit default's
+				// resolution, exactly as loadConfig would apply it to scanDir.
+				scanCfg, err := loadConfigForDir(cmd.Flags(), scanDir)
+				if err != nil {
+					return finishErr(cmd, scanData, "internal.config.load_failed", "load configuration for the prospective merge result", err)
+				}
+				if err := scanGate(cmd, scanCfg, scanDir, "merge", scanData); err != nil {
 					return err
 				}
 			}
