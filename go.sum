@@ -26,6 +26,8 @@ github.com/johnrichter/claude-shared-tooling/go/githooks v0.9.0 h1:ha5gSwwSuLoWU
 github.com/johnrichter/claude-shared-tooling/go/githooks v0.9.0/go.mod h1:X4ewQa0z9RS1WnPi8Vw252irMmfT8NDDeOTQ5Ur0nhY=
 github.com/johnrichter/claude-shared-tooling/go/githooks v0.11.0 h1:j6fLSodG4rZpE+vVL/MNO7DLS5kf32Llt6Z1tXEzafA=
 github.com/johnrichter/claude-shared-tooling/go/githooks v0.11.0/go.mod h1:X4ewQa0z9RS1WnPi8Vw252irMmfT8NDDeOTQ5Ur0nhY=
+github.com/johnrichter/claude-shared-tooling/go/githooks v0.12.0 h1:XEIIb1tn02zjo++lcN/ZlUPArfiyFMRJBWA7ng9Na+8=
+github.com/johnrichter/claude-shared-tooling/go/githooks v0.12.0/go.mod h1:X4ewQa0z9RS1WnPi8Vw252irMmfT8NDDeOTQ5Ur0nhY=
 github.com/johnrichter/claude-shared-tooling/go/logkit v0.1.0 h1:IOOkbM68r9LZVjEwbgXN/cuuXiDcGjmHTHBk/HhBL1A=
 github.com/johnrichter/claude-shared-tooling/go/logkit v0.1.0/go.mod h1:aU9nqkTe2bWabq6tcuqaQ8S9CAiJx4PZn6i1P+1I+Ys=
 github.com/johnrichter/claude-shared-tooling/go/sysops v0.1.0 h1:8Vs90UdK7zgG0UzFkmDdfAQhvafxVndLtddzP+O6JjY=

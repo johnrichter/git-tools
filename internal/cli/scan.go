@@ -68,12 +68,44 @@ func betterleaksExtraRules(rules []SecretScanExtraRule) []githooks.BetterleaksRu
 }
 
 // betterleaksExtraAllowlist converts cfg's secret_scan_extra_allowlist
-// entries into the githooks.BetterleaksAllowlistEntry slice
-// githooks.ScanCredentials' opts.ExtraAllowlist expects.
+// entries into the githooks.BetterleaksAllowlistEntry slice both
+// githooks.ScanCredentials' opts.ExtraAllowlist and githooks.ScanSecrets'
+// extraAllowlist parameter expect — one config key exempting a specific
+// matched value from either scanner.
 func betterleaksExtraAllowlist(entries []SecretScanExtraAllowlistEntry) []githooks.BetterleaksAllowlistEntry {
 	out := make([]githooks.BetterleaksAllowlistEntry, len(entries))
 	for i, e := range entries {
 		out[i] = githooks.BetterleaksAllowlistEntry{RuleID: e.RuleID, Value: e.Value, Regex: e.Regex}
+	}
+	return out
+}
+
+// scanSecretsRuleIDs are the four rule ids githooks.ScanSecrets' hand-rolled
+// patterns report (private_key_block, aws_access_key_id, slack_token,
+// github_token) — never a betterleaks rule-catalog id, which is always
+// hyphenated (e.g. "aws-secret-access-key").
+var scanSecretsRuleIDs = map[string]bool{
+	"private_key_block": true,
+	"aws_access_key_id": true,
+	"slack_token":       true,
+	"github_token":      true,
+}
+
+// betterleaksScopedAllowlist drops every secret_scan_extra_allowlist entry
+// scoped to one of scanSecretsRuleIDs before it reaches
+// githooks.ScanCredentials: betterleaks' own config loader hard-rejects a
+// scoped allowlist entry naming a rule id outside its own catalog, and none
+// of ScanSecrets' hand-rolled labels are ever in it. An entry scoped to ""
+// or "*" (applies everywhere, betterleaks' own no-target-rules semantics) or
+// to one of betterleaks' own catalog ids passes through unchanged — only an
+// entry that could never mean anything to betterleaks is held back.
+func betterleaksScopedAllowlist(entries []SecretScanExtraAllowlistEntry) []SecretScanExtraAllowlistEntry {
+	out := make([]SecretScanExtraAllowlistEntry, 0, len(entries))
+	for _, e := range entries {
+		if scanSecretsRuleIDs[e.RuleID] {
+			continue
+		}
+		out = append(out, e)
 	}
 	return out
 }
@@ -93,7 +125,7 @@ func scanCredentials(dir string, cfg *Config) ([]githooks.Finding, error) {
 	return githooks.ScanCredentials(dir, path, githooks.BetterleaksOptions{
 		SkipRules:      gitToolsSkipRules,
 		ExtraRules:     betterleaksExtraRules(cfg.SecretScanExtraRules),
-		ExtraAllowlist: betterleaksExtraAllowlist(cfg.SecretScanExtraAllowlist),
+		ExtraAllowlist: betterleaksExtraAllowlist(betterleaksScopedAllowlist(cfg.SecretScanExtraAllowlist)),
 	})
 }
 
@@ -215,7 +247,7 @@ func newScanSecretsCmd() *cobra.Command {
 			if invalidSecretScanCategorizedSeverity(cfg.SecretScanCategorizedSeverity) {
 				return finishUsage(cmd, nil, "usage.cli.invalid_secret_scan_categorized_severity", fmt.Sprintf("secret_scan_categorized_severity %q is not one of warn, block", cfg.SecretScanCategorizedSeverity))
 			}
-			findings, err := githooks.ScanSecrets(cfg.Repo, gitToolsSkipRules, secretExemptRules(cfg.SecretScanExempt))
+			findings, err := githooks.ScanSecrets(cfg.Repo, gitToolsSkipRules, secretExemptRules(cfg.SecretScanExempt), betterleaksExtraAllowlist(cfg.SecretScanExtraAllowlist))
 			if err != nil {
 				return finishErr(cmd, nil, "internal.githooks.scan_secrets_failed", "scan for secrets", err)
 			}
@@ -451,7 +483,7 @@ func emitScan(cmd *cobra.Command, outcome githooks.ScanOutcome) error {
 // tracked tree; secrets and privacy always scan the full tracked tree
 // regardless (see newScanAllCmd's --staged flag help for why).
 func scanTree(ctx context.Context, dir string, cfg *Config, staged bool) (githooks.ScanOutcome, error) {
-	secrets, err := githooks.ScanSecrets(dir, gitToolsSkipRules, secretExemptRules(cfg.SecretScanExempt))
+	secrets, err := githooks.ScanSecrets(dir, gitToolsSkipRules, secretExemptRules(cfg.SecretScanExempt), betterleaksExtraAllowlist(cfg.SecretScanExtraAllowlist))
 	if err != nil {
 		return githooks.ScanOutcome{}, fmt.Errorf("scan for secrets: %w", err)
 	}

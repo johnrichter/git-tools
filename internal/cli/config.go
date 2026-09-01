@@ -73,10 +73,14 @@ type Config struct {
 	// field, so every betterleaks finding still reports Category
 	// "credentials" regardless of what an extra rule's Category names.
 	SecretScanExtraRules []SecretScanExtraRule `koanf:"secret_scan_extra_rules"`
-	// SecretScanExtraAllowlist are a repo's own additional betterleaks
-	// exemptions (githooks.ScanCredentials' opts.ExtraAllowlist), layered on
-	// top of the compiled-in base allowlist the same way SecretScanExtraRules
-	// layers onto the base ruleset.
+	// SecretScanExtraAllowlist are a repo's own additional exemptions, layered
+	// on top of the compiled-in base allowlist the same way
+	// SecretScanExtraRules layers onto the base ruleset. One config key feeds
+	// both scanners: githooks.ScanCredentials' opts.ExtraAllowlist (the
+	// betterleaks findings) and githooks.ScanSecrets' extraAllowlist
+	// parameter (the hand-rolled private_key_block/aws_access_key_id/
+	// slack_token/github_token patterns) both take the identical
+	// []githooks.BetterleaksAllowlistEntry shape this converts to.
 	SecretScanExtraAllowlist []SecretScanExtraAllowlistEntry `koanf:"secret_scan_extra_allowlist"`
 	// SecretScanCategorizedSeverity governs whether a categorized
 	// (credentials/pii/financial) betterleaks finding hard-blocks or only
