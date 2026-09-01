@@ -1,7 +1,9 @@
 package cli
 
 import (
-	"strings"
+	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 	"unsafe"
 
@@ -98,51 +100,73 @@ func TestCodeMarkerExemptRules_MatchesEveryCodeSuffixAnywhereInTree(t *testing.T
 	}
 }
 
-// TestResolveBetterleaksPath_UnsetSkipsGracefully proves an unset
-// betterleaksBinEnvVar yields "" and an informational stderr note, not an
-// error — a missing binary is a normal, unprovisioned state, not a fault.
-func TestResolveBetterleaksPath_UnsetSkipsGracefully(t *testing.T) {
+// writeExecutableStub writes an empty, executable file at dir/name and
+// returns its path — enough for resolveBetterleaksPath's existence check to
+// resolve it, with no real betterleaks behavior needed by these tests.
+func writeExecutableStub(t *testing.T, dir, name string) string {
+	t.Helper()
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// TestResolveBetterleaksPath_UnsetIsMandatoryFailure proves the credential
+// scan's env-var opt-out is gone: an unset betterleaksBinEnvVar is now a real
+// error (errBetterleaksUnconfigured), not a silent "" skip.
+func TestResolveBetterleaksPath_UnsetIsMandatoryFailure(t *testing.T) {
 	t.Setenv(betterleaksBinEnvVar, "")
-	var path string
-	stderr := captureStderr(t, func() {
-		path = resolveBetterleaksPath()
-	})
+	path, err := resolveBetterleaksPath()
 	if path != "" {
-		t.Fatalf("resolveBetterleaksPath() = %q, want \"\" when %s is unset", path, betterleaksBinEnvVar)
+		t.Fatalf("resolveBetterleaksPath() path = %q, want \"\" on failure", path)
 	}
-	if !strings.Contains(stderr, betterleaksBinEnvVar) {
-		t.Errorf("stderr = %q, want a note naming %s", stderr, betterleaksBinEnvVar)
-	}
-}
-
-// TestResolveBetterleaksPath_SetReturnsItUnchanged proves the happy path:
-// a set env var passes straight through with no transformation and no note.
-func TestResolveBetterleaksPath_SetReturnsItUnchanged(t *testing.T) {
-	t.Setenv(betterleaksBinEnvVar, "/opt/fixture-tools/betterleaks")
-	var path string
-	stderr := captureStderr(t, func() {
-		path = resolveBetterleaksPath()
-	})
-	if path != "/opt/fixture-tools/betterleaks" {
-		t.Fatalf("resolveBetterleaksPath() = %q, want the configured path unchanged", path)
-	}
-	if stderr != "" {
-		t.Errorf("stderr = %q, want no note when %s is set", stderr, betterleaksBinEnvVar)
+	if !errors.Is(err, errBetterleaksUnconfigured) {
+		t.Fatalf("resolveBetterleaksPath() err = %v, want errBetterleaksUnconfigured", err)
 	}
 }
 
-// TestScanCredentials_UnsetEnvVarSkipsWithoutInvokingBetterleaks proves
+// TestResolveBetterleaksPath_NonexistentPathIsMandatoryFailure proves a
+// configured-but-nonexistent path fails the same way as unset: it must not
+// be handed to githooks.ScanCredentials as though it were real.
+func TestResolveBetterleaksPath_NonexistentPathIsMandatoryFailure(t *testing.T) {
+	t.Setenv(betterleaksBinEnvVar, filepath.Join(t.TempDir(), "does-not-exist"))
+	path, err := resolveBetterleaksPath()
+	if path != "" {
+		t.Fatalf("resolveBetterleaksPath() path = %q, want \"\" on failure", path)
+	}
+	if !errors.Is(err, errBetterleaksUnconfigured) {
+		t.Fatalf("resolveBetterleaksPath() err = %v, want errBetterleaksUnconfigured", err)
+	}
+}
+
+// TestResolveBetterleaksPath_ExistingPathResolves proves the happy path: a
+// path naming a real, existing file passes straight through with no error.
+func TestResolveBetterleaksPath_ExistingPathResolves(t *testing.T) {
+	bin := writeExecutableStub(t, t.TempDir(), "betterleaks")
+	t.Setenv(betterleaksBinEnvVar, bin)
+	path, err := resolveBetterleaksPath()
+	if err != nil {
+		t.Fatalf("resolveBetterleaksPath() err = %v, want nil", err)
+	}
+	if path != bin {
+		t.Fatalf("resolveBetterleaksPath() = %q, want the configured path unchanged (%q)", path, bin)
+	}
+}
+
+// TestScanCredentials_UnresolvedBinaryFailsWithoutInvokingBetterleaks proves
 // scanCredentials never shells out at all when the binary path is
-// unresolved: it returns (nil, nil) rather than attempting to run anything
-// (which would otherwise fail loudly against a nonexistent binary).
-func TestScanCredentials_UnsetEnvVarSkipsWithoutInvokingBetterleaks(t *testing.T) {
+// unresolved: it returns errBetterleaksUnconfigured rather than attempting to
+// run anything (which would otherwise fail loudly against a nonexistent
+// binary) or silently reporting a clean scan.
+func TestScanCredentials_UnresolvedBinaryFailsWithoutInvokingBetterleaks(t *testing.T) {
 	t.Setenv(betterleaksBinEnvVar, "")
 	findings, err := scanCredentials(t.TempDir(), &Config{})
-	if err != nil {
-		t.Fatalf("scanCredentials returned an error instead of skipping: %v", err)
+	if !errors.Is(err, errBetterleaksUnconfigured) {
+		t.Fatalf("scanCredentials err = %v, want errBetterleaksUnconfigured", err)
 	}
 	if findings != nil {
-		t.Fatalf("scanCredentials returned %+v, want nil findings when the binary path is unresolved", findings)
+		t.Fatalf("scanCredentials returned %+v, want nil findings alongside the error", findings)
 	}
 }
 

@@ -61,7 +61,7 @@ func TestScanAll_ReportsNonZeroPIIAndFinancialCountsViaScanCredentials(t *testin
 	betterleaksBin := testBetterleaksBinary(t)
 	dir := initRepo(t)
 	commitFile(t, dir, "leak.txt", "ssn: "+fixtureLeakSSN+"\ncard: "+fixtureLeakCreditCard+"\n", "add fixture leak")
-	t.Setenv("GIT_TOOLS_BETTERLEAKS_BIN", betterleaksBin)
+	t.Setenv(betterleaksBinEnvVar, betterleaksBin)
 
 	r, exit := runCLI(t, bin, "--repo", dir, "scan", "all")
 	if r.Status != "precondition_unmet" || exit != 30 {
@@ -114,7 +114,7 @@ func TestScanAll_DoesNotFlagChecksumInvalidNearMissPIIFinancial(t *testing.T) {
 	commitFile(t, dir, "near_miss.txt",
 		"ssn: "+fixtureNearMissInvalidAreaSSN+"\ncard: "+fixtureNearMissLuhnInvalidCard+"\n",
 		"add near-miss fixture")
-	t.Setenv("GIT_TOOLS_BETTERLEAKS_BIN", betterleaksBin)
+	t.Setenv(betterleaksBinEnvVar, betterleaksBin)
 
 	r, exit := runCLI(t, bin, "--repo", dir, "scan", "all")
 	if r.Status != "precondition_unmet" || exit != 30 {

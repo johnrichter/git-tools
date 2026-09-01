@@ -870,9 +870,8 @@ func fixtureBetterleaksReport(rule, value, path string) string {
 // as JSON.
 func writeFixtureBetterleaksBinary(t *testing.T, report string) string {
 	t.Helper()
-	bin := filepath.Join(t.TempDir(), "fixture-betterleaks")
-	script := "#!/bin/sh\ncat <<'FIXTURE_REPORT'\n" + report + "FIXTURE_REPORT\nexit 1\n"
-	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+	bin, err := writeBetterleaksStub(t.TempDir(), report)
+	if err != nil {
 		t.Fatal(err)
 	}
 	return bin
@@ -900,7 +899,7 @@ func TestScanGate_GoverningDiagnosticCategoryMatchesFindingCategory(t *testing.T
 	commitFile(t, dir, "feature.txt", "feature\n", "feature work")
 	runGit(t, dir, "checkout", "-q", "main")
 
-	t.Setenv("GIT_TOOLS_BETTERLEAKS_BIN", writeFixtureBetterleaksBinary(t,
+	t.Setenv(betterleaksBinEnvVar, writeFixtureBetterleaksBinary(t,
 		fixtureBetterleaksReport(fixtureBetterleaksRuleID, fixtureBetterleaksValue, "widget.conf")))
 
 	r, exit := runCLI(t, bin, "--repo", dir, "merge", "feature")

@@ -95,7 +95,7 @@ exit 1
 // scanGate's own result handling.
 func setContentAwareBetterleaks(t *testing.T) {
 	t.Helper()
-	t.Setenv("GIT_TOOLS_BETTERLEAKS_BIN", writeContentAwareBetterleaksBinary(t, findingMarker, findingMarkerRuleID))
+	t.Setenv(betterleaksBinEnvVar, writeContentAwareBetterleaksBinary(t, findingMarker, findingMarkerRuleID))
 }
 
 // findingBearingConfig and cleanConfig are the two bodies this file's fixture

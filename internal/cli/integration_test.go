@@ -18,9 +18,35 @@ import (
 
 // TestMain builds git-tools once (see buildCLI) and cleans up the shared
 // binary's temp directory after the whole package's tests finish, since it
-// lives outside any single test's t.TempDir().
+// lives outside any single test's t.TempDir(). It also points
+// betterleaksBinEnvVar at a clean (zero-findings) stub binary for the whole
+// run: the credential scan is mandatory (see scan.go's
+// errBetterleaksUnconfigured), so without this every test that drives
+// scan/merge/push/rebase/tag create as a subprocess -- almost all of
+// them -- would refuse before doing anything else, regardless of what that
+// test actually means to prove. A test whose point is a specific finding, or
+// the mandatory-scan refusal itself, overrides this default for its own
+// scope with t.Setenv.
 func TestMain(m *testing.M) {
+	stubDir, err := os.MkdirTemp("", "git-tools-betterleaks-stub-")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	stubBin, err := writeBetterleaksStub(stubDir, cleanBetterleaksReport)
+	if err != nil {
+		os.RemoveAll(stubDir)
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	if err := os.Setenv(betterleaksBinEnvVar, stubBin); err != nil {
+		os.RemoveAll(stubDir)
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+
 	code := m.Run()
+	os.RemoveAll(stubDir)
 	if cliBinDir != "" {
 		_ = os.RemoveAll(cliBinDir)
 	}

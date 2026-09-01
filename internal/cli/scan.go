@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -27,16 +28,30 @@ import (
 // of value an environment sets for a build tool's compiler path.
 const betterleaksBinEnvVar = "GIT_TOOLS_BETTERLEAKS_BIN"
 
-// resolveBetterleaksPath reads betterleaksBinEnvVar, returning "" and an
-// informational stderr note (never an error) when it is unset — the
-// credential scan degrades to a no-op until a governance plugin sets it,
-// rather than the process ever crashing or refusing to run over its absence.
-func resolveBetterleaksPath() string {
+// errBetterleaksUnconfigured is scanCredentials' sentinel for "there is no
+// working betterleaks binary to scan with": betterleaksBinEnvVar is unset, or
+// it names a path that does not resolve to an existing file. Every caller
+// checks for it with errors.Is and turns it into a precondition_unmet
+// refusal instead of a generic internal failure — a missing credential
+// scanner is a missing precondition for a security-relevant scan, not an
+// unexpected fault, and unlike the old silent-skip behavior it must never let
+// the scan, or whatever it gates, proceed as though nothing were wrong.
+var errBetterleaksUnconfigured = errors.New("the credential scanner is not configured (" + betterleaksBinEnvVar + " does not resolve to an existing betterleaks binary)")
+
+// resolveBetterleaksPath reads betterleaksBinEnvVar and confirms it names an
+// existing file, returning errBetterleaksUnconfigured when it is unset or
+// does not resolve — the credential scan is mandatory, so an unprovisioned
+// binary is a real failure for the caller to refuse on, never a silent
+// skip.
+func resolveBetterleaksPath() (string, error) {
 	path := os.Getenv(betterleaksBinEnvVar)
 	if path == "" {
-		fmt.Fprintf(os.Stderr, "info: %s is not set; skipping the betterleaks-based credential scan\n", betterleaksBinEnvVar)
+		return "", errBetterleaksUnconfigured
 	}
-	return path
+	if _, err := os.Stat(path); err != nil {
+		return "", errBetterleaksUnconfigured
+	}
+	return path, nil
 }
 
 // betterleaksExtraRules converts cfg's secret_scan_extra_rules entries into
@@ -65,12 +80,15 @@ func betterleaksExtraAllowlist(entries []SecretScanExtraAllowlistEntry) []githoo
 
 // scanCredentials runs the betterleaks-based scan over dir, using cfg's
 // extra-rules/extra-allowlist config, and returns its findings unchanged for
-// the caller to merge into a ScanOutcome's Secrets. It returns (nil, nil)
-// without invoking betterleaks at all when betterleaksBinEnvVar is unset.
+// the caller to merge into a ScanOutcome's Secrets. It returns
+// errBetterleaksUnconfigured, never invoking betterleaks at all, when
+// resolveBetterleaksPath cannot resolve a usable binary — the scan is
+// mandatory, so an unprovisioned binary is a failure for the caller to
+// refuse on, not a reason to proceed as though nothing were scanned.
 func scanCredentials(dir string, cfg *Config) ([]githooks.Finding, error) {
-	path := resolveBetterleaksPath()
-	if path == "" {
-		return nil, nil
+	path, err := resolveBetterleaksPath()
+	if err != nil {
+		return nil, err
 	}
 	return githooks.ScanCredentials(dir, path, githooks.BetterleaksOptions{
 		SkipRules:      gitToolsSkipRules,
@@ -107,6 +125,19 @@ func addCategoryCounts(result *clikit.Result, secrets []githooks.Finding) {
 	for key, count := range counts {
 		result.Data[key] = count
 	}
+}
+
+// credentialScannerUnconfiguredDiagnostic builds and emits the
+// precondition_unmet refusal every scanCredentials caller reports when
+// errBetterleaksUnconfigured comes back: the credential scan could not run
+// at all, so nothing downstream of it may proceed either. done names the
+// past-tense effect nothing was, e.g. "scanned", "merged", "pushed".
+func credentialScannerUnconfiguredDiagnostic(cmd *cobra.Command, data map[string]any, done string) error {
+	return finishDiagnostic(cmd, data, clikit.NewPreconditionUnmet,
+		"precondition_unmet.githooks.credential_scanner_unconfigured",
+		fmt.Sprintf("%s; nothing was %s", errBetterleaksUnconfigured, done),
+		clikit.Manual(fmt.Sprintf("provision a betterleaks binary and set %s to its path, then re-run; nothing was %s", betterleaksBinEnvVar, done)),
+		nil)
 }
 
 // gitToolsSkipRules layers one git-tools-specific exclusion on top of
@@ -179,9 +210,14 @@ func newScanSecretsCmd() *cobra.Command {
 			}
 			credFindings, err := scanCredentials(cfg.Repo, cfg)
 			if err != nil {
+				if errors.Is(err, errBetterleaksUnconfigured) {
+					return credentialScannerUnconfiguredDiagnostic(cmd, nil, "scanned")
+				}
 				return finishErr(cmd, nil, "internal.githooks.scan_credentials_failed", "scan for credentials", err)
 			}
-			return emitScan(cmd, githooks.ScanOutcome{Secrets: append(findings, credFindings...)})
+			return emitScan(cmd, githooks.ScanOutcome{
+				Secrets: append(findings, credFindings...),
+			})
 		},
 	}
 	return cmd
@@ -275,6 +311,9 @@ func newScanAllCmd() *cobra.Command {
 
 			outcome, err := scanTree(cmd.Context(), cfg.Repo, cfg, staged)
 			if err != nil {
+				if errors.Is(err, errBetterleaksUnconfigured) {
+					return credentialScannerUnconfiguredDiagnostic(cmd, nil, "scanned")
+				}
 				return finishErr(cmd, nil, "internal.githooks.scan_failed", "run the content scan", err)
 			}
 			return emitScan(cmd, outcome)
@@ -457,6 +496,9 @@ func scanGate(cmd *cobra.Command, cfg *Config, dir, verb string, data map[string
 
 	outcome, err := scanTree(cmd.Context(), dir, cfg, false)
 	if err != nil {
+		if errors.Is(err, errBetterleaksUnconfigured) {
+			return credentialScannerUnconfiguredDiagnostic(cmd, data, pastTense(verb))
+		}
 		return finishErr(cmd, data, "internal.githooks.scan_failed", "run the content scan", err)
 	}
 	result, err := githooks.BuildHookResult(commandPath(cmd), outcome)
