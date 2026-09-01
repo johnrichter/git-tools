@@ -79,6 +79,12 @@ delegates to that hook rather than judging the message itself, so a
 repository with no hook configured sees no check at all, and a rejection
 there is reported as a precondition before the gate does any re-signing work.
 
+The content scan evaluates the tree this merge would actually produce —
+computed with a real trial merge in a disposable scratch worktree, discarded
+either way — not the target's current, pre-merge tree. A merge that resolves
+every pre-existing finding is allowed to land even when the target's current
+tree is not clean.
+
 Exit codes:
   0  success              the sources merged (with any re-signing reported)
   10 caveats              the merge landed; its signature did not verify, or a publish or cleanup did not complete
@@ -195,8 +201,26 @@ $PATH, does not satisfy it, and is denied from a primary checkout.`,
 			// before anything mutates: it must run ahead of the signing gate
 			// below, which can itself rewrite a source branch's history to
 			// re-sign it, so a doomed merge never leaves that rewrite behind.
-			if err := scanGate(cmd, cfg, repo.Dir, "merge", map[string]any{dataKeyRepo: repoPath, dataKeyTarget: target}); err != nil {
+			// It evaluates the tree this merge would actually produce, not
+			// target's current tree: see prospectiveMergeScanDir's own doc
+			// comment for why that distinction is load-bearing. A trial merge
+			// that does not produce a clean result leaves scanDir empty, and
+			// the scan is skipped -- the signing gate and the real merge
+			// below diagnose that failure themselves.
+			scanData := map[string]any{dataKeyRepo: repoPath, dataKeyTarget: target}
+			scanBase, err := resolveCommit(cmd.Context(), repo.Dir, "HEAD")
+			if err != nil {
+				return finishErr(cmd, scanData, "internal.git.head_check_failed", "resolve HEAD before testing the merge result", err)
+			}
+			scanDir, scanCleanup, err := prospectiveMergeScanDir(cmd, repo, scanBase, args, ff, scanData)
+			defer scanCleanup()
+			if err != nil {
 				return err
+			}
+			if scanDir != "" {
+				if err := scanGate(cmd, cfg, scanDir, "merge", scanData); err != nil {
+					return err
+				}
 			}
 
 			// One prober serves both the gate, which re-signs incoming ranges,
