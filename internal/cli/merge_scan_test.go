@@ -183,6 +183,12 @@ func TestProspectiveMergeScan_NoFalseClearanceWhenSourceLeavesFindingInPlace(t *
 	bin := buildCLI(t)
 	dir := initRepo(t)
 	setContentAwareBetterleaks(t)
+	// The fixture finding is categorized ("pii"), so it hard-blocks only
+	// under an explicit block posture — see findingMarkerRuleID's own
+	// category prefix and Config.SecretScanCategorizedSeverity's "warn"
+	// default. This test's whole point is the hard-refusal path, so it opts
+	// in rather than asserting a caveat.
+	writeConfig(t, dir, "secret_scan_categorized_severity: block\n")
 
 	head := commitFile(t, dir, "widget.conf", findingBearingConfig(), "add widget config with finding")
 	runGit(t, dir, "branch", "feature")
@@ -214,6 +220,11 @@ func TestProspectiveMergeScan_NewFindingInSourceStillRefuses(t *testing.T) {
 	bin := buildCLI(t)
 	dir := initRepo(t)
 	setContentAwareBetterleaks(t)
+	// See TestProspectiveMergeScan_NoFalseClearanceWhenSourceLeavesFindingInPlace's
+	// comment: this categorized fixture finding only hard-blocks under an
+	// explicit block posture, which is what this test means to prove holds
+	// for a brand-new finding too.
+	writeConfig(t, dir, "secret_scan_categorized_severity: block\n")
 	head := runGit(t, dir, "rev-parse", "HEAD")
 
 	runGit(t, dir, "branch", "feature")
@@ -368,6 +379,10 @@ func TestProspectiveMergeScan_DryRunReflectsProspectiveResult(t *testing.T) {
 		bin := buildCLI(t)
 		dir := initRepo(t)
 		setContentAwareBetterleaks(t)
+		// See TestProspectiveMergeScan_NoFalseClearanceWhenSourceLeavesFindingInPlace's
+		// comment: opts into the hard-block posture the categorized fixture
+		// finding needs to refuse under.
+		writeConfig(t, dir, "secret_scan_categorized_severity: block\n")
 		head := runGit(t, dir, "rev-parse", "HEAD")
 
 		runGit(t, dir, "branch", "feature")
@@ -421,6 +436,10 @@ func TestProspectiveMergeScan_CommitMsgHookDoesNotLetAMergeLandUnscanned(t *test
 		bin := buildCLI(t)
 		dir := signingRepo(t)
 		setContentAwareBetterleaks(t)
+		// See TestProspectiveMergeScan_NoFalseClearanceWhenSourceLeavesFindingInPlace's
+		// comment: opts into the hard-block posture the categorized fixture
+		// finding needs to refuse under.
+		writeConfig(t, dir, "secret_scan_categorized_severity: block\n")
 		head := runGit(t, dir, "rev-parse", "HEAD")
 
 		runGit(t, dir, "branch", "feature")
@@ -479,6 +498,10 @@ func TestProspectiveMergeScan_OctopusScansTheWholeProspectiveResult(t *testing.T
 		bin := buildCLI(t)
 		dir := signingRepo(t)
 		setContentAwareBetterleaks(t)
+		// See TestProspectiveMergeScan_NoFalseClearanceWhenSourceLeavesFindingInPlace's
+		// comment: opts into the hard-block posture the categorized fixture
+		// finding needs to refuse under.
+		writeConfig(t, dir, "secret_scan_categorized_severity: block\n")
 		head := runGit(t, dir, "rev-parse", "HEAD")
 
 		runGit(t, dir, "checkout", "-q", "-b", "clean-source", "main")

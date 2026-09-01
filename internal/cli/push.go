@@ -91,8 +91,11 @@ Exit codes:
 
 			// The content-guardrail scan runs before anything is published:
 			// push never retargets away from ".", so the gate scans the same
-			// working tree pushRef is about to advance on the remote.
-			if err := scanGate(cmd, cfg, ".", "push", nil); err != nil {
+			// working tree pushRef is about to advance on the remote. A
+			// warn-only caveat carries through into pushRef's own result
+			// rather than being dropped.
+			gateCaveats, err := scanGate(cmd, cfg, ".", "push", nil)
+			if err != nil {
 				return err
 			}
 
@@ -136,7 +139,7 @@ Exit codes:
 				}
 			}
 
-			return pushRef(cmd, cfg, ref, refKind, fullRef)
+			return pushRef(cmd, cfg, ref, refKind, fullRef, gateCaveats)
 		},
 	}
 	cmd.Flags().Bool("dry-run", false, "report what would be pushed without pushing anything")
@@ -151,7 +154,11 @@ Exit codes:
 // just made, skipping straight past those branch-only checks. A caller
 // registering a "dry-run" bool flag gets dry-run reporting for free; one
 // that doesn't (as "tag create" doesn't) always performs the push.
-func pushRef(cmd *cobra.Command, cfg *Config, ref, refKind, fullRef string) error {
+// gateCaveats carries forward whatever the caller's own content-guardrail
+// scan already returned, folded into whichever result below actually
+// finishes the command, so a warn-only finding is never dropped just
+// because the push itself went on to succeed or no-op.
+func pushRef(cmd *cobra.Command, cfg *Config, ref, refKind, fullRef string, gateCaveats []clikit.Diagnostic) error {
 	ctx := cmd.Context()
 
 	localSHA, err := localRefSHA(ctx, ".", fullRef)
@@ -168,7 +175,7 @@ func pushRef(cmd *cobra.Command, cfg *Config, ref, refKind, fullRef string) erro
 
 	if hadRemote && remoteSHA == localSHA {
 		data["head"] = localSHA
-		return finishCaveat(cmd, data, "caveats.git.push_already_current",
+		return finishCaveatAlongside(cmd, data, gateCaveats, "caveats.git.push_already_current",
 			fmt.Sprintf("%s already matches %s at %s; nothing to push", fullRef, cfg.Remote, localSHA),
 			clikit.Manual("no action needed"), map[string]any{"ref": ref})
 	}
@@ -176,11 +183,7 @@ func pushRef(cmd *cobra.Command, cfg *Config, ref, refKind, fullRef string) erro
 	refspec := fullRef + ":" + fullRef
 	if dryRun {
 		data["would_push"] = refspec
-		clikitResult, buildErr := clikitSuccess(cmd, data)
-		if buildErr != nil {
-			return finishErr(cmd, nil, "internal.result.build_failed", "build result", buildErr)
-		}
-		return finish(cmd, clikitResult)
+		return finishResult(cmd, data, gateCaveats)
 	}
 
 	res, err := gitexec.RunGit(ctx, ".", "push", cfg.Remote, refspec)
@@ -198,11 +201,7 @@ func pushRef(cmd *cobra.Command, cfg *Config, ref, refKind, fullRef string) erro
 		data["old_head"] = remoteSHA
 	}
 	data["new_head"] = localSHA
-	clikitResult, buildErr := clikitSuccess(cmd, data)
-	if buildErr != nil {
-		return finishErr(cmd, nil, "internal.result.build_failed", "build result", buildErr)
-	}
-	return finish(cmd, clikitResult)
+	return finishResult(cmd, data, gateCaveats)
 }
 
 // openHere confirms "." is a git working tree, or finishes cmd with a

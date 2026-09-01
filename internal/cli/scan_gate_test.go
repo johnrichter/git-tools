@@ -893,6 +893,11 @@ func writeFixtureBetterleaksBinary(t *testing.T, report string) string {
 func TestScanGate_GoverningDiagnosticCategoryMatchesFindingCategory(t *testing.T) {
 	bin := buildCLI(t)
 	dir := initRepo(t)
+	// The fixture finding is categorized ("credentials"), so it hard-blocks
+	// only under an explicit block posture (Config.SecretScanCategorizedSeverity
+	// defaults to "warn") — this test's whole point is the governing
+	// diagnostic's category, which only a hard refusal reports.
+	writeConfig(t, dir, "secret_scan_categorized_severity: block\n")
 	head := commitFile(t, dir, "widget.conf", "widget_value = "+fixtureBetterleaksValue+"\n", "add widget config")
 	runGit(t, dir, "branch", "feature")
 	runGit(t, dir, "checkout", "-q", "feature")

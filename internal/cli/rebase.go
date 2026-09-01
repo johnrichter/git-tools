@@ -29,8 +29,10 @@ func newRebaseCmd() *cobra.Command {
 			// The content-guardrail scan runs before the rebase touches
 			// anything: a rebase rewrites the checked-out branch in place,
 			// so a refusal here is what keeps a flagged commit from ever
-			// being replayed.
-			if err := scanGate(cmd, cfg, repo.Dir, "rebase", nil); err != nil {
+			// being replayed. A warn-only caveat carries through to the
+			// result finishResult builds below rather than being dropped.
+			gateCaveats, err := scanGate(cmd, cfg, repo.Dir, "rebase", nil)
+			if err != nil {
 				return err
 			}
 
@@ -58,11 +60,7 @@ func newRebaseCmd() *cobra.Command {
 			if len(result.Commits) > 0 {
 				data["commits"] = result.Commits
 			}
-			clikitResult, buildErr := clikitSuccess(cmd, data)
-			if buildErr != nil {
-				return finishErr(cmd, nil, "internal.result.build_failed", "build result", buildErr)
-			}
-			return finish(cmd, clikitResult)
+			return finishResult(cmd, data, gateCaveats)
 		},
 	}
 	cmd.Flags().String("onto", "", "replay onto a different base than upstream (git rebase --onto)")

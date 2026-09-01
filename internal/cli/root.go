@@ -195,6 +195,27 @@ func clikitSuccess(cmd *cobra.Command, data map[string]any) (*clikit.Result, err
 	return clikit.NewSuccess(commandPath(cmd), data)
 }
 
+// finishResult builds and emits cmd's terminal result carrying data: a plain
+// success with no caveats, or a StatusCaveats result once any are present.
+// This is what a verb whose own content-guardrail scan (scanGate) returned
+// warn-only caveats uses in place of a bare clikitSuccess/finish pair, so a
+// categorized finding under Config.SecretScanCategorizedSeverity's "warn"
+// posture actually surfaces on the command's own result rather than
+// vanishing once the scan itself allows the command to proceed.
+func finishResult(cmd *cobra.Command, data map[string]any, caveats []clikit.Diagnostic) error {
+	var result *clikit.Result
+	var buildErr error
+	if len(caveats) == 0 {
+		result, buildErr = clikit.NewSuccess(commandPath(cmd), data)
+	} else {
+		result, buildErr = clikit.NewCaveats(commandPath(cmd), data, caveats)
+	}
+	if buildErr != nil {
+		return finishErr(cmd, data, "internal.result.build_failed", "build result", buildErr)
+	}
+	return finish(cmd, result)
+}
+
 // requireRepo opens cfg.Repo as a git working tree, or finishes cmd with a
 // not_found result and returns a nil *git.Repo if it isn't one. A caller
 // checks for a nil repo and returns the accompanying error immediately —
@@ -258,17 +279,17 @@ func finishDiagnostic(cmd *cobra.Command, data map[string]any, build func(comman
 	return finish(cmd, result)
 }
 
-// finishCaveat builds a single-caveat clikit.StatusCaveats result carrying
-// data and emits it: the command did what was asked, but the outcome needs
-// qualifying — e.g. a no-op because the target already matched.
-func finishCaveat(cmd *cobra.Command, data map[string]any, code, message string, triage clikit.Triage, context map[string]any) error {
+// finishCaveatAlongside builds a clikit.StatusCaveats result carrying data
+// and emits it: the command did what was asked, but the outcome needs
+// qualifying — e.g. a no-op because the target already matched. earlier
+// carries forward whatever caveats an earlier step (typically a
+// content-guardrail scan that landed a warn-only finding) already produced,
+// so they are never lost just because a later step also has something to
+// caveat about; pass nil when there is nothing earlier to carry.
+func finishCaveatAlongside(cmd *cobra.Command, data map[string]any, earlier []clikit.Diagnostic, code, message string, triage clikit.Triage, context map[string]any) error {
 	caveat, buildErr := clikit.NewCaveat(code, sanitizeMessage(message), triage, context)
 	if buildErr != nil {
-		return finishErr(cmd, nil, "internal.result.build_failed", "build caveat", buildErr)
+		return finishErr(cmd, data, "internal.result.build_failed", "build caveat", buildErr)
 	}
-	result, buildErr := clikit.NewCaveats(commandPath(cmd), data, []clikit.Diagnostic{caveat})
-	if buildErr != nil {
-		return finishErr(cmd, nil, "internal.result.build_failed", "build result", buildErr)
-	}
-	return finish(cmd, result)
+	return finishResult(cmd, data, append(append([]clikit.Diagnostic{}, earlier...), caveat))
 }

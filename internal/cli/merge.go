@@ -221,6 +221,7 @@ $PATH, does not satisfy it, and is denied from a primary checkout.`,
 			if err != nil {
 				return err
 			}
+			var gateCaveats []clikit.Diagnostic
 			if scanDir != "" {
 				// The scan judges the tree a merge would actually produce, so it
 				// must judge that tree's own git-tools.yaml too, not the target's
@@ -249,8 +250,14 @@ $PATH, does not satisfy it, and is denied from a primary checkout.`,
 						clikit.Manual(fmt.Sprintf("fix %s so the merge's own result parses — a merge can also combine two individually valid edits into one that does not — then re-run; nothing was merged", defaultConfigFile)),
 						map[string]any{"path": defaultConfigFile})
 				}
-				if err := scanGate(cmd, scanCfg, scanDir, "merge", scanData); err != nil {
-					return err
+				// scanGate is called against scanCfg (the prospective, reloaded
+				// config above), never cfg: a warn-only posture a source branch
+				// just turned on for itself must govern this same scan, exactly
+				// like a secret_scan_extra_allowlist entry already does.
+				var gateErr error
+				gateCaveats, gateErr = scanGate(cmd, scanCfg, scanDir, "merge", scanData)
+				if gateErr != nil {
+					return gateErr
 				}
 			}
 
@@ -281,7 +288,7 @@ $PATH, does not satisfy it, and is denied from a primary checkout.`,
 				}
 				result, buildErr := clikit.NewGateNegative(commandPath(cmd),
 					map[string]any{dataKeyRepo: repoPath, dataKeyTarget: target, "dry_run": false, "signing_gate": gated},
-					[]clikit.Diagnostic{diag}, nil)
+					[]clikit.Diagnostic{diag}, gateCaveats)
 				if buildErr != nil {
 					return finishErr(cmd, map[string]any{dataKeyRepo: repoPath, dataKeyTarget: target}, "internal.result.build_failed", "build result", buildErr)
 				}
@@ -373,7 +380,7 @@ $PATH, does not satisfy it, and is denied from a primary checkout.`,
 					return finishErr(cmd, data, "internal.git.merge_commit_verify_failed", "verify the merge commit's signature", verifyErr)
 				}
 				if state != "G" && state != "U" {
-					return finishCaveat(cmd, data, "caveats.git.merge_commit_unsigned",
+					return finishCaveatAlongside(cmd, data, gateCaveats, "caveats.git.merge_commit_unsigned",
 						fmt.Sprintf("the merge landed at %s, but its signature does not verify (state %q); treat the merge as unsigned", result.NewHead, state),
 						clikit.Manual("investigate the signing setup, then re-sign or redo the merge; the merge that already landed is not unwound"),
 						map[string]any{"new_head": result.NewHead, "sig_state": state})
@@ -385,7 +392,7 @@ $PATH, does not satisfy it, and is denied from a primary checkout.`,
 			// publish a merge the check refused to call signed.
 			if push && !result.DryRun {
 				if pubErr := publishTarget(cmd.Context(), cfg, repo.Dir, target); pubErr != nil {
-					return finishCaveat(cmd, data, "caveats.git.merge_publish_failed",
+					return finishCaveatAlongside(cmd, data, gateCaveats, "caveats.git.merge_publish_failed",
 						fmt.Sprintf("the merge landed, but publishing %s to %s failed: %s", target, cfg.Remote, sanitizeMessage(pubErr.Error())),
 						clikit.Manual(fmt.Sprintf("push %s to %s manually", target, cfg.Remote)),
 						map[string]any{"target": target, "remote": cfg.Remote})
@@ -406,18 +413,14 @@ $PATH, does not satisfy it, and is denied from a primary checkout.`,
 				if len(unremoved) > 0 {
 					data["unremoved_worktrees"] = unremoved
 					reason, _ := unremoved[0]["reason"].(string)
-					return finishCaveat(cmd, data, "caveats.git.worktree_cleanup_incomplete",
+					return finishCaveatAlongside(cmd, data, gateCaveats, "caveats.git.worktree_cleanup_incomplete",
 						fmt.Sprintf("the merge landed, but %d worktree(s) were not removed: %s", len(unremoved), reason),
 						clikit.Manual("remove the named worktree(s) manually"),
 						map[string]any{"unremoved": len(unremoved)})
 				}
 			}
 
-			clikitResult, buildErr := clikitSuccess(cmd, data)
-			if buildErr != nil {
-				return finishErr(cmd, data, "internal.result.build_failed", "build result", buildErr)
-			}
-			return finish(cmd, clikitResult)
+			return finishResult(cmd, data, gateCaveats)
 		},
 	}
 	cmd.Flags().String("message", "", "commit message for a real (non-fast-forward) merge")

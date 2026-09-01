@@ -146,8 +146,11 @@ Exit codes:
 			// before create writes anything: a tag can point at a commit that
 			// never itself went through a scanned merge or push (tagging a
 			// branch directly), so create carries its own gate rather than
-			// depending on some earlier verb having already run one.
-			if err := scanGate(cmd, cfg, ".", "tag", map[string]any{"tag": tagName}); err != nil {
+			// depending on some earlier verb having already run one. A
+			// warn-only caveat carries through into pushRef's own result
+			// below rather than being dropped.
+			gateCaveats, err := scanGate(cmd, cfg, ".", "tag", map[string]any{"tag": tagName})
+			if err != nil {
 				return err
 			}
 
@@ -228,7 +231,7 @@ Exit codes:
 					map[string]any{"tag": tagName})
 			}
 
-			return pushRef(cmd, cfg, tagName, "tag", "refs/tags/"+tagName)
+			return pushRef(cmd, cfg, tagName, "tag", "refs/tags/"+tagName, gateCaveats)
 		},
 	}
 	cmd.Flags().String("shape", "", `required: the tag pattern "language-tools tag shape" prints for this module ("vX.Y.Z", or "<path>/vX.Y.Z" for a monorepo module)`)

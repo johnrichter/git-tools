@@ -140,6 +140,14 @@ func credentialScannerUnconfiguredDiagnostic(cmd *cobra.Command, data map[string
 		nil)
 }
 
+// invalidSecretScanCategorizedSeverity reports whether v is anything other
+// than the two values githooks.ScanOutcome.WarnOnCategorizedSecrets
+// understands, mirroring how PrivacyTier.Known() gates --privacy-tier before
+// any scan runs.
+func invalidSecretScanCategorizedSeverity(v string) bool {
+	return v != "warn" && v != "block"
+}
+
 // gitToolsSkipRules layers one git-tools-specific exclusion on top of
 // githooks.DefaultSkipRules: nested Claude Code worktrees at
 // .claude/worktrees/<slug>/, created at a repo's root by this fleet's own
@@ -204,6 +212,9 @@ func newScanSecretsCmd() *cobra.Command {
 			if bad, ok := malformedSecretScanExempt(cfg.SecretScanExempt); ok {
 				return finishUsage(cmd, nil, "usage.cli.invalid_secret_scan_exempt", fmt.Sprintf("secret_scan_exempt entry %q is not a valid glob pattern", bad))
 			}
+			if invalidSecretScanCategorizedSeverity(cfg.SecretScanCategorizedSeverity) {
+				return finishUsage(cmd, nil, "usage.cli.invalid_secret_scan_categorized_severity", fmt.Sprintf("secret_scan_categorized_severity %q is not one of warn, block", cfg.SecretScanCategorizedSeverity))
+			}
 			findings, err := githooks.ScanSecrets(cfg.Repo, gitToolsSkipRules, secretExemptRules(cfg.SecretScanExempt))
 			if err != nil {
 				return finishErr(cmd, nil, "internal.githooks.scan_secrets_failed", "scan for secrets", err)
@@ -216,7 +227,8 @@ func newScanSecretsCmd() *cobra.Command {
 				return finishErr(cmd, nil, "internal.githooks.scan_credentials_failed", "scan for credentials", err)
 			}
 			return emitScan(cmd, githooks.ScanOutcome{
-				Secrets: append(findings, credFindings...),
+				Secrets:                  append(findings, credFindings...),
+				WarnOnCategorizedSecrets: cfg.SecretScanCategorizedSeverity != "block",
 			})
 		},
 	}
@@ -306,6 +318,9 @@ func newScanAllCmd() *cobra.Command {
 			}
 			if bad, ok := malformedSecretScanExempt(cfg.SecretScanExempt); ok {
 				return finishUsage(cmd, nil, "usage.cli.invalid_secret_scan_exempt", fmt.Sprintf("secret_scan_exempt entry %q is not a valid glob pattern", bad))
+			}
+			if invalidSecretScanCategorizedSeverity(cfg.SecretScanCategorizedSeverity) {
+				return finishUsage(cmd, nil, "usage.cli.invalid_secret_scan_categorized_severity", fmt.Sprintf("secret_scan_categorized_severity %q is not one of warn, block", cfg.SecretScanCategorizedSeverity))
 			}
 			staged, _ := cmd.Flags().GetBool("staged")
 
@@ -463,54 +478,67 @@ func scanTree(ctx context.Context, dir string, cfg *Config, staged bool) (githoo
 		return githooks.ScanOutcome{}, fmt.Errorf("scan for privacy violations: %w", err)
 	}
 	return githooks.ScanOutcome{
-		Secrets:         secrets,
-		RawBinary:       rawBinary,
-		PrivacyFailures: failures,
-		PrivacyWarnings: warnings,
-		Strict:          cfg.Strict,
+		Secrets:                  secrets,
+		RawBinary:                rawBinary,
+		PrivacyFailures:          failures,
+		PrivacyWarnings:          warnings,
+		Strict:                   cfg.Strict,
+		WarnOnCategorizedSecrets: cfg.SecretScanCategorizedSeverity != "block",
 	}, nil
 }
 
 // scanGate runs scanTree over dir's full tracked tree — the content
 // guardrails an installed pre-commit hook already applies to every commit —
-// and refuses with a precondition_unmet result on any finding: merge, push
-// and rebase each call this one entry point before they act, rather than
-// each carrying its own copy of the scan, so a rule scanTree gains covers
-// all three write verbs at once. It scans the full tree rather than a staged
-// diff: none of the three write verbs acts against a pending index change,
-// they act on committed history that is about to be landed, published, or
-// replayed. verb names the action being gated ("merge", "push", "rebase")
-// for the refusal's remedy text; data seeds the refusal's result data. It
-// returns nil once the tree scans clean.
-func scanGate(cmd *cobra.Command, cfg *Config, dir, verb string, data map[string]any) error {
+// before merge, push, rebase, or tag create act: each calls this one entry
+// point rather than carrying its own copy of the scan, so a rule scanTree
+// gains covers all four write verbs at once. It scans the full tree rather
+// than a staged diff: none of the four write verbs acts against a pending
+// index change, they act on committed history that is about to be landed,
+// published, or replayed. verb names the action being gated ("merge",
+// "push", "rebase", "tag") for the refusal's remedy text; data seeds the
+// refusal's result data.
+//
+// It reports its outcome one of three ways: a hard refusal it emits itself
+// (the returned error is finish's own non-nil marker, already handled — a
+// caller just propagates it), a usage/internal failure it likewise emits
+// itself, or — the clean and warn-only-caveat cases — nil, leaving the
+// caller to fold the returned caveats (nil when there are none) into
+// whatever result it finishes with once its own remaining work succeeds. A
+// caller must never drop a non-nil caveats slice on the floor: that is the
+// only place a warn-only categorized finding (see
+// Config.SecretScanCategorizedSeverity) becomes visible at all.
+func scanGate(cmd *cobra.Command, cfg *Config, dir, verb string, data map[string]any) ([]clikit.Diagnostic, error) {
 	tier := githooks.PrivacyTier(cfg.PrivacyTier)
 	if !tier.Known() {
-		return finishUsage(cmd, data, "usage.cli.invalid_privacy_tier", fmt.Sprintf("--privacy-tier %q is not one of public, confidential, private", cfg.PrivacyTier))
+		return nil, finishUsage(cmd, data, "usage.cli.invalid_privacy_tier", fmt.Sprintf("--privacy-tier %q is not one of public, confidential, private", cfg.PrivacyTier))
 	}
 	if bad, ok := malformedPrivacyMarkerExempt(cfg.PrivacyMarkerExempt); ok {
-		return finishUsage(cmd, data, "usage.cli.invalid_privacy_marker_exempt", fmt.Sprintf("privacy_marker_exempt entry %q is not a valid glob pattern", bad))
+		return nil, finishUsage(cmd, data, "usage.cli.invalid_privacy_marker_exempt", fmt.Sprintf("privacy_marker_exempt entry %q is not a valid glob pattern", bad))
 	}
 	if bad, ok := malformedSecretScanExempt(cfg.SecretScanExempt); ok {
-		return finishUsage(cmd, data, "usage.cli.invalid_secret_scan_exempt", fmt.Sprintf("secret_scan_exempt entry %q is not a valid glob pattern", bad))
+		return nil, finishUsage(cmd, data, "usage.cli.invalid_secret_scan_exempt", fmt.Sprintf("secret_scan_exempt entry %q is not a valid glob pattern", bad))
+	}
+	if invalidSecretScanCategorizedSeverity(cfg.SecretScanCategorizedSeverity) {
+		return nil, finishUsage(cmd, data, "usage.cli.invalid_secret_scan_categorized_severity", fmt.Sprintf("secret_scan_categorized_severity %q is not one of warn, block", cfg.SecretScanCategorizedSeverity))
 	}
 
 	outcome, err := scanTree(cmd.Context(), dir, cfg, false)
 	if err != nil {
 		if errors.Is(err, errBetterleaksUnconfigured) {
-			return credentialScannerUnconfiguredDiagnostic(cmd, data, pastTense(verb))
+			return nil, credentialScannerUnconfiguredDiagnostic(cmd, data, pastTense(verb))
 		}
-		return finishErr(cmd, data, "internal.githooks.scan_failed", "run the content scan", err)
+		return nil, finishErr(cmd, data, "internal.githooks.scan_failed", "run the content scan", err)
 	}
 	result, err := githooks.BuildHookResult(commandPath(cmd), outcome)
 	if err != nil {
-		return finishErr(cmd, data, "internal.result.build_failed", "build scan result", err)
+		return nil, finishErr(cmd, data, "internal.result.build_failed", "build scan result", err)
 	}
 	if result.Status != clikit.StatusPreconditionUnmet {
-		return nil
+		return result.Caveats, nil
 	}
 	finding, ok := result.Governing()
 	if !ok {
-		return nil
+		return result.Caveats, nil
 	}
 	path, _ := finding.Context["path"].(string)
 	rule, _ := finding.Context["rule"].(string)
@@ -529,8 +557,8 @@ func scanGate(cmd *cobra.Command, cfg *Config, dir, verb string, data map[string
 	// category before choosing the governing one, which changes which path
 	// every existing refusal names; that is its own task, not this one's.
 	category, _ := finding.Context["category"].(string)
-	return finishDiagnostic(cmd, data, clikit.NewPreconditionUnmet, finding.Code, finding.Message,
-		clikit.Manual(fmt.Sprintf("fix or remove the flagged content at %s and re-run; nothing was %s", path, pastTense(verb))),
+	return nil, finishDiagnostic(cmd, data, clikit.NewPreconditionUnmet, finding.Code, finding.Message,
+		clikit.Manual(fmt.Sprintf("fix or remove the flagged content at %s and re-run; nothing was %s. Do not add a git-tools.yaml exemption (secret_scan_extra_allowlist, secret_scan_exempt, secret_scan_extra_rules) on your own judgment — that decision belongs to the human operator alone", path, pastTense(verb))),
 		map[string]any{"path": path, "rule": rule, "findings": len(result.Errors), "category": category})
 }
 

@@ -78,6 +78,18 @@ type Config struct {
 	// top of the compiled-in base allowlist the same way SecretScanExtraRules
 	// layers onto the base ruleset.
 	SecretScanExtraAllowlist []SecretScanExtraAllowlistEntry `koanf:"secret_scan_extra_allowlist"`
+	// SecretScanCategorizedSeverity governs whether a categorized
+	// (credentials/pii/financial) betterleaks finding hard-blocks or only
+	// caveats a scan/merge/push/rebase/tag create — githooks.ScanOutcome.
+	// WarnOnCategorizedSecrets is set from this on every ScanOutcome this CLI
+	// builds. Exactly "warn" or "block"; validated the same way PrivacyTier
+	// is, before any scan runs. Defaults to "warn": paired with the
+	// credential scan now being mandatory (see errBetterleaksUnconfigured), a
+	// fleet rollout with no per-repo config gets scanned everywhere without
+	// also hard-blocking on day one — a repo opts into "block" once its own
+	// findings are clean. Never governs an uncategorized (empty-Category)
+	// finding, which always hard-blocks regardless of this setting.
+	SecretScanCategorizedSeverity string `koanf:"secret_scan_categorized_severity"`
 }
 
 // SecretScanExtraRule is one secret_scan_extra_rules entry: a repo-supplied
@@ -110,16 +122,17 @@ type SecretScanExtraAllowlistEntry struct {
 // across default/file/env/flag layers.
 func defaultConfig() map[string]interface{} {
 	return map[string]interface{}{
-		"repo":                        ".",
-		"remote":                      "origin",
-		"privacy_tier":                "public",
-		"strict":                      false,
-		"max_binary_bytes":            githooks.DefaultMaxBytes,
-		"privacy_marker_exempt":       []string{},
-		"secret_scan_exempt":          []string{},
-		"allowed_email_domains":       []string{},
-		"secret_scan_extra_rules":     []map[string]interface{}{},
-		"secret_scan_extra_allowlist": []map[string]interface{}{},
+		"repo":                             ".",
+		"remote":                           "origin",
+		"privacy_tier":                     "public",
+		"strict":                           false,
+		"max_binary_bytes":                 githooks.DefaultMaxBytes,
+		"privacy_marker_exempt":            []string{},
+		"secret_scan_exempt":               []string{},
+		"allowed_email_domains":            []string{},
+		"secret_scan_extra_rules":          []map[string]interface{}{},
+		"secret_scan_extra_allowlist":      []map[string]interface{}{},
+		"secret_scan_categorized_severity": "warn",
 	}
 }
 
