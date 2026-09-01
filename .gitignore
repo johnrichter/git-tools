@@ -245,3 +245,10 @@ tmp/
 **/.claude/settings.local.json
 # Claude Code git worktrees at the repo root
 .claude/worktrees/
+
+###############################################################################
+# Agent task reports -- working-tree scratch, never version-controlled
+###############################################################################
+
+/*-report.md
+/*-review.md
