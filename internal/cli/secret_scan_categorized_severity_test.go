@@ -175,7 +175,10 @@ func TestSecretScanCategorizedSeverity_DefaultWarnLandsMergeAsCaveat(t *testing.
 func TestSecretScanCategorizedSeverity_ExplicitBlockRefusesMerge(t *testing.T) {
 	bin := buildCLI(t)
 	dir := categorizedFindingRepo(t)
-	writeConfig(t, dir, "secret_scan_categorized_severity: block\n")
+	// Committed, not merely written: merge's own gate reads git-tools.yaml
+	// from the prospective, trial-merged tree (see prospectiveMergeScanDir),
+	// which never carries dir's uncommitted content.
+	commitConfig(t, dir, "secret_scan_categorized_severity: block\n", "opt into hard-block for categorized findings")
 	head := runGit(t, dir, "rev-parse", "HEAD")
 
 	r, exit := runCLI(t, bin, "--repo", dir, "merge", "feature")
@@ -219,7 +222,11 @@ func TestSecretScanCategorizedSeverity_UncategorizedFindingAlwaysBlocks(t *testi
 func TestSecretScanCategorizedSeverity_InvalidValueRefusesBeforeScanning(t *testing.T) {
 	bin := buildCLI(t)
 	dir := initRepo(t)
-	writeConfig(t, dir, "secret_scan_categorized_severity: nonsense\n")
+	// Committed, not merely written: merge's own gate reads git-tools.yaml
+	// from the prospective, trial-merged tree (see prospectiveMergeScanDir),
+	// which never carries dir's uncommitted content — an untracked invalid
+	// value here would never reach scanGate's validation at all.
+	commitConfig(t, dir, "secret_scan_categorized_severity: nonsense\n", "set an invalid secret_scan_categorized_severity")
 	head := commitNestedFile(t, dir, "docs/real.md", "hello\n", "add doc")
 	runGit(t, dir, "branch", "feature")
 	runGit(t, dir, "checkout", "-q", "feature")

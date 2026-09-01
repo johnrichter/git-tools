@@ -31,12 +31,23 @@ const (
 
 // configScanAllowlistYAML renders a git-tools.yaml carrying one
 // secret_scan_extra_allowlist entry per marker/ruleID pair, or no key at all
-// when handed none — the config bodies these cases toggle between.
+// when handed none — the config bodies these cases toggle between. Every
+// rendering also pins secret_scan_categorized_severity to "block": every
+// fixture finding here is a plain betterleaks rule id (no "pii-"/"financial-"
+// prefix), which categorizeForRuleID buckets as "credentials" — so under this
+// package's own "warn" default, an unexempted finding would only ever caveat,
+// never refuse, and every case here that asserts a hard refusal on the
+// finding an exemption does not reach would falsely pass no matter which
+// config actually governs. Pinning "block" restores the hard-block behavior
+// these cases are actually about (config/exemption resolution), independent
+// of the separate warn-vs-block behavior secret_scan_categorized_severity_test.go
+// covers on its own.
 func configScanAllowlistYAML(pairs ...[2]string) string {
+	body := "secret_scan_categorized_severity: block\n"
 	if len(pairs) == 0 {
-		return "repo: .\n"
+		return body
 	}
-	body := "secret_scan_extra_allowlist:\n"
+	body += "secret_scan_extra_allowlist:\n"
 	for _, p := range pairs {
 		body += fmt.Sprintf("  - rule_id: %s\n    value: %s\n", p[1], p[0])
 	}

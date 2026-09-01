@@ -187,8 +187,11 @@ func TestProspectiveMergeScan_NoFalseClearanceWhenSourceLeavesFindingInPlace(t *
 	// under an explicit block posture — see findingMarkerRuleID's own
 	// category prefix and Config.SecretScanCategorizedSeverity's "warn"
 	// default. This test's whole point is the hard-refusal path, so it opts
-	// in rather than asserting a caveat.
-	writeConfig(t, dir, "secret_scan_categorized_severity: block\n")
+	// in rather than asserting a caveat. Committed, not merely written: merge's
+	// own gate reads git-tools.yaml from the prospective, trial-merged tree
+	// (see prospectiveMergeScanDir), which never carries dir's uncommitted
+	// content.
+	commitConfig(t, dir, "secret_scan_categorized_severity: block\n", "opt into hard-block for categorized findings")
 
 	head := commitFile(t, dir, "widget.conf", findingBearingConfig(), "add widget config with finding")
 	runGit(t, dir, "branch", "feature")
@@ -223,8 +226,9 @@ func TestProspectiveMergeScan_NewFindingInSourceStillRefuses(t *testing.T) {
 	// See TestProspectiveMergeScan_NoFalseClearanceWhenSourceLeavesFindingInPlace's
 	// comment: this categorized fixture finding only hard-blocks under an
 	// explicit block posture, which is what this test means to prove holds
-	// for a brand-new finding too.
-	writeConfig(t, dir, "secret_scan_categorized_severity: block\n")
+	// for a brand-new finding too. Committed for the same reason: merge's own
+	// gate never sees an uncommitted git-tools.yaml.
+	commitConfig(t, dir, "secret_scan_categorized_severity: block\n", "opt into hard-block for categorized findings")
 	head := runGit(t, dir, "rev-parse", "HEAD")
 
 	runGit(t, dir, "branch", "feature")
@@ -382,7 +386,7 @@ func TestProspectiveMergeScan_DryRunReflectsProspectiveResult(t *testing.T) {
 		// See TestProspectiveMergeScan_NoFalseClearanceWhenSourceLeavesFindingInPlace's
 		// comment: opts into the hard-block posture the categorized fixture
 		// finding needs to refuse under.
-		writeConfig(t, dir, "secret_scan_categorized_severity: block\n")
+		commitConfig(t, dir, "secret_scan_categorized_severity: block\n", "opt into hard-block for categorized findings")
 		head := runGit(t, dir, "rev-parse", "HEAD")
 
 		runGit(t, dir, "branch", "feature")
@@ -439,7 +443,7 @@ func TestProspectiveMergeScan_CommitMsgHookDoesNotLetAMergeLandUnscanned(t *test
 		// See TestProspectiveMergeScan_NoFalseClearanceWhenSourceLeavesFindingInPlace's
 		// comment: opts into the hard-block posture the categorized fixture
 		// finding needs to refuse under.
-		writeConfig(t, dir, "secret_scan_categorized_severity: block\n")
+		commitConfig(t, dir, "secret_scan_categorized_severity: block\n", "opt into hard-block for categorized findings")
 		head := runGit(t, dir, "rev-parse", "HEAD")
 
 		runGit(t, dir, "branch", "feature")
@@ -501,7 +505,7 @@ func TestProspectiveMergeScan_OctopusScansTheWholeProspectiveResult(t *testing.T
 		// See TestProspectiveMergeScan_NoFalseClearanceWhenSourceLeavesFindingInPlace's
 		// comment: opts into the hard-block posture the categorized fixture
 		// finding needs to refuse under.
-		writeConfig(t, dir, "secret_scan_categorized_severity: block\n")
+		commitConfig(t, dir, "secret_scan_categorized_severity: block\n", "opt into hard-block for categorized findings")
 		head := runGit(t, dir, "rev-parse", "HEAD")
 
 		runGit(t, dir, "checkout", "-q", "-b", "clean-source", "main")
