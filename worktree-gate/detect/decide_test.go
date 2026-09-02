@@ -373,7 +373,17 @@ func TestDecide_Bash_SC15ReadAllowance(t *testing.T) {
 // half out of sc15Exempt left the write allowance behaviorally identical: the
 // landing verbs are still allowed from a primary checkout (worktree add still
 // waived from the named-path rule even naming a primary path), resign joins
-// them as a landing verb, and all four retarget spellings still void it.
+// them as a landing verb, and --repo's two retarget spellings still void it.
+//
+// --config's two spellings do NOT void it, reversing this test's own prior
+// pin: --config never retargets which repository a landing verb acts on (only
+// --repo does -- repoDirForConfig reads "repo" alone), it only names a policy
+// file git-tools reads, so `merge --config <path>` from a primary checkout is
+// the sanctioned landing call, not a retargeted one. Denying it anyway is
+// what forced a real report's contradiction: told to move into a worktree,
+// then denied again on retry because the only way to still land the merge
+// from a worktree is the genuinely retargeting `merge --repo <primary>`,
+// which SC20 correctly refuses. See sc15Retargets and gitToolsDestinations.
 func TestDecide_Bash_SC15WriteAllowance_Unchanged(t *testing.T) {
 	v := testVerbs(t)
 	correctDigest := hex.EncodeToString(sha256Sum(sc15BinContent))
@@ -388,9 +398,9 @@ func TestDecide_Bash_SC15WriteAllowance_Unchanged(t *testing.T) {
 		{name: "worktree-add-names-primary-path-allowed", command: sc15Bin + " worktree add /repo/wt2 main"},
 		{name: "resign-landing-allowed", command: sc15Bin + " resign --apply"},
 		{name: "merge-repo-spaced-denies", command: sc15Bin + " merge --repo /other main", wantDeny: true},
-		{name: "merge-config-spaced-denies", command: sc15Bin + " merge --config /other main", wantDeny: true},
+		{name: "merge-config-spaced-allowed", command: sc15Bin + " merge --config /other main"},
 		{name: "merge-repo-glued-denies", command: sc15Bin + " merge --repo=/other main", wantDeny: true},
-		{name: "merge-config-glued-denies", command: sc15Bin + " merge --config=/other main", wantDeny: true},
+		{name: "merge-config-glued-allowed", command: sc15Bin + " merge --config=/other main"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

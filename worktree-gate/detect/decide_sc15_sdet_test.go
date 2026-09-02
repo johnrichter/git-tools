@@ -64,10 +64,10 @@ func TestSC15_SDET_AdversarialProbe(t *testing.T) {
 			note:     "glued --repo= form must be recognized identically to the spaced form",
 		},
 		{
-			name:     "glued-config-retarget-denies",
+			name:     "glued-config-does-not-retarget-allowed",
 			command:  bin + " merge --config=/other main",
-			wantDeny: true,
-			note:     "glued --config= form must be recognized identically to the spaced form",
+			wantDeny: false,
+			note:     "--config names a policy file, never a repository -- only --repo retargets, so this stays the sanctioned landing call",
 		},
 		{
 			name:     "extra-leading-token-before-binary-denies",
