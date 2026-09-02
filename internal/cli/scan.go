@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/bmatcuk/doublestar/v4"
@@ -29,29 +30,62 @@ import (
 const betterleaksBinEnvVar = "GIT_TOOLS_BETTERLEAKS_BIN"
 
 // errBetterleaksUnconfigured is scanCredentials' sentinel for "there is no
-// working betterleaks binary to scan with": betterleaksBinEnvVar is unset, or
-// it names a path that does not resolve to an existing file. Every caller
-// checks for it with errors.Is and turns it into a precondition_unmet
-// refusal instead of a generic internal failure — a missing credential
-// scanner is a missing precondition for a security-relevant scan, not an
-// unexpected fault, and unlike the old silent-skip behavior it must never let
-// the scan, or whatever it gates, proceed as though nothing were wrong.
-var errBetterleaksUnconfigured = errors.New("the credential scanner is not configured (" + betterleaksBinEnvVar + " does not resolve to an existing betterleaks binary)")
+// working betterleaks binary to scan with": betterleaksBinEnvVar is unset or
+// does not resolve, and no betterleaks binary sits next to this process's own
+// executable either. Every caller checks for it with errors.Is and turns it
+// into a precondition_unmet refusal instead of a generic internal failure —
+// a missing credential scanner is a missing precondition for a
+// security-relevant scan, not an unexpected fault, and unlike the old
+// silent-skip behavior it must never let the scan, or whatever it gates,
+// proceed as though nothing were wrong.
+var errBetterleaksUnconfigured = errors.New("the credential scanner is not configured (" + betterleaksBinEnvVar + " does not resolve to an existing betterleaks binary, and no betterleaks binary sits next to this git-tools executable)")
 
-// resolveBetterleaksPath reads betterleaksBinEnvVar and confirms it names an
-// existing file, returning errBetterleaksUnconfigured when it is unset or
-// does not resolve — the credential scan is mandatory, so an unprovisioned
-// binary is a real failure for the caller to refuse on, never a silent
+// resolveBetterleaksPath resolves the betterleaks binary to scan with,
+// preferring betterleaksBinEnvVar whenever it names an existing file — an
+// explicit override always wins — and otherwise falling back to
+// siblingBetterleaksPath. The credential scan is mandatory, so
+// errBetterleaksUnconfigured comes back only once neither source resolves;
+// a caller must treat it as a real failure to refuse on, never a silent
 // skip.
 func resolveBetterleaksPath() (string, error) {
-	path := os.Getenv(betterleaksBinEnvVar)
-	if path == "" {
-		return "", errBetterleaksUnconfigured
+	if path := os.Getenv(betterleaksBinEnvVar); path != "" {
+		if _, err := os.Stat(path); err == nil {
+			return path, nil
+		}
 	}
-	if _, err := os.Stat(path); err != nil {
-		return "", errBetterleaksUnconfigured
+	if path, ok := siblingBetterleaksPath(); ok {
+		return path, nil
 	}
-	return path, nil
+	return "", errBetterleaksUnconfigured
+}
+
+// siblingBetterleaksPath looks for a file named "betterleaks" next to this
+// running git-tools process's own resolved executable path. git-tools and
+// betterleaks are always provisioned together, as fixed, unversioned
+// filenames in the same directory, so a process that knows its own path
+// already knows where to find its sibling — with no environment variable,
+// settings file, or operator action needed.
+func siblingBetterleaksPath() (string, bool) {
+	return siblingBetterleaksPathFrom(os.Executable)
+}
+
+// siblingBetterleaksPathFrom is siblingBetterleaksPath with its self-lookup
+// injected, so a test can exercise it without needing a real, separately
+// compiled executable on disk — the same seam worktree-gate/detect/repo.go's
+// ReadFileFunc uses. Production code only ever calls siblingBetterleaksPath.
+func siblingBetterleaksPathFrom(selfExecutable func() (string, error)) (string, bool) {
+	self, err := selfExecutable()
+	if err != nil {
+		return "", false
+	}
+	if resolved, err := filepath.EvalSymlinks(self); err == nil {
+		self = resolved
+	}
+	candidate := filepath.Join(filepath.Dir(self), "betterleaks")
+	if _, err := os.Stat(candidate); err != nil {
+		return "", false
+	}
+	return candidate, true
 }
 
 // betterleaksExtraRules converts cfg's secret_scan_extra_rules entries into
@@ -182,7 +216,7 @@ func credentialScannerUnconfiguredDiagnostic(cmd *cobra.Command, data map[string
 	return finishDiagnostic(cmd, data, clikit.NewPreconditionUnmet,
 		"precondition_unmet.githooks.credential_scanner_unconfigured",
 		fmt.Sprintf("%s; nothing was %s", errBetterleaksUnconfigured, done),
-		clikit.Manual(fmt.Sprintf("provision a betterleaks binary and set %s to its path, then re-run; nothing was %s", betterleaksBinEnvVar, done)),
+		clikit.Manual(fmt.Sprintf("provision a betterleaks binary — either set %s to its path, or place a file named betterleaks next to this git-tools executable — then re-run; nothing was %s", betterleaksBinEnvVar, done)),
 		nil)
 }
 
