@@ -1315,17 +1315,21 @@ func sc15ReadAllowed(readFile ReadFileFunc, verifiedPath, expectedDigest string,
 // sc15ReadVerb reports whether the tokens after the binary name one of the
 // CLI's two read verbs, `worktree list` or `branch list`. A bare `worktree` or
 // `branch`, any other subcommand of either, and every other verb are not
-// reads. Trailing flags and operands do not matter: a read verb writes
-// nothing however it is spelled.
+// reads. A leading persistent flag (--repo, --config, ...) does not hide the
+// verb: gitToolsOperands skips it the same way gitToolsDestinations already
+// does when it resolves that flag's own value, so the two checks agree on
+// where the verb sits. Trailing flags and operands do not matter otherwise: a
+// read verb writes nothing however it is spelled.
 func sc15ReadVerb(args []string) bool {
-	if len(args) < 2 {
+	verb := gitToolsOperands(args)
+	if len(verb) < 2 {
 		return false
 	}
-	switch args[0] {
+	switch verb[0] {
 	case "worktree":
-		return args[1] == "list"
+		return verb[1] == "list"
 	case "branch":
-		return args[1] == "list"
+		return verb[1] == "list"
 	default:
 		return false
 	}
@@ -1341,17 +1345,25 @@ func sc15ReadVerb(args []string) bool {
 // worktree remove: it runs its own no-work-loss guard -- refusing an unmerged
 // branch -- before it ever touches the ref, and that guard has no flag that
 // skips it, so sanctioning the call here opens no path around the refusal.
+// gitToolsOperands skips a leading persistent flag to find the verb, the same
+// way it already does for gitToolsDestinations -- otherwise a call cobra
+// itself accepts, like `--repo <dir> worktree add ...`, would find no verb
+// here at args[0] while sc15Retargets still (correctly) sees the --repo and
+// voids the allowance downstream, so this check's own answer never mattered
+// for that shape; the mismatch only bit the read allowance and the
+// force-cleanup check below, which have no such backstop.
 func sc15VerbAllowed(args []string) bool {
-	if len(args) == 0 {
+	verb := gitToolsOperands(args)
+	if len(verb) == 0 {
 		return false
 	}
-	switch args[0] {
+	switch verb[0] {
 	case "merge", "push", "resign":
 		return true
 	case "worktree":
-		return len(args) >= 2 && (args[1] == "add" || args[1] == "remove")
+		return len(verb) >= 2 && (verb[1] == "add" || verb[1] == "remove")
 	case "branch":
-		return len(args) >= 2 && args[1] == "delete"
+		return len(verb) >= 2 && verb[1] == "delete"
 	default:
 		return false
 	}
@@ -1373,13 +1385,17 @@ func sc15VerbAllowed(args []string) bool {
 // no CLI flag would otherwise exercise, but the check costs nothing to keep and
 // closes the window a stale provisioned binary would reopen. worktree add's
 // --force (reuse a branch, overwrite a path) is a live flag on a different
-// verb and stays sanctioned.
+// verb and stays sanctioned. The verb check goes through gitToolsOperands for
+// the same reason sc15VerbAllowed does: a leading --repo/--config must not
+// shift `worktree remove` out from under this check and let its --force slip
+// past undetected.
 func sc15ForcesCleanup(args []string) bool {
+	verb := gitToolsOperands(args)
 	cleanup := false
 	switch {
-	case len(args) >= 1 && args[0] == "merge":
+	case len(verb) >= 1 && verb[0] == "merge":
 		cleanup = true
-	case len(args) >= 2 && args[0] == "worktree" && args[1] == "remove":
+	case len(verb) >= 2 && verb[0] == "worktree" && verb[1] == "remove":
 		cleanup = true
 	}
 	if !cleanup {

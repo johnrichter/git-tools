@@ -329,8 +329,12 @@ func TestDecide_Bash_SC15ReadAllowance(t *testing.T) {
 		{name: "bare-worktree-list-allowed", command: sc15Bin + " worktree list"},
 		{name: "repo-flag-does-not-void-read-allowed", command: sc15Bin + " worktree list --repo /other"},
 		{name: "glued-config-flag-does-not-void-read-allowed", command: sc15Bin + " worktree list --config=/other"},
+		{name: "repo-flag-before-verb-still-read-allowed", command: sc15Bin + " --repo /other worktree list"},
+		{name: "glued-repo-flag-before-verb-still-read-allowed", command: sc15Bin + " --repo=/other worktree list"},
+		{name: "repo-flag-before-verb-branch-list-still-read-allowed", command: sc15Bin + " --repo /other branch list"},
 
 		{name: "wrong-digest-denies", command: sc15Bin + " worktree list", digestSel: "wrong", wantDeny: true},
+		{name: "wrong-digest-with-leading-flag-still-denies", command: sc15Bin + " --repo /other worktree list", digestSel: "wrong", wantDeny: true},
 		{name: "empty-path-argv-denies", command: sc15Bin + " worktree list", pathSel: "omit", wantDeny: true},
 		{name: "empty-digest-argv-denies", command: sc15Bin + " worktree list", digestSel: "omit", wantDeny: true},
 		{name: "bare-name-denies", command: "git-tools worktree list", wantDeny: true},

@@ -174,3 +174,22 @@ func TestClassifyGitEntry_UnreadableFile(t *testing.T) {
 		t.Errorf("ClassifyGitEntry() = %v, want KindIndeterminate on a stat error", got)
 	}
 }
+
+// TestClassifyGitEntry_Submodule pins that a submodule's `.git` file --
+// `gitdir: ../.git/modules/<name>`, with no `/worktrees/` segment -- classifies
+// Indeterminate, the same as any other unrecognized redirect content. This
+// entry is never the one FindRepoRoot's walk-up reaches for a caller working
+// at or above the submodule's own parent repo root: the walk-up stops at the
+// nearest ancestor `.git`, which is the parent repo's, not a subdirectory
+// submodule's. A submodule only reaches this classification at all when a
+// caller's cwd or a named path sits inside the submodule's own directory --
+// a shape none of this package's SC15/SC20 repro cases exercise.
+func TestClassifyGitEntry_Submodule(t *testing.T) {
+	fs := newFakeFS().
+		dir("/repo/.git/modules/lib").
+		file("/repo/vendor/lib/.git", "gitdir: ../.git/modules/lib\n")
+	got := ClassifyGitEntry(fs.lstat, fs.readFile, "/repo/vendor/lib/.git")
+	if got != KindIndeterminate {
+		t.Errorf("ClassifyGitEntry() = %v, want KindIndeterminate for a submodule's gitdir file", got)
+	}
+}
