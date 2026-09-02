@@ -725,12 +725,18 @@ func gitDestinations(args []string) []string {
 }
 
 // gitToolsDestinations returns the filesystem paths a git-tools invocation
-// names explicitly: a --repo or --config value, which retargets whichever
-// verb runs onto a different repository, and worktree add/remove's own path
-// operand. Every SC15-sanctioned landing verb (merge, push, resign, branch
-// delete) writes its own working directory instead, governed by the cwd leg
-// the same way git's own commit/add/reset are -- it names no destination
-// here, so the verb word itself is never mistaken for one.
+// names explicitly: a --repo value, which retargets whichever verb runs onto
+// a different repository, and worktree add/remove's own path operand. Every
+// SC15-sanctioned landing verb (merge, push, resign, branch delete) writes
+// its own working directory instead, governed by the cwd leg the same way
+// git's own commit/add/reset are -- it names no destination here, so the verb
+// word itself is never mistaken for one.
+//
+// --config is deliberately excluded: it names a YAML policy file git-tools
+// only ever reads (loadConfigFile), never writes, and it selects no
+// repository of its own -- --repo alone does that (repoDirForConfig reads
+// only "repo", never "config"). A --config value is therefore never a write
+// destination and never a retarget, whatever directory it happens to sit in.
 //
 // The verb and its operand are found by skipping options, never by position:
 // cobra accepts a persistent flag ahead of the verb word
@@ -740,9 +746,6 @@ func gitDestinations(args []string) []string {
 func gitToolsDestinations(args []string) []string {
 	var out []string
 	if v, ok := flagValue(args, "--repo"); ok {
-		out = append(out, v)
-	}
-	if v, ok := flagValue(args, "--config"); ok {
 		out = append(out, v)
 	}
 	verb := gitToolsOperands(args)
@@ -1290,10 +1293,12 @@ func gitToolsVerbShape(args []string) string {
 // sc15Exempt reports whether a top-level piece is SC15's sanctioned landing
 // WRITE invocation: it clears the shared identity check and its verb is one of
 // the six landing verbs (merge, push, resign, worktree add, worktree remove,
-// branch delete) carrying neither a repo-retargeting flag nor a
+// branch delete) carrying neither a repo-retargeting --repo flag nor a
 // cleanup-forcing --force -- the sanctioned channel acts on the repo it is
 // invoked in, never one it is pointed at, and never destroys unseen state on a
-// forced cleanup it was not asked to prove safe. branch delete carries no
+// forced cleanup it was not asked to prove safe. A --config flag never voids
+// this (sc15Retargets), since it names a policy file to read, not a
+// repository to act on. branch delete carries no
 // --force of its own to void: its no-work-loss guard runs unconditionally,
 // ahead of the ref touch, with no flag that skips it, so admitting it here
 // opens no path around that guard. An exempt piece is waived from both the
@@ -1311,10 +1316,10 @@ func sc15Exempt(readFile ReadFileFunc, verifiedPath, expectedDigest string, p pi
 // digest-verified CLI's two READ verbs, worktree list or branch list. It
 // shares sc15Identity with the write allowance but not its verb policy: a
 // read verb writes nothing and names no repo it could be retargeted onto, so
-// a --repo/--config flag does not void it (retargeting is only the write
-// channel's concern). Unlike the write allowance it waives no rule -- the
-// caller applies it only where a piece would otherwise be ClassUncertain,
-// reclassifying it read.
+// a --repo flag does not void it (retargeting is only the write channel's
+// concern; --config never retargets anything, on either channel). Unlike the
+// write allowance it waives no rule -- the caller applies it only where a
+// piece would otherwise be ClassUncertain, reclassifying it read.
 func sc15ReadAllowed(readFile ReadFileFunc, verifiedPath, expectedDigest string, p piece) bool {
 	args, ok := sc15Identity(readFile, verifiedPath, expectedDigest, p)
 	if !ok {
@@ -1422,11 +1427,20 @@ func sc15ForcesCleanup(args []string) bool {
 
 // sc15Retargets reports whether any token is a repo-retargeting flag, which
 // voids the allowance -- the sanctioned channel acts on the repo it is invoked
-// in, never one it is pointed at.
+// in, never one it is pointed at. --repo is the only such flag: it is the one
+// value every landing verb's own repo target actually reads (repoDirForConfig
+// resolves it from "repo" alone). --config selects which YAML policy file to
+// read, never which repository to act on -- CONTRADICTION-1 was this function
+// treating it as if it did, voiding the sanction for `merge --config <path>`
+// even though nothing about that call retargets anything, and forcing a
+// worktree relocation whose own retry (`merge --repo <primary>` from the
+// worktree) SC20 then correctly denies for real retargeting, leaving no
+// satisfiable command. See TestDecide_Bash_SC15WriteAllowance_Unchanged's
+// merge-config cases and the sc15-config-retarget corpus entries for the
+// pinned before/after.
 func sc15Retargets(args []string) bool {
 	for _, a := range args {
-		if a == "--repo" || a == "--config" ||
-			strings.HasPrefix(a, "--repo=") || strings.HasPrefix(a, "--config=") {
+		if a == "--repo" || strings.HasPrefix(a, "--repo=") {
 			return true
 		}
 	}
