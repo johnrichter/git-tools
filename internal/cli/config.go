@@ -42,6 +42,16 @@ const envPrefix = "GITTOOLS_"
 // needs its own design decision plus a rewritten test suite, not a drive-by
 // change here. See marketplace's own
 // .dat/reports/git-tools-privacy-scan-scope-bug.md for the full record.
+//
+// An explicit --config widens that same residual in one way worth naming: a
+// file outside any repository gets no warning at all, since
+// warnIfConfigTampered's `git status` runs in that file's own directory and
+// fails there, which it treats as nothing to report. The worktree gate no
+// longer denies `merge --config <path>` from a primary checkout either (it
+// never should have -- see sc15Retargets), so this is the reachable shape of
+// the residual. It is bounded by the scan exemptions the schema exposes and
+// never by which repository a verb acts on: loadConfigForDir pins that to
+// repoDirForConfig regardless of any file.
 const defaultConfigFile = "git-tools.yaml"
 
 // Config is git-tools' resolved settings: every field a value one command or
@@ -124,9 +134,14 @@ type SecretScanExtraAllowlistEntry struct {
 // match a Config `koanf` tag and the normalized (hyphen->underscore) form
 // of the matching persistent flag, so the same setting resolves to one key
 // across default/file/env/flag layers.
+//
+// "repo" is deliberately absent: it is the one setting koanf does not resolve
+// at all. repoDirForConfig owns it end to end, default included, and
+// loadConfigForDir assigns its answer over whatever the layers produced --
+// see that assignment for why a config file must not be able to select the
+// repository a verb acts on.
 func defaultConfig() map[string]interface{} {
 	return map[string]interface{}{
-		"repo":                             ".",
 		"remote":                           "origin",
 		"privacy_tier":                     "public",
 		"strict":                           false,
@@ -200,6 +215,26 @@ func loadConfigForDir(fs *pflag.FlagSet, dir string, warnIfTampered bool) (*Conf
 	if err := k.Unmarshal("", &cfg); err != nil {
 		return nil, fmt.Errorf("cli: unmarshal config: %w", err)
 	}
+	// The acting repository comes from repoDirForConfig alone -- the --repo
+	// flag, GITTOOLS_REPO, or "." -- never from a config file. A YAML "repo"
+	// key parses into the layers above like any other, so it is overwritten
+	// here rather than left to select which repository a verb writes to.
+	//
+	// The worktree gate depends on exactly this. sc15Retargets treats --repo
+	// as the ONLY flag that retargets a sanctioned landing verb, and
+	// gitToolsDestinations reads only --repo's value as a destination
+	// (worktree-gate/detect/decide.go). Were a config file able to set "repo",
+	// `merge --config <file>` would be sanctioned from a primary checkout
+	// while acting on a repository the gate never saw and never judged, and
+	// the implicit git-tools.yaml would do the same with no flag at all. This
+	// assignment is what makes both classifiers' premise true, so it has to
+	// survive: TestLoadConfig_ConfigFileCannotSelectTheRepo pins it.
+	//
+	// Nothing legitimate is lost. A repository's own git-tools.yaml naming a
+	// different repository for every verb to act on has no use case, and an
+	// explicit --config names a policy file, which is a separate concern from
+	// which tree that policy is applied to.
+	cfg.Repo = repoDirForConfig(fs)
 	return &cfg, nil
 }
 
@@ -244,6 +279,10 @@ func loadConfigFile(k *koanf.Koanf, fs *pflag.FlagSet, implicitDefaultDir string
 // default precedence loadConfig applies to every other setting. It cannot
 // wait for the full koanf resolution in loadConfig, since that resolution
 // itself needs loadConfigFile to run first.
+//
+// It is also the CLI's only answer to "which repository does this verb act
+// on": loadConfigForDir assigns it over Config.Repo, so no config-file layer
+// can move a verb onto a different repository. See that assignment.
 func repoDirForConfig(fs *pflag.FlagSet) string {
 	if fs.Changed("repo") {
 		if v, err := fs.GetString("repo"); err == nil && v != "" {

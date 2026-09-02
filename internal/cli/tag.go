@@ -75,7 +75,8 @@ verifies it with "git tag -v": a tag whose signature does not verify is
 deleted locally on the spot and never reaches the remote.
 
 Like push, create always operates on the invoking process's own working
-directory: --repo/--config would retarget it, so both are refused.
+directory, under that repository's own policy file: --repo would move the
+one, --config would swap the other, so both are refused.
 
 Exit codes:
   0  success              the tag was created and pushed
@@ -101,11 +102,12 @@ Exit codes:
 		RunE: func(cmd *cobra.Command, args []string) error {
 			version := args[0]
 
-			// --repo/--config retarget every other verb at a different
-			// working directory or settings file. create reuses push's own
-			// remote-advance path, which always operates on the invoking
-			// process's own working directory, so it refuses both exactly
-			// as push does rather than accepting a value it would ignore.
+			// --repo points every other verb at a different working
+			// directory; --config swaps the policy file whose scan gates it.
+			// create reuses push's own remote-advance path, which always
+			// operates on the invoking process's own working directory, so it
+			// refuses both exactly as push does rather than accepting a value
+			// it would ignore.
 			if cmd.Flags().Changed("repo") || cmd.Flags().Changed("config") {
 				return finishUsage(cmd, nil, "usage.cli.tag_retargeting_flag",
 					"tag create always operates on the invoking process's own working directory; --repo/--config are refused")

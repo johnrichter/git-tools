@@ -30,11 +30,11 @@ name resolved off $PATH, does not satisfy it, and is denied from a primary
 checkout.
 
 It refuses anything it cannot verify as sanctioned at the moment it runs:
-tracked modifications or staged changes, --repo/--config (either would
-retarget the push away from the invoking process's own working directory,
-which push always operates on and never lets a flag change), or <ref>
-naming a branch other than the one currently checked out. A tag push is
-exempt from that last check.
+tracked modifications or staged changes, --repo (it would move the push off
+the invoking process's own working directory, the only one push ever
+operates on) or --config (it would swap the policy file whose scan gates the
+push), or <ref> naming a branch other than the one currently checked out. A
+tag push is exempt from that last check.
 
 It never inspects commit history to tell a commit that landed via
 "git-tools merge" apart from one authored directly on the branch — a commit
@@ -60,10 +60,10 @@ Exit codes:
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ref := args[0]
 
-			// --repo/--config retarget every other verb at a different
-			// working directory or settings file. push refuses both
-			// unconditionally rather than trying to sanction some values
-			// and not others.
+			// --repo points every other verb at a different working
+			// directory; --config swaps the policy file whose scan gates it.
+			// push refuses both unconditionally rather than trying to
+			// sanction some values and not others.
 			if cmd.Flags().Changed("repo") || cmd.Flags().Changed("config") {
 				return finishUsage(cmd, nil, "usage.cli.push_retargeting_flag",
 					"push always operates on the invoking process's own working directory; --repo/--config are refused")

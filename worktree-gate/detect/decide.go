@@ -734,9 +734,18 @@ func gitDestinations(args []string) []string {
 //
 // --config is deliberately excluded: it names a YAML policy file git-tools
 // only ever reads (loadConfigFile), never writes, and it selects no
-// repository of its own -- --repo alone does that (repoDirForConfig reads
-// only "repo", never "config"). A --config value is therefore never a write
-// destination and never a retarget, whatever directory it happens to sit in.
+// repository of its own -- --repo alone does that. A --config value is
+// therefore never a write destination and never a retarget, whatever
+// directory it happens to sit in.
+//
+// That second half is a CLI invariant this classifier relies on, not a
+// property of the flag's name: internal/cli's loadConfigForDir assigns
+// repoDirForConfig's answer (--repo, GITTOOLS_REPO, or ".") over Config.Repo
+// after the config layers resolve, precisely so a "repo" key inside a config
+// file cannot move which repository a verb acts on. If that assignment ever
+// goes away, --config becomes a retarget again and this exclusion, along with
+// sc15Retargets' matching one, is wrong.
+// internal/cli's TestLoadConfig_ConfigFileCannotSelectTheRepo pins it.
 //
 // The verb and its operand are found by skipping options, never by position:
 // cobra accepts a persistent flag ahead of the verb word
@@ -1428,16 +1437,21 @@ func sc15ForcesCleanup(args []string) bool {
 // sc15Retargets reports whether any token is a repo-retargeting flag, which
 // voids the allowance -- the sanctioned channel acts on the repo it is invoked
 // in, never one it is pointed at. --repo is the only such flag: it is the one
-// value every landing verb's own repo target actually reads (repoDirForConfig
-// resolves it from "repo" alone). --config selects which YAML policy file to
-// read, never which repository to act on -- CONTRADICTION-1 was this function
-// treating it as if it did, voiding the sanction for `merge --config <path>`
-// even though nothing about that call retargets anything, and forcing a
-// worktree relocation whose own retry (`merge --repo <primary>` from the
-// worktree) SC20 then correctly denies for real retargeting, leaving no
-// satisfiable command. See TestDecide_Bash_SC15WriteAllowance_Unchanged's
-// merge-config cases and the sc15-config-retarget corpus entries for the
-// pinned before/after.
+// value a landing verb's own repo target reads, and internal/cli keeps it that
+// way on purpose -- loadConfigForDir assigns repoDirForConfig's answer over
+// Config.Repo after the config layers resolve, so no config file's own "repo"
+// key can move the acting repository (see gitToolsDestinations for what
+// depends on that, and internal/cli's
+// TestLoadConfig_ConfigFileCannotSelectTheRepo for the pin).
+//
+// --config selects which YAML policy file to read, never which repository to
+// act on -- CONTRADICTION-1 was this function treating it as if it did,
+// voiding the sanction for `merge --config <path>` even though nothing about
+// that call retargets anything, and forcing a worktree relocation whose own
+// retry (`merge --repo <primary>` from the worktree) SC20 then correctly
+// denies for real retargeting, leaving no satisfiable command. See
+// TestDecide_Bash_SC15WriteAllowance_Unchanged's merge-config cases and the
+// sc15-config-does-not-retarget corpus entries for the pinned before/after.
 func sc15Retargets(args []string) bool {
 	for _, a := range args {
 		if a == "--repo" || strings.HasPrefix(a, "--repo=") {

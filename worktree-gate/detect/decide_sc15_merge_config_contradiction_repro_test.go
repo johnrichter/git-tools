@@ -16,8 +16,10 @@ import (
 //
 // Root cause: sc15Retargets and gitToolsDestinations treated --config the
 // same as --repo. --config only names a policy file to read (loadConfigFile);
-// only --repo selects which repository merge acts on (repoDirForConfig reads
-// the "repo" key alone). Step 1's --config value was never a retarget, so
+// only --repo selects which repository merge acts on, and internal/cli's
+// loadConfigForDir keeps it that way by assigning repoDirForConfig's answer
+// over Config.Repo, so no config file's "repo" key can retarget the verb
+// either. Step 1's --config value was never a retarget, so
 // voiding the sanctioned-landing exemption for it was wrong; that wrong
 // denial is what forced the retry that produced step 2's real, correct
 // denial. Narrowing both functions to --repo alone leaves step 1 allowed --

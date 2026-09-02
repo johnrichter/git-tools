@@ -167,6 +167,91 @@ func TestLoadConfig_ExplicitMissingConfigFileErrors(t *testing.T) {
 	}
 }
 
+// TestLoadConfig_ConfigFileCannotSelectTheRepo pins the invariant the worktree
+// gate's SC15/SC20 classifiers depend on: a config file's own "repo" key never
+// selects the repository a verb acts on. Only --repo, GITTOOLS_REPO, or the
+// "." default do (repoDirForConfig).
+//
+// This is load-bearing, not cosmetic. sc15Retargets treats --repo as the only
+// flag that voids the sanctioned-landing exemption, and gitToolsDestinations
+// reads only --repo's value as a write destination
+// (worktree-gate/detect/decide.go). If a "repo" key in an explicitly named
+// --config file -- or in the implicit git-tools.yaml, which needs no flag at
+// all -- could move the acting repository, `merge --config <file>` would be
+// gate-sanctioned from a primary checkout while landing in a repository the
+// gate never saw. Both spellings are covered here because both feed the same
+// koanf file layer.
+func TestLoadConfig_ConfigFileCannotSelectTheRepo(t *testing.T) {
+	repoDir := gitRepoForConfigTest(t)
+	elsewhere := t.TempDir()
+
+	t.Run("explicit --config file", func(t *testing.T) {
+		cfgPath := filepath.Join(t.TempDir(), "policy.yaml")
+		if err := os.WriteFile(cfgPath, []byte("repo: "+elsewhere+"\nremote: from-file\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		fs := rootFlags()
+		if err := fs.Set("config", cfgPath); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := loadConfig(fs)
+		if err != nil {
+			t.Fatalf("loadConfig: %v", err)
+		}
+		if cfg.Repo != "." {
+			t.Errorf("Repo = %q, want %q (an explicit --config file's repo key must not retarget the verb)", cfg.Repo, ".")
+		}
+		if cfg.Remote != "from-file" {
+			t.Errorf("Remote = %q, want from-file (every other key from the same file must still load)", cfg.Remote)
+		}
+	})
+
+	// No --repo here on purpose: the implicit git-tools.yaml is the variant
+	// that needs no flag at all, so it is reached by standing in the repo.
+	t.Run("implicit git-tools.yaml", func(t *testing.T) {
+		if err := os.WriteFile(filepath.Join(repoDir, "git-tools.yaml"), []byte("repo: "+elsewhere+"\nremote: from-implicit\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		t.Chdir(repoDir)
+		var cfg *Config
+		captureStderr(t, func() {
+			var err error
+			cfg, err = loadConfig(rootFlags())
+			if err != nil {
+				t.Fatalf("loadConfig: %v", err)
+			}
+		})
+		if cfg.Repo != "." {
+			t.Errorf("Repo = %q, want %q (the implicit config's repo key must not retarget the verb)", cfg.Repo, ".")
+		}
+		if cfg.Remote != "from-implicit" {
+			t.Errorf("Remote = %q, want from-implicit (every other key from the same file must still load)", cfg.Remote)
+		}
+	})
+
+	t.Run("--repo flag and GITTOOLS_REPO still select it", func(t *testing.T) {
+		t.Setenv(envPrefix+"REPO", elsewhere)
+		envOnly, err := loadConfig(rootFlags())
+		if err != nil {
+			t.Fatalf("loadConfig: %v", err)
+		}
+		if envOnly.Repo != elsewhere {
+			t.Errorf("Repo = %q, want %q (GITTOOLS_REPO must still select the repository)", envOnly.Repo, elsewhere)
+		}
+		fs := rootFlags()
+		if err := fs.Set("repo", repoDir); err != nil {
+			t.Fatal(err)
+		}
+		flagWins, err := loadConfig(fs)
+		if err != nil {
+			t.Fatalf("loadConfig: %v", err)
+		}
+		if flagWins.Repo != repoDir {
+			t.Errorf("Repo = %q, want %q (--repo must still beat GITTOOLS_REPO)", flagWins.Repo, repoDir)
+		}
+	})
+}
+
 // TestLoadConfig_DefaultResolvesAgainstRepoFlagTarget proves the directory-
 // mismatch fix: the implicit default git-tools.yaml is resolved against
 // --repo's own target directory, not the invoking process's cwd.
