@@ -62,6 +62,17 @@ type Decision struct {
 // path: a bare `git-tools worktree list` fails sc15Identity and is denied from a
 // primary checkout, which is the same trap spelled a different way.
 //
+// Spelling the path right is necessary but not sufficient, so the same rule
+// binds one step further. Identity also fails when the binary at that path is
+// absent, unreadable, or no longer matches its pinned digest, and the wrapper
+// that supplies the path drops it entirely in exactly that case, leaving the
+// gate no allowance to grant. A remedy naming the CLI must therefore also say
+// what to do when the caller was already invoking it correctly, or it hands
+// back the command it just denied with no way to tell why. That closes the
+// last spelling of the trap: the named-path denial is reached before the class
+// tally's own gitToolsSanctionCause can name the cause, so this text is the
+// only place the caller learns of it.
+//
 // A creation-worktree remedy cannot double as a branch-delete remedy: git
 // refuses to delete a branch checked out in the worktree the delete runs from,
 // so "create a worktree and retry" is a route that cannot work for that verb.
@@ -72,7 +83,7 @@ type Decision struct {
 // A remedy must not contain the " -- " token deny() joins on, so Reason's
 // closing clause stays exactly the remedy.
 const (
-	remedyTargetRepoWorktree = "write to a path inside a worktree of the repository that contains this target instead; the provisioned `git-tools`, run by its absolute provisioned path, lists that repository's worktrees with `worktree list --repo <dir>`"
+	remedyTargetRepoWorktree = "write to a path inside a worktree of the repository that contains this target instead; the provisioned `git-tools`, run by its absolute provisioned path, lists that repository's worktrees with `worktree list --repo <dir>`; if that is already the exact command this denied, then the binary at that path is missing or no longer matches the digest its plugin pins, so the gate has no sanctioned channel to grant it, and a fresh session re-provisions it"
 	remedyThisRepoWorktree   = "run it from a worktree of this repository: `git worktree list` shows the ones that already exist, and the provisioned `git-tools`, run by its absolute provisioned path, may `worktree add <path> <branch>` from here, so create one and retry; a branch delete is different, since a worktree can never delete its own checked-out branch, so run the provisioned `git-tools`, by its absolute provisioned path, `branch delete <branch>` from here instead"
 	remedyRewordAsRead       = "if it only reads, reword it as a command this gate recognizes as a read; if it does write, run it from a worktree"
 	remedyLiteralTarget      = "respell the target as a literal path, with no variable, glob, or `~` for the shell to expand, so the gate can resolve where the write lands"

@@ -39,25 +39,22 @@ func TestSDET_SC15_WriteExempt_WrongDigestWithLeadingFlag_Denied(t *testing.T) {
 	}
 }
 
-// TestSDET_SC15_NoProvisionedParams_DeniesEveryShape is an independent probe
-// of the unresolved "attempt 2" mystery in
-// SWE_REPORT_worktree-gate-out-of-workspace-repo.md: the report could not
-// reproduce a denial for `worktree list --repo <dir>` (flag after verb, no
-// cd) against the pre-fix code, since sc15ReadVerb's positional read matched
-// that shape even before this fix. This test proves an entirely independent
-// mechanism that WOULD deny every git-tools shape uniformly, unrelated to
-// the leading-flag bug: sc15IdentityCause returns sc15IdentityNoParams
-// whenever ProvisionedBinPath or ProvisionedBinDigest arrives empty (see
-// decide.go sc15IdentityCause), which the wrapper
-// (pretooluse-worktree-gate.sh) produces whenever the on-disk git-tools
-// binary at the plugin-data root fails to match its pinned digest for the
-// currently pinned tag -- its fallback is `exec "$gate_bin_path"` with
-// NEITHER -provisioned-bin NOR -provisioned-digest. This denies not just
-// attempt 2 but ALL FOUR reported shapes uniformly, matching the report's
-// "denying every attempted shape" framing better than the leading-flag bug
-// does (which only bit two of the four shapes).
+// TestSDET_SC15_NoProvisionedParams_DeniesEveryShape pins the one mechanism
+// that denies EVERY git-tools shape uniformly, which the leading-flag bug does
+// not: sc15IdentityCause returns sc15IdentityNoParams whenever
+// ProvisionedBinPath or ProvisionedBinDigest arrives empty, voiding both the
+// read allowance and the write exemption for any verb, however spelled. The
+// PreToolUse wrapper produces exactly that argv -- the gate exec'd with
+// neither -provisioned-bin nor -provisioned-digest -- whenever the git-tools
+// binary at the plugin-data root is absent or fails to match its pinned digest
+// for the currently pinned tag, while the wrapper still execs the gate itself.
+//
+// This is the shape to reach for when a report names more denied shapes than a
+// classifier defect can explain: the leading-flag fix accounts for one of the
+// four shapes in
+// TestDecide_Bash_OutOfWorkspaceTargetRepo_ReportedShapes, and a
+// stale or missing local CLI accounts for all four at once.
 func TestSDET_SC15_NoProvisionedParams_DeniesEveryShape(t *testing.T) {
-	correctDigest := hex.EncodeToString(sha256Sum(sc15BinContent))
 	cases := []struct {
 		name    string
 		command string
@@ -81,7 +78,7 @@ func TestSDET_SC15_NoProvisionedParams_DeniesEveryShape(t *testing.T) {
 				ProvisionedBinPath: "", ProvisionedBinDigest: "",
 			})
 			if !d.Deny {
-				t.Fatalf("Decide(cmd=%q) with empty provisioned params: got allow, want deny (sc15IdentityNoParams should void every allowance) -- correctDigest=%s unused here by design", c.command, correctDigest)
+				t.Fatalf("Decide(cmd=%q) with empty provisioned params: got allow, want deny (sc15IdentityNoParams must void every allowance, whatever the binary on disk hashes to)", c.command)
 			}
 		})
 	}
@@ -178,17 +175,12 @@ func TestSDET_SC15_OtherVerbs_LeadingFlag_GluedAndSpaced_AndStacked(t *testing.T
 // dispatch to, in the ALLOW direction. `--` ends flag parsing in both cobra
 // and gitToolsOperands, so a verb placed after `--` must still be found.
 //
-// The second case initially asserted deny, reasoning that a leading --repo
-// should still void the allowance same as it does for a write verb. That
-// assumption was wrong and the test itself was the bug: sc15ReadAllowed
-// (unlike sc15Exempt, the write allowance) never calls sc15Retargets at
-// all -- an existing pinned case
-// (TestDecide_Bash_SC15ReadAllowance/repo-flag-before-verb-still-read-allowed)
-// already establishes that `worktree list` stays read-allowed with a leading
-// --repo, by design: reading a different repo is not a location-sensitive
-// write, so only the write exemption's retarget veto applies. Corrected to
-// wantDeny=false; this now positively confirms gitToolsOperands walks a
-// value-consuming flag AND THEN a `--` correctly to find the verb.
+// The read cases expect allow even with a leading --repo, because
+// sc15ReadAllowed never calls sc15Retargets: reading a repo the caller is
+// pointed at writes nothing, so only the write exemption carries a retarget
+// veto. The write case in the same table shows that veto still firing, so the
+// pair proves gitToolsOperands walks a value-consuming flag AND THEN a `--` to
+// the verb without either allowance losing its own policy.
 func TestSDET_GitToolsOperands_DoubleDashStopsFlagSkip(t *testing.T) {
 	correctDigest := hex.EncodeToString(sha256Sum(sc15BinContent))
 	cases := []struct {
