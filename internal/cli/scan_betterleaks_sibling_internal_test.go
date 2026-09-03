@@ -64,6 +64,60 @@ func TestSiblingBetterleaksPathFrom_ResolvesWhenPresent(t *testing.T) {
 	}
 }
 
+// TestSiblingBetterleaksPathFrom_RejectsUnusableCandidate proves the fallback
+// asks more than "does something with this name exist": a directory, and a
+// file with no executable bit, are each rejected outright rather than handed
+// on as the scanner, since exec'ing either fails at the OS level and would
+// surface as an internal fault instead of the credential scan's own
+// precondition_unmet refusal.
+func TestSiblingBetterleaksPathFrom_RejectsUnusableCandidate(t *testing.T) {
+	cases := []struct {
+		name  string
+		plant func(t *testing.T, candidate string)
+	}{
+		{"directory", func(t *testing.T, candidate string) {
+			if err := os.Mkdir(candidate, 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"non_executable_file", func(t *testing.T, candidate string) {
+			if err := os.WriteFile(candidate, []byte("#!/bin/sh\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			c.plant(t, filepath.Join(dir, "betterleaks"))
+
+			path, ok := siblingBetterleaksPathFrom(func() (string, error) {
+				return filepath.Join(dir, "git-tools"), nil
+			})
+			if ok {
+				t.Fatalf("siblingBetterleaksPathFrom() = %q, ok = true for an unusable %s candidate, want ok = false", path, c.name)
+			}
+		})
+	}
+}
+
+// TestResolveBetterleaksPath_UnusableEnvVarPathIsNotUsed proves the same
+// usability bar applies to the explicit override, not only to the sibling
+// fallback: an env var naming a directory resolves an os.Stat, so a
+// bare-existence check would hand it straight to the scan.
+func TestResolveBetterleaksPath_UnusableEnvVarPathIsNotUsed(t *testing.T) {
+	unusable := filepath.Join(t.TempDir(), "betterleaks")
+	if err := os.Mkdir(unusable, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(betterleaksBinEnvVar, unusable)
+
+	path, err := resolveBetterleaksPath()
+	if path == unusable {
+		t.Fatalf("resolveBetterleaksPath() = %q, want anything but the unusable configured path (err = %v)", path, err)
+	}
+}
+
 // TestSiblingBetterleaksPathFrom_MissingSiblingFailsClosed proves a missing
 // sibling file fails closed with ok=false, not an error -- resolveBetterleaksPath
 // treats this as "keep looking" (here, nowhere left to look), not as a fault.

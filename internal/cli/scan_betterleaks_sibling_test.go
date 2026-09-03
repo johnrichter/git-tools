@@ -1,7 +1,7 @@
 // End-to-end proof for resolveBetterleaksPath's sibling-file fallback (see
 // scan.go): with GIT_TOOLS_BETTERLEAKS_BIN unset, a real betterleaks binary
 // sitting next to the running git-tools executable is still found and used.
-// Both cases here copy the shared buildCLI(t) binary into their own private
+// Every case here copies the shared buildCLI(t) binary into its own private
 // t.TempDir() before placing a file literally named betterleaks next to it:
 // the shared cliBinDir must stay betterleaks-free, since
 // secret_scan_categorized_severity_test.go's
@@ -62,6 +62,57 @@ func TestSiblingBetterleaksFallback_ScanSecretsSucceedsWithoutTheEnvVar(t *testi
 	r, exit := runCLIIn(t, privateBin, dir, "scan", "secrets")
 	if r.Status != "success" || exit != 0 {
 		t.Fatalf("status=%s exit=%d, want success/0 (the sibling betterleaks must be found with no env var set): %+v", r.Status, exit, r)
+	}
+}
+
+// TestSiblingBetterleaksFallback_MalformedSiblingRefusesAsUnconfigured proves
+// every shape a betterleaks-named sibling can take that is not a runnable
+// binary refuses the same way an absent one does: precondition_unmet, naming
+// the scanner as unconfigured -- an actionable, expected gap -- never a
+// status:"internal" fault from deep inside the exec githooks attempts. The
+// first two shapes are rejected by resolveBetterleaksPath's own usability
+// check; the last two carry an executable bit and pass every metadata check,
+// so only the kernel's refusal to exec them reveals what they are (see
+// scan.go's betterleaksStarts). Each case drives the built binary against a
+// repo with a committed file, so the credential scan really does reach
+// betterleaks rather than short-circuiting on an empty candidate list.
+func TestSiblingBetterleaksFallback_MalformedSiblingRefusesAsUnconfigured(t *testing.T) {
+	cases := []struct {
+		name  string
+		plant func(t *testing.T, sibling string)
+	}{
+		{"directory", func(t *testing.T, sibling string) {
+			if err := os.Mkdir(sibling, 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"non_executable_file", func(t *testing.T, sibling string) {
+			if err := os.WriteFile(sibling, []byte("#!/bin/sh\nexit 0\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"zero_byte_executable", func(t *testing.T, sibling string) {
+			if err := os.WriteFile(sibling, nil, 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"garbage_content_executable", func(t *testing.T, sibling string) {
+			if err := os.WriteFile(sibling, []byte("\x00\x01not an executable format\x00"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			privateBin := copyCLIToPrivateDir(t, buildCLI(t))
+			c.plant(t, filepath.Join(filepath.Dir(privateBin), "betterleaks"))
+
+			dir := initRepo(t)
+			t.Setenv(betterleaksBinEnvVar, "")
+
+			r, exit := runCLIIn(t, privateBin, dir, "scan", "secrets")
+			assertCredentialScannerUnconfigured(t, r, exit)
+		})
 	}
 }
 
