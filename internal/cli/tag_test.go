@@ -86,6 +86,8 @@ func TestTagCreate_RetargetingFlagsRefused(t *testing.T) {
 
 	for _, args := range [][]string{
 		{"tag", "create", "1.2.3", "--shape", "vX.Y.Z", "--repo", "."},
+		{"tag", "create", "1.2.3", "--shape", "vX.Y.Z", "-C", "."},
+		{"tag", "create", "1.2.3", "--shape", "vX.Y.Z", "--worktree", "wt"},
 		{"tag", "create", "1.2.3", "--shape", "vX.Y.Z", "--config", "git-tools.yaml"},
 	} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
@@ -96,7 +98,7 @@ func TestTagCreate_RetargetingFlagsRefused(t *testing.T) {
 				t.Fatalf("status=%s exit=%d, want usage/50: %+v", r.Status, exit, r)
 			}
 			message, _ := r.Errors[0]["message"].(string)
-			if !strings.Contains(message, "--repo/--config are refused") {
+			if !strings.Contains(message, "-C/--repo, --worktree, and --config are refused") {
 				t.Fatalf("governing error message %q does not name the refused flags", message)
 			}
 			if tags := localTags(t, dir); tags != "" {

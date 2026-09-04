@@ -20,13 +20,14 @@ func newSignCmd() *cobra.Command {
 		Args:    cobra.MaximumNArgs(1),
 		Example: "  git-tools sign HEAD",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ref := "HEAD"
-			if len(args) == 1 {
-				ref = args[0]
+			ref, err := resolveRefSelector(cmd, args, "HEAD")
+			if err != nil {
+				return err
 			}
 			return runResign(cmd, ref, ref+"^")
 		},
 	}
+	cmd.Flags().String("branch", "", "ref to sign, in place of the positional argument")
 	addSyncFlags(cmd)
 	return cmd
 }
@@ -46,9 +47,9 @@ $PATH, does not satisfy it, and is denied from a primary checkout.`,
 		Args:    cobra.MaximumNArgs(1),
 		Example: "  git-tools resign --base origin/main HEAD",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ref := "HEAD"
-			if len(args) == 1 {
-				ref = args[0]
+			ref, err := resolveRefSelector(cmd, args, "HEAD")
+			if err != nil {
+				return err
 			}
 			base, _ := cmd.Flags().GetString("base")
 			if base == "" {
@@ -58,6 +59,7 @@ $PATH, does not satisfy it, and is denied from a primary checkout.`,
 		},
 	}
 	cmd.Flags().String("base", "", "range start, exclusive (resign rewrites base..ref)")
+	cmd.Flags().String("branch", "", "ref to resign, in place of the positional argument")
 	addSyncFlags(cmd)
 	return cmd
 }
@@ -67,6 +69,34 @@ $PATH, does not satisfy it, and is denied from a primary checkout.`,
 func addSyncFlags(cmd *cobra.Command) {
 	cmd.Flags().Bool("push-force-with-lease", false, "report the force-with-lease push argv for a ref that is already shared with a remote (never pushes itself)")
 	cmd.Flags().Bool("dry-run", false, "compute the rewrite and report the resulting head without moving the ref")
+}
+
+// resolveRefSelector returns the ref sign, resign, or rebase acts on: the
+// positional arg when one was given, --branch's value when one was given
+// instead, or def when neither was. A positional ref beside --branch is a
+// usage error, since each names the same thing a different way. The
+// resolved value is passed on exactly as the positional form always has —
+// unvalidated here, so an unresolvable ref still surfaces downstream
+// exactly as it does today; only a caller with no value at all (def itself,
+// for rebase's upstream, which has no default) fails here, since there is
+// nothing left to try.
+func resolveRefSelector(cmd *cobra.Command, args []string, def string) (string, error) {
+	branch, _ := cmd.Flags().GetString("branch")
+	if len(args) == 1 && branch != "" {
+		return "", finishUsage(cmd, nil, "usage.cli.ref_and_branch_flag",
+			"a positional ref and --branch both name the ref to act on; pass only one")
+	}
+	ref := def
+	switch {
+	case len(args) == 1:
+		ref = args[0]
+	case branch != "":
+		ref = branch
+	}
+	if ref == "" {
+		return "", finishUsage(cmd, nil, "usage.cli.missing_ref", "a ref is required, positionally or via --branch")
+	}
+	return ref, nil
 }
 
 func runResign(cmd *cobra.Command, ref, base string) error {

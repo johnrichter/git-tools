@@ -74,26 +74,33 @@ func TestDecide_Bash_SC15ReadAllowance_SurvivesGitToolsDefault(t *testing.T) {
 // from inside an already-sanctioned worktree used to fall to ClassUncertain
 // (the CLI's own name was unrecognized), which never reaches SC20's
 // named-path check and so landed the merge straight into the other
-// repository's primary checkout. It must now deny.
+// repository's primary checkout. It must now deny -- and so must the same
+// retarget spelled `-C` or `--worktree`, since each reaches the same
+// destination through gitToolsDestinations.
 func TestDecide_Bash_GitToolsBypass_MergeRepoRetargetFromWorktree_Denied(t *testing.T) {
 	const bin = "/plugin-data/bin/git-tools"
 	const content = "PROVISIONED-CLI-BYTES"
 	digest := hex.EncodeToString(sha256Sum(content))
 	v := testVerbs(t)
 
-	fs := newFakeFS().
-		file("/repo/wt/.git", "gitdir: /repo/.git/worktrees/wt\n").
-		dir("/other/.git").
-		file(bin, content)
-	d := Decide(fs.lstat, fs.readFile, nil, v, nil, Input{
-		ToolName: "Bash", CWD: "/repo/wt", Command: bin + " merge feature --repo /other",
-		ProvisionedBinPath: bin, ProvisionedBinDigest: digest,
-	})
-	if !d.Deny {
-		t.Fatal("expected deny: a --repo-retargeted git-tools merge must not land in another repository's primary checkout, whatever cwd it runs from")
-	}
-	if !strings.Contains(d.Reason, "/other") {
-		t.Errorf("denial %q does not name the retargeted primary checkout", d.Reason)
+	spellings := []string{"--repo /other", "-C /other", "--worktree /other"}
+	for _, flag := range spellings {
+		t.Run(flag, func(t *testing.T) {
+			fs := newFakeFS().
+				file("/repo/wt/.git", "gitdir: /repo/.git/worktrees/wt\n").
+				dir("/other/.git").
+				file(bin, content)
+			d := Decide(fs.lstat, fs.readFile, nil, v, nil, Input{
+				ToolName: "Bash", CWD: "/repo/wt", Command: bin + " merge feature " + flag,
+				ProvisionedBinPath: bin, ProvisionedBinDigest: digest,
+			})
+			if !d.Deny {
+				t.Fatal("expected deny: a retargeted git-tools merge must not land in another repository's primary checkout, whatever cwd it runs from")
+			}
+			if !strings.Contains(d.Reason, "/other") {
+				t.Errorf("denial %q does not name the retargeted primary checkout", d.Reason)
+			}
+		})
 	}
 }
 
@@ -115,6 +122,8 @@ func TestDecide_Bash_GitToolsDestinations_FlagOrderCannotHideATarget(t *testing.
 		"git-tools --strict worktree add /other/x ref",           // root bool flag before the verb
 		"git-tools --config /tmp/c.yaml worktree add /other/x r", // root value flag before the verb
 		"git-tools --config=/tmp/c.yaml worktree add /other/x r", // its =-joined spelling
+		"git-tools -C /repo/wt worktree add /other/x ref",        // -C shorthand (separate token) before the verb: its own value is a benign worktree, so only the operand-skip can catch the target
+		"git-tools -C/repo/wt worktree add /other/x ref",         // its glued spelling
 		"git-tools worktree add --branch b /other/x ref",         // the verb's own value flag
 		"git-tools worktree add --force /other/x ref",            // the verb's own bool flag
 		"git-tools worktree remove /other/x",

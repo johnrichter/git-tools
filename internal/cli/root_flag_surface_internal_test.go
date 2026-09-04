@@ -49,14 +49,17 @@ func TestRootFlagSurface_MirrorsTheGatesValueOptionTable(t *testing.T) {
 	// either side of the verb word, which is what makes them the set the
 	// gate's leading-flag skip depends on.
 	if got, want := valueTakingFlags(root.PersistentFlags()), []string{
-		"--config", "--max-binary-bytes", "--privacy-tier", "--remote", "--repo",
+		"--config", "--max-binary-bytes", "--privacy-tier", "--remote", "--repo", "--worktree",
 	}; !equalStrings(got, want) {
 		t.Errorf("root persistent value-taking flags = %v, want %v -- add or remove the same entry in the gate's gitToolsValueOptions", got, want)
 	}
 
 	// The landing verbs whose own operands SC20 resolves as write
-	// destinations. Their own flags cannot legally precede the verb, but they
-	// sit among the operands the gate skips to reach the path.
+	// destinations, plus sign/resign/rebase, whose own --branch selector
+	// (resolveRefSelector) shares gitToolsValueOptions' pre-existing
+	// "--branch" entry with worktree add's unrelated same-named flag. Their
+	// own flags cannot legally precede the verb, but they sit among the
+	// operands the gate skips to reach whatever comes after.
 	for _, c := range []struct {
 		path []string
 		want []string
@@ -64,6 +67,9 @@ func TestRootFlagSurface_MirrorsTheGatesValueOptionTable(t *testing.T) {
 		{[]string{"worktree", "add"}, []string{"--branch"}},
 		{[]string{"worktree", "remove"}, []string{"--landing-target"}},
 		{[]string{"branch", "delete"}, []string{"--landing-target"}},
+		{[]string{"sign"}, []string{"--branch"}},
+		{[]string{"resign"}, []string{"--base", "--branch"}},
+		{[]string{"rebase"}, []string{"--branch", "--onto"}},
 	} {
 		cmd, _, err := root.Find(c.path)
 		if err != nil {

@@ -30,11 +30,11 @@ name resolved off $PATH, does not satisfy it, and is denied from a primary
 checkout.
 
 It refuses anything it cannot verify as sanctioned at the moment it runs:
-tracked modifications or staged changes, --repo (it would move the push off
-the invoking process's own working directory, the only one push ever
-operates on) or --config (it would swap the policy file whose scan gates the
-push), or <ref> naming a branch other than the one currently checked out. A
-tag push is exempt from that last check.
+tracked modifications or staged changes, -C/--repo or --worktree (either
+would move the push off the invoking process's own working directory, the
+only one push ever operates on) or --config (it would swap the policy file
+whose scan gates the push), or <ref> naming a branch other than the one
+currently checked out. A tag push is exempt from that last check.
 
 It never inspects commit history to tell a commit that landed via
 "git-tools merge" apart from one authored directly on the branch — a commit
@@ -48,7 +48,7 @@ Exit codes:
   30 precondition_unmet   working tree has tracked or staged changes, or a content guardrail flagged a file
   40 not_found            ref is neither a local branch nor a local tag
   41 conflict             ref names a branch, but HEAD is not on it
-  50 usage                --repo or --config was passed
+  50 usage                -C/--repo, --worktree, or --config was passed
   60 transient            remote rejected the push; re-run to retry
   90 internal             an underlying git command failed unexpectedly`,
 		Args: cobra.ExactArgs(1),
@@ -60,13 +60,13 @@ Exit codes:
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ref := args[0]
 
-			// --repo points every other verb at a different working
-			// directory; --config swaps the policy file whose scan gates it.
-			// push refuses both unconditionally rather than trying to
-			// sanction some values and not others.
-			if cmd.Flags().Changed("repo") || cmd.Flags().Changed("config") {
+			// -C/--repo and --worktree point every other verb at a different
+			// working directory; --config swaps the policy file whose scan
+			// gates it. push refuses all three unconditionally rather than
+			// trying to sanction some values and not others.
+			if cmd.Flags().Changed("repo") || cmd.Flags().Changed("worktree") || cmd.Flags().Changed("config") {
 				return finishUsage(cmd, nil, "usage.cli.push_retargeting_flag",
-					"push always operates on the invoking process's own working directory; --repo/--config are refused")
+					"push always operates on the invoking process's own working directory; -C/--repo, --worktree, and --config are refused")
 			}
 
 			cfg, err := loadConfig(cmd.Flags())

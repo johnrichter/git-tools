@@ -84,7 +84,7 @@ type Decision struct {
 // closing clause stays exactly the remedy.
 const (
 	remedyTargetRepoWorktree = "write to a path inside a worktree of the repository that contains this target instead; the provisioned `git-tools`, run by its absolute provisioned path, lists that repository's worktrees with `worktree list --repo <dir>`; if that is already the exact command this denied, then the binary at that path is missing or no longer matches the digest its plugin pins, so the gate has no sanctioned channel to grant it, and a fresh session re-provisions it"
-	remedyThisRepoWorktree   = "run it from a worktree of this repository: `git worktree list` shows the ones that already exist, and the provisioned `git-tools`, run by its absolute provisioned path, may `worktree add <path> <branch>` from here, so create one and retry; a branch delete is different, since a worktree can never delete its own checked-out branch, so run the provisioned `git-tools`, by its absolute provisioned path, `branch delete <branch>` from here instead"
+	remedyThisRepoWorktree   = "run it from a worktree of this repository: `git worktree list` shows the ones that already exist, and the provisioned `git-tools`, run by its absolute provisioned path, may `worktree add <path> <branch>` from here, so create one and retry; once one exists, name it directly instead of `cd`-ing in: `git -C <worktree>` for a plain git write, or `<git-tools-path> <verb> -C <worktree>` for one of the provisioned CLI's own sanctioned verbs; a branch delete is different, since a worktree can never delete its own checked-out branch, so run the provisioned `git-tools`, by its absolute provisioned path, `branch delete <branch>` from here instead"
 	remedyRewordAsRead       = "if it only reads, reword it as a command this gate recognizes as a read; if it does write, run it from a worktree"
 	remedyLiteralTarget      = "respell the target as a literal path, with no variable, glob, or `~` for the shell to expand, so the gate can resolve where the write lands"
 	remedyStaticCWD          = "prefix the command with a literal `cd <worktree> &&`, with no variable or glob in that path, so the gate can see where it runs"
@@ -725,12 +725,13 @@ func gitDestinations(args []string) []string {
 }
 
 // gitToolsDestinations returns the filesystem paths a git-tools invocation
-// names explicitly: a --repo value, which retargets whichever verb runs onto
-// a different repository, and worktree add/remove's own path operand. Every
-// SC15-sanctioned landing verb (merge, push, resign, branch delete) writes
-// its own working directory instead, governed by the cwd leg the same way
-// git's own commit/add/reset are -- it names no destination here, so the verb
-// word itself is never mistaken for one.
+// names explicitly: a --repo, -C, or --worktree value, each of which
+// retargets whichever verb runs onto a different repository, and worktree
+// add/remove's own path operand. Every SC15-sanctioned landing verb (merge,
+// push, resign, branch delete) writes its own working directory instead,
+// governed by the cwd leg the same way git's own commit/add/reset are -- it
+// names no destination here, so the verb word itself is never mistaken for
+// one.
 //
 // --config is deliberately excluded: it names a YAML policy file git-tools
 // only ever reads (loadConfigFile), never writes, and it selects no
@@ -757,6 +758,12 @@ func gitToolsDestinations(args []string) []string {
 	if v, ok := flagValue(args, "--repo"); ok {
 		out = append(out, v)
 	}
+	if v, ok := dashCValue(args); ok {
+		out = append(out, v)
+	}
+	if v, ok := flagValue(args, "--worktree"); ok {
+		out = append(out, v)
+	}
 	verb := gitToolsOperands(args)
 	if len(verb) >= 2 && verb[0] == "worktree" && (verb[1] == "add" || verb[1] == "remove") {
 		if ops := gitToolsOperands(verb[2:]); len(ops) > 0 {
@@ -764,6 +771,24 @@ func gitToolsDestinations(args []string) []string {
 		}
 	}
 	return out
+}
+
+// dashCValue returns git-tools' -C value from args, spelled either as a
+// separate following token or glued directly onto the flag, or ok false when
+// -C is absent -- the same two forms applyGitOptions reads for git's own -C.
+func dashCValue(args []string) (value string, ok bool) {
+	for i, a := range args {
+		switch {
+		case a == "-C":
+			if i+1 < len(args) {
+				return stripQuotes(args[i+1]), true
+			}
+			return "", false
+		case strings.HasPrefix(a, "-C"):
+			return stripQuotes(a[len("-C"):]), true
+		}
+	}
+	return "", false
 }
 
 // gitToolsValueOptions are the CLI's options that consume the FOLLOWING token
@@ -776,6 +801,7 @@ func gitToolsDestinations(args []string) []string {
 var gitToolsValueOptions = map[string]bool{
 	"--config":           true,
 	"--repo":             true,
+	"--worktree":         true,
 	"--remote":           true,
 	"--privacy-tier":     true,
 	"--max-binary-bytes": true,
@@ -795,6 +821,8 @@ func gitToolsOperands(args []string) []string {
 		switch {
 		case a == "--":
 			start = i + 1
+		case a == "-C":
+			i++ // git-tools' -C shorthand consumes the next token as its value, the same way gitSubcommand handles plain git's own -C; its glued -C<dir> form is the one-token case below
 		case gitToolsValueOptions[a]:
 			i++ // this option consumes the next token as its value
 		case strings.HasPrefix(a, "-"):
@@ -1436,12 +1464,12 @@ func sc15ForcesCleanup(args []string) bool {
 
 // sc15Retargets reports whether any token is a repo-retargeting flag, which
 // voids the allowance -- the sanctioned channel acts on the repo it is invoked
-// in, never one it is pointed at. --repo is the only such flag: it is the one
-// value a landing verb's own repo target reads, and internal/cli keeps it that
-// way on purpose -- loadConfigForDir assigns repoDirForConfig's answer over
-// Config.Repo after the config layers resolve, so no config file's own "repo"
-// key can move the acting repository (see gitToolsDestinations for what
-// depends on that, and internal/cli's
+// in, never one it is pointed at. --repo, -C, and --worktree are the three
+// such flags: they are the values a landing verb's own repo target reads, and
+// internal/cli keeps it that way on purpose -- loadConfigForDir assigns
+// repoDirForConfig's answer over Config.Repo after the config layers resolve,
+// so no config file's own "repo" key can move the acting repository (see
+// gitToolsDestinations for what depends on that, and internal/cli's
 // TestLoadConfig_ConfigFileCannotSelectTheRepo for the pin).
 //
 // --config selects which YAML policy file to read, never which repository to
@@ -1455,6 +1483,12 @@ func sc15ForcesCleanup(args []string) bool {
 func sc15Retargets(args []string) bool {
 	for _, a := range args {
 		if a == "--repo" || strings.HasPrefix(a, "--repo=") {
+			return true
+		}
+		if strings.HasPrefix(a, "-C") {
+			return true
+		}
+		if a == "--worktree" || strings.HasPrefix(a, "--worktree=") {
 			return true
 		}
 	}

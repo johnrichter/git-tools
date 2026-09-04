@@ -86,7 +86,23 @@ func TestPush_Refusals(t *testing.T) {
 			args:        []string{"push", "main", "--repo", "."},
 			wantStatus:  "usage",
 			wantExit:    50,
-			wantMessage: "--repo/--config are refused",
+			wantMessage: "-C/--repo, --worktree, and --config are refused",
+		},
+		{
+			name:        "-C retargeting flag",
+			setup:       func(t *testing.T, dir string) {},
+			args:        []string{"push", "main", "-C", "."},
+			wantStatus:  "usage",
+			wantExit:    50,
+			wantMessage: "-C/--repo, --worktree, and --config are refused",
+		},
+		{
+			name:        "--worktree retargeting flag",
+			setup:       func(t *testing.T, dir string) {},
+			args:        []string{"push", "main", "--worktree", "wt"},
+			wantStatus:  "usage",
+			wantExit:    50,
+			wantMessage: "-C/--repo, --worktree, and --config are refused",
 		},
 		{
 			name:        "--config retargeting flag",
@@ -94,7 +110,7 @@ func TestPush_Refusals(t *testing.T) {
 			args:        []string{"push", "main", "--config", "git-tools.yaml"},
 			wantStatus:  "usage",
 			wantExit:    50,
-			wantMessage: "--repo/--config are refused",
+			wantMessage: "-C/--repo, --worktree, and --config are refused",
 		},
 		{
 			name: "HEAD not on the requested branch",

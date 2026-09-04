@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -53,7 +54,8 @@ for secrets/raw-binaries/privacy violations.`,
 		SilenceErrors: true,
 	}
 	root.PersistentFlags().String("config", "", "path to a YAML config file (flag > env > file > default)")
-	root.PersistentFlags().String("repo", "", "git working tree to operate on (default \".\"); refused by push")
+	root.PersistentFlags().StringP("repo", "C", "", "git working tree to operate on (default \".\"); refused by push and tag create")
+	root.PersistentFlags().String("worktree", "", "working tree to operate on, named as `git worktree list` names it, not by path; refused by push and tag create, and a usage error alongside -C/--repo; under gate governance, prefer -C instead: `git -C <worktree>` or `<git-tools-path> <verb> -C <worktree>`, since a bare name does not reach the gate's own directory check")
 	root.PersistentFlags().String("remote", "", "remote name resign/rebase's force-with-lease report targets, and push publishes to (default \"origin\")")
 	root.PersistentFlags().String("privacy-tier", "", "privacy scan posture: public, confidential, or private (default \"public\")")
 	root.PersistentFlags().Bool("strict", false, "escalate privacy warnings to failures")
@@ -225,25 +227,85 @@ func finishResult(cmd *cobra.Command, data map[string]any, caveats []clikit.Diag
 // not_found result and returns a nil *git.Repo if it isn't one. A caller
 // checks for a nil repo and returns the accompanying error immediately —
 // the result (or a genuine error) has already been handled.
+//
+// When --worktree was given, it resolves that name against cfg.Repo's own
+// worktree list and opens the match instead — the one place every caller
+// that needs a working tree (every verb but push and tag create, which
+// refuse the flag outright) picks up the selector with no change of its own.
 func requireRepo(cmd *cobra.Command, cfg *Config) (*git.Repo, error) {
-	repo, err := git.Open(cmd.Context(), cfg.Repo)
-	if err == nil {
-		return repo, nil
+	base, err := git.Open(cmd.Context(), cfg.Repo)
+	if err != nil {
+		return nil, notFoundRepo(cmd, cfg.Repo, err)
 	}
+	dir, err := effectiveRepoDir(cmd, base, cfg)
+	if err != nil {
+		return nil, err
+	}
+	if dir == cfg.Repo {
+		return base, nil
+	}
+	repo, err := git.Open(cmd.Context(), dir)
+	if err != nil {
+		return nil, notFoundRepo(cmd, dir, err)
+	}
+	return repo, nil
+}
+
+// effectiveRepoDir resolves the directory requireRepo should open: cfg.Repo
+// (already -C/--repo/GITTOOLS_REPO/"."-resolved) by default, or a --worktree
+// name resolved against base's own worktree list. -C/--repo beside
+// --worktree is a usage error, since both name a directory and neither
+// spelling takes priority over the other. A name that resolves to the
+// repository's own main working tree — always list[0], per `git worktree
+// list`'s own ordering — is also a usage error: it would silently retarget
+// a caller who meant a linked worktree onto the primary checkout.
+func effectiveRepoDir(cmd *cobra.Command, base *git.Repo, cfg *Config) (string, error) {
+	if !cmd.Flags().Changed("worktree") {
+		return cfg.Repo, nil
+	}
+	if cmd.Flags().Changed("repo") {
+		return "", finishUsage(cmd, nil, "usage.cli.worktree_with_dash_c",
+			"--worktree names a working tree by name; -C/--repo names one by path; pass only one")
+	}
+	name, err := cmd.Flags().GetString("worktree")
+	if err != nil {
+		return "", finishErr(cmd, nil, "internal.result.build_failed", "read --worktree", err)
+	}
+	list, err := base.WorktreeList(cmd.Context())
+	if err != nil {
+		return "", finishErr(cmd, nil, "internal.git.worktree_list_failed", "list worktrees", err)
+	}
+	for i, wt := range list {
+		if filepath.Base(wt.Path) != name {
+			continue
+		}
+		if i == 0 {
+			return "", finishUsage(cmd, nil, "usage.cli.worktree_is_main",
+				fmt.Sprintf("--worktree %q names this repository's own main working tree; name a linked worktree instead", name))
+		}
+		return wt.Path, nil
+	}
+	return "", finishUsage(cmd, nil, "usage.cli.worktree_not_found",
+		fmt.Sprintf("no worktree named %q; `git worktree list` lists the ones that exist", name))
+}
+
+// notFoundRepo builds and emits requireRepo's not_found result for dir,
+// whether dir came from cfg.Repo or from a resolved --worktree.
+func notFoundRepo(cmd *cobra.Command, dir string, err error) error {
 	diag, buildErr := clikit.NewError(
 		"not_found.git.repo_not_found",
 		sanitizeMessage(err.Error()),
-		clikit.Manual(fmt.Sprintf("point --repo at a git working tree (got %q)", cfg.Repo)),
-		map[string]any{"repo": cfg.Repo},
+		clikit.Manual(fmt.Sprintf("point --repo at a git working tree (got %q)", dir)),
+		map[string]any{"repo": dir},
 	)
 	if buildErr != nil {
-		return nil, finishErr(cmd, nil, "internal.result.build_failed", "build diagnostic", buildErr)
+		return finishErr(cmd, nil, "internal.result.build_failed", "build diagnostic", buildErr)
 	}
 	result, buildErr := clikit.NewNotFound(commandPath(cmd), nil, []clikit.Diagnostic{diag}, nil)
 	if buildErr != nil {
-		return nil, finishErr(cmd, nil, "internal.result.build_failed", "build result", buildErr)
+		return finishErr(cmd, nil, "internal.result.build_failed", "build result", buildErr)
 	}
-	return nil, finish(cmd, result)
+	return finish(cmd, result)
 }
 
 // handleGitError classifies err from a git library call: a stale

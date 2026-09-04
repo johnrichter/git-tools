@@ -11,12 +11,15 @@ import (
 
 func newRebaseCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:     "rebase <upstream>",
+		Use:     "rebase [upstream]",
 		Short:   "Replay the currently checked-out branch's commits ahead of upstream",
-		Args:    cobra.ExactArgs(1),
+		Args:    cobra.MaximumNArgs(1),
 		Example: "  git-tools rebase origin/main --preserve-merges",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			upstream := args[0]
+			upstream, err := resolveRefSelector(cmd, args, "")
+			if err != nil {
+				return err
+			}
 			cfg, err := loadConfig(cmd.Flags())
 			if err != nil {
 				return finishErr(cmd, nil, "internal.config.load_failed", "load configuration", err)
@@ -64,6 +67,7 @@ func newRebaseCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().String("onto", "", "replay onto a different base than upstream (git rebase --onto)")
+	cmd.Flags().String("branch", "", "upstream ref to rebase onto, in place of the positional argument")
 	cmd.Flags().Bool("preserve-merges", false, "keep merge commits instead of linearizing history")
 	cmd.Flags().Bool("dry-run", false, "report the commits that would be replayed without running anything")
 	cmd.Flags().Bool("push-force-with-lease", false, "report the force-with-lease push argv for a ref that is already shared with a remote (never pushes itself)")
