@@ -57,12 +57,12 @@ func TestDecomposition_MatchesGoldenCorpus(t *testing.T) {
 // consequence of both consumers sharing one connector set and one redirect
 // predicate.
 func TestDecomposition_CwdResolverConsumesTheSharedPieces(t *testing.T) {
-	if dir, unresolvable := resolveEffectiveCWD("cd /a>/b/tracked && git commit"); unresolvable || dir != "/a" {
+	if dir, unresolvable := resolveEffectiveCWD("cd /a>/b/tracked && git commit", ""); unresolvable || dir != "/a" {
 		t.Errorf("resolveEffectiveCWD(redirect-glued cd) = (%q, %v), want (/a, false)", dir, unresolvable)
 	}
 	for _, conn := range loadConnectorArtifact(t).Connectors {
 		cmd := "cd /a" + conn + "git status"
-		if dir, unresolvable := resolveEffectiveCWD(cmd); unresolvable || dir != "/a" {
+		if dir, unresolvable := resolveEffectiveCWD(cmd, ""); unresolvable || dir != "/a" {
 			t.Errorf("resolveEffectiveCWD(%q) = (%q, %v), want (/a, false): resolver did not split on connector %q", cmd, dir, unresolvable, conn)
 		}
 	}
@@ -372,7 +372,7 @@ func TestSC22_NoWriteContainsReachableInEligiblePiece(t *testing.T) {
 // purpose). So `VAR=1 cd <primary> && <cli> merge <b>` is a false deny, never
 // an allowance.
 func TestSC22_ClassifierHasNoVarSkipButResolverComposes(t *testing.T) {
-	if dir, unresolvable := resolveEffectiveCWD("VAR=1 cd /srv && git commit"); unresolvable || dir != "/srv" {
+	if dir, unresolvable := resolveEffectiveCWD("VAR=1 cd /srv && git commit", ""); unresolvable || dir != "/srv" {
 		t.Errorf("resolveEffectiveCWD(VAR= cd) = (%q, %v), want (/srv, false): resolver must still compose", dir, unresolvable)
 	}
 	fs := primaryFS()

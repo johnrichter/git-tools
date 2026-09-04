@@ -161,7 +161,7 @@ func decideBash(lstat LstatFunc, readFile ReadFileFunc, gitIgnored GitIgnoredFun
 		return Decision{}
 	}
 
-	cwd, cwdUnresolvable := effectiveBashCWD(in.CWD, in.Command)
+	cwd, cwdUnresolvable := effectiveBashCWD(in.CWD, in.Command, in.ProvisionedBinPath)
 
 	// Classification runs AHEAD of the two cwd short-circuits below (outside
 	// any repo, and inside a worktree). SC15's per-piece allowance (evaluated
@@ -323,7 +323,7 @@ func scanBash(lstat LstatFunc, readFile ReadFileFunc, gitIgnored GitIgnoredFunc,
 			// against the cwd already in force here, so the recursive scan below
 			// judges the interior's piece against where it actually lands, not
 			// against the enclosing command's own unrelated cwd.
-			interiorCWD, interiorUnresolvable := composeInteriorCWD(cwd, cwdUnresolvable, interior)
+			interiorCWD, interiorUnresolvable := composeInteriorCWD(cwd, cwdUnresolvable, interior, sc15Path)
 			ic, d := scanBash(lstat, readFile, gitIgnored, verbs, sc15Path, sc15Digest, interior, interiorCWD, interiorUnresolvable, depth+1)
 			if d != nil {
 				return ClassWrite, d
