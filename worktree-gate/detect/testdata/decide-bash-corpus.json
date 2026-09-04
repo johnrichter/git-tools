@@ -1044,6 +1044,30 @@
       "command": "git bisect start",
       "cwd": "/repo",
       "want_deny": true
+    },
+    {
+      "name": "git-dashC-out-of-worktree-into-primary-denies",
+      "command": "git -C /repo commit -m x",
+      "cwd": "/repo/wt",
+      "want_deny": true
+    },
+    {
+      "name": "gittools-dashC-into-worktree-allows-at-primary",
+      "command": "/plugin-data/bin/git-tools worktree remove -C /repo/wt",
+      "cwd": "/repo",
+      "want_deny": false
+    },
+    {
+      "name": "sc15-unrecognised-verb-status-dashC-allows",
+      "command": "/plugin-data/bin/git-tools status -C /repo/wt",
+      "cwd": "/repo",
+      "want_deny": false
+    },
+    {
+      "name": "make-dashC-never-composes-a-directory",
+      "command": "make -C /repo/wt all",
+      "cwd": "/repo",
+      "want_deny": true
     }
   ]
 }
